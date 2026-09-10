@@ -21,6 +21,7 @@ import {
   updateSnapshot,
 } from "./agents/hub.ts"
 import { getStore, subscribeAgents } from "./agents/stores.ts"
+import { ingestRows, ingestTickets, startEventWatchers } from "./agents/events.ts"
 import { collect } from "./data/collect.ts"
 import { run } from "./data/exec.ts"
 import { getMrExtras, mergeMr } from "./data/gitlab.ts"
@@ -162,6 +163,21 @@ export function App() {
   useEffect(() => {
     updateSnapshot({ rows, backlog, epics, todos })
   }, [rows, backlog, epics, todos])
+
+  // Autonomous events: hook-feed watcher plus refresh diffs (only complete
+  // loads are diffed, so progressive refresh states don't fake changes).
+  useEffect(() => {
+    startEventWatchers()
+  }, [])
+  useEffect(() => {
+    if (load.git && load.jira && load.gitlab && load.tmux) ingestRows(rows)
+  }, [rows, load])
+  useEffect(() => {
+    if (!backlogLoading) ingestTickets("backlog", backlog)
+  }, [backlog, backlogLoading])
+  useEffect(() => {
+    if (!epicsLoading) ingestTickets("projects", epics)
+  }, [epics, epicsLoading])
 
   // Agent-driven data changes flow back into the TUI.
   useEffect(() => {

@@ -36,6 +36,11 @@ const REPLY_STYLE =
   "Your replies render in a small terminal pane: be brief and plain-text (no markdown tables, no headers). " +
   "Use the report_to_central tool for anything the manager should know; don't repeat reports in chat replies."
 
+const EVENT_STYLE =
+  "You will also receive automated '[event digest]' messages listing changes in your area. For each digest: " +
+  "call report_to_central when something deserves the manager's or Daniel's awareness (severity attention if it needs Daniel now); " +
+  "otherwise reply with a single short acknowledgment line and nothing else. Never call tools just to re-verify a digest."
+
 // ---------------------------------------------------------------------------
 // formatting helpers (compact, token-frugal)
 
@@ -127,7 +132,9 @@ const worktrees: TabAgentSpec = {
     "Scope: local git worktrees, their branches, MRs, CI, and the ticket agents working in them. " +
     "You get event digests about agent activity and MR/CI changes; report anything needing Daniel's attention to central (severity: info < warn < attention). " +
     "Destructive operations (removing worktrees, merging) are done by Daniel via TUI keys — recommend, don't attempt. " +
-    REPLY_STYLE,
+    REPLY_STYLE +
+    " " +
+    EVENT_STYLE,
   makeTools(ctx) {
     return {
       list_worktrees: {
@@ -165,7 +172,9 @@ const qa: TabAgentSpec = {
   rolePrompt:
     "You are the QA specialist of a development control center. Scope: QA worktrees (directories named <repo>_qa_<branch>) where Daniel tests other people's tickets, and the QA ticket agents in their tmux windows. " +
     "Report QA sessions needing attention to central. Cleanup is done by Daniel via TUI keys — recommend, don't attempt. " +
-    REPLY_STYLE,
+    REPLY_STYLE +
+    " " +
+    EVENT_STYLE,
   makeTools(ctx) {
     return {
       list_qa_worktrees: {
@@ -203,7 +212,9 @@ const backlog: TabAgentSpec = {
   rolePrompt:
     "You are the backlog specialist of a development control center. Scope: Daniel's assigned-but-not-in-progress Jira tickets. " +
     "You can transition tickets, prep them (In Progress + current sprint), and start work on them via tmux. " +
-    REPLY_STYLE,
+    REPLY_STYLE +
+    " " +
+    EVENT_STYLE,
   makeTools(ctx) {
     return {
       list_backlog: {
@@ -260,7 +271,9 @@ const projects: TabAgentSpec = {
   rolePrompt:
     "You are the projects specialist of a development control center. Scope: Daniel's Jira epics and their child tickets. " +
     "You can list epics, drill into children, transition and prep tickets. " +
-    REPLY_STYLE,
+    REPLY_STYLE +
+    " " +
+    EVENT_STYLE,
   makeTools(ctx) {
     return {
       list_epics: {
