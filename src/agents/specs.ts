@@ -1,6 +1,8 @@
-import type { SDKCustomTool } from "@cursor/sdk"
+import type { AgentDefinition, SDKCustomTool } from "@cursor/sdk"
 import type { Row, TicketInfo } from "../types.ts"
 import type { Todo } from "../data/todos.ts"
+import { readAgentStatuses } from "../data/agents.ts"
+import { run } from "../data/exec.ts"
 import { applyTransition, getEpicChildren, getTransitions, prepTicket } from "../data/jira.ts"
 import { launchWork, runMkpanes, targetSession } from "../data/tmux.ts"
 import { addTodo, editTodo, loadTodos, removeTodo, sortTodos, toggleTodo } from "../data/todos.ts"
@@ -30,6 +32,8 @@ export interface TabAgentSpec {
   /** Seeded as a preamble on the agent's first message. */
   rolePrompt: string
   makeTools(ctx: HubContext): Record<string, SDKCustomTool>
+  /** Native SDK subagents this tab agent can spawn via the task tool. */
+  agents?: Record<string, AgentDefinition>
 }
 
 const REPLY_STYLE =
@@ -69,6 +73,78 @@ async function transitionByName(key: string, toStatus: string): Promise<string> 
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : String(v ?? ""))
+
+// ---------------------------------------------------------------------------
+// ticket-agent management (shared by worktrees + qa: they field-manage the
+// external cursor/claude agents working in tmux windows)
+
+/** Read-only deep inspection of one worktree, spawned via the task tool. */
+const WORKTREE_INSPECTOR: AgentDefinition = {
+  description:
+    "Inspect one git worktree in depth: status, diff, recent commits, branch state vs origin. " +
+    "Give it the worktree path and what to find out.",
+  prompt:
+    "You are a read-only worktree inspector. You get a worktree path and a question. " +
+    "Use the shell (git -C <path> status/diff/log, reading files) to answer it. " +
+    "Never modify anything: no commits, pushes, checkouts, edits, or state-changing commands. " +
+    "Reply with a concise plain-text summary.",
+  model: "inherit",
+}
+
+function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCustomTool> {
+  const rowsFor = () => ctx.snapshot().rows.filter((r) => r.isQa === qa)
+  const findWindow = (window: string): Row | undefined => rowsFor().find((r) => r.tmuxWindow === window)
+  return {
+    get_agent_feed: {
+      description: "Latest hook status per worktree directory for the external ticket agents (cursor/claude).",
+      inputSchema: { type: "object", properties: {} },
+      execute: () => {
+        const statuses = [...readAgentStatuses().entries()].filter(([dir]) => dir.includes("_qa_") === qa)
+        return statuses.length
+          ? statuses.map(([dir, s]) => `${dir}: ${s.state} (${s.source}, ${s.ts})`).join("\n")
+          : "no active ticket agents"
+      },
+    },
+    read_ticket_pane: {
+      description:
+        "Capture the visible tmux pane of a ticket window (window ids come from list output, e.g. \"0:5\"). " +
+        "Shows what the ticket agent is doing or asking.",
+      inputSchema: { type: "object", properties: { window: { type: "string" } }, required: ["window"] },
+      execute: async (args) => {
+        const window = str(args.window)
+        if (!findWindow(window)) return `no ${qa ? "QA" : "dev"} worktree row has tmux window "${window}"`
+        const res = await run("tmux", ["capture-pane", "-t", window, "-p"])
+        if (!res.ok) return `capture failed: ${res.stderr.trim()}`
+        const lines = res.stdout.replace(/\s+$/, "").split("\n")
+        return lines.slice(-60).join("\n") || "(pane is empty)"
+      },
+    },
+    message_ticket_agent: {
+      description:
+        "Type a message into a ticket window's active pane (where the cursor/claude agent runs) and press enter. " +
+        "Use to nudge or answer a waiting ticket agent.",
+      inputSchema: {
+        type: "object",
+        properties: { window: { type: "string" }, text: { type: "string" } },
+        required: ["window", "text"],
+      },
+      execute: async (args) => {
+        const window = str(args.window)
+        const text = str(args.text)
+        if (!findWindow(window)) return `no ${qa ? "QA" : "dev"} worktree row has tmux window "${window}"`
+        const typed = await run("tmux", ["send-keys", "-t", window, "-l", text])
+        if (!typed.ok) return `send failed: ${typed.stderr.trim()}`
+        await run("tmux", ["send-keys", "-t", window, "Enter"])
+        return `sent to ${window}: ${text}`
+      },
+    },
+  }
+}
+
+const TICKET_AGENT_STYLE =
+  "Tools for the external ticket agents: get_agent_feed (hook statuses), read_ticket_pane(window), " +
+  "message_ticket_agent(window, text) to nudge or answer one. For deep read-only inspection of a single " +
+  "worktree, spawn the worktree-inspector subagent with the worktree path and your question."
 
 // ---------------------------------------------------------------------------
 // central
@@ -132,11 +208,15 @@ const worktrees: TabAgentSpec = {
     "Scope: local git worktrees, their branches, MRs, CI, and the ticket agents working in them. " +
     "You get event digests about agent activity and MR/CI changes; report anything needing Daniel's attention to central (severity: info < warn < attention). " +
     "Destructive operations (removing worktrees, merging) are done by Daniel via TUI keys — recommend, don't attempt. " +
+    TICKET_AGENT_STYLE +
+    " " +
     REPLY_STYLE +
     " " +
     EVENT_STYLE,
+  agents: { "worktree-inspector": WORKTREE_INSPECTOR },
   makeTools(ctx) {
     return {
+      ...ticketAgentTools(ctx, false),
       list_worktrees: {
         description: "List current dev worktrees with git/ticket/MR/agent state.",
         inputSchema: { type: "object", properties: {} },
@@ -172,11 +252,15 @@ const qa: TabAgentSpec = {
   rolePrompt:
     "You are the QA specialist of a development control center. Scope: QA worktrees (directories named <repo>_qa_<branch>) where Daniel tests other people's tickets, and the QA ticket agents in their tmux windows. " +
     "Report QA sessions needing attention to central. Cleanup is done by Daniel via TUI keys — recommend, don't attempt. " +
+    TICKET_AGENT_STYLE +
+    " " +
     REPLY_STYLE +
     " " +
     EVENT_STYLE,
+  agents: { "worktree-inspector": WORKTREE_INSPECTOR },
   makeTools(ctx) {
     return {
+      ...ticketAgentTools(ctx, true),
       list_qa_worktrees: {
         description: "List current QA worktrees with git/ticket/MR/agent state.",
         inputSchema: { type: "object", properties: {} },

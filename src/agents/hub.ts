@@ -235,6 +235,7 @@ async function getAgent(entry: Entry): Promise<SdkAgent> {
     apiKey,
     name: `control-center ${entry.spec.id}`,
     model: { id: MODEL },
+    agents: entry.spec.agents,
     local: { cwd: homedir(), settingSources: ["user"], customTools: tools },
   })
   return entry.agent
