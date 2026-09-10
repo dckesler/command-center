@@ -20,6 +20,7 @@ import {
   setAppChangedHandler,
   updateSnapshot,
 } from "./agents/hub.ts"
+import { getStore, subscribeAgents } from "./agents/stores.ts"
 import { collect } from "./data/collect.ts"
 import { run } from "./data/exec.ts"
 import { getMrExtras, mergeMr } from "./data/gitlab.ts"
@@ -108,6 +109,12 @@ export function App() {
   /** chat view: whether the message input owns the keyboard */
   const [chatFocused, setChatFocused] = useState(true)
   const [chatScroll, setChatScroll] = useState(0)
+  /** per-tab agent chat drawer (tabs other than central) */
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerFocused, setDrawerFocused] = useState(false)
+  /** re-render on any agent store change (busy dots, drawer content) */
+  const [agentTick, setAgentTick] = useState(0)
+  useEffect(() => subscribeAgents(() => setAgentTick((t) => t + 1)), [])
   const refreshing = useRef(false)
 
   const openDetail = useCallback((row: Row) => {
@@ -163,6 +170,12 @@ export function App() {
       else refresh()
     })
   }, [refresh])
+
+  // Viewing an agent's conversation clears its unread marker.
+  useEffect(() => {
+    if (view === "central") markRead("central")
+    else if (drawerOpen) markRead(view)
+  }, [view, drawerOpen, agentTick])
 
   const finishAction = useCallback(
     (result: { ok: boolean; message: string }) => {
@@ -546,6 +559,10 @@ export function App() {
   const workRows = rows.filter((r) => !r.isQa)
   const qaRows = rows.filter((r) => r.isQa)
 
+  const overlayActive =
+    modal !== null || detailRow !== null || epicDetail !== null || mkpanesPrompt || qaPrompt !== null
+  const drawerVisible = drawerOpen && view !== "central" && !overlayActive
+
   useKeyboard((key) => {
     // While a text input is focused it owns all keys except escape.
     if (addingTodo || editingTodo || mkpanesPrompt || qaPrompt) {
@@ -559,6 +576,11 @@ export function App() {
     }
     if (view === "central" && chatFocused && !modal) {
       if (key.name === "escape") setChatFocused(false)
+      return
+    }
+    // While the tab's agent drawer input is focused it owns all keys.
+    if (drawerVisible && drawerFocused) {
+      if (key.name === "escape") setDrawerFocused(false)
       return
     }
     if (key.name === "q" && !busy) {
@@ -645,6 +667,24 @@ export function App() {
       return
     }
     if (key.name === "r") refresh()
+
+    // Per-tab agent drawer: ; toggles, i refocuses the input when open.
+    const sequence = (key as unknown as { sequence?: string }).sequence
+    if (view !== "central" && (key.name === ";" || sequence === ";")) {
+      if (drawerOpen) {
+        setDrawerOpen(false)
+        setDrawerFocused(false)
+      } else {
+        setDrawerOpen(true)
+        setDrawerFocused(true)
+        markRead(view)
+      }
+      return
+    }
+    if (drawerVisible && key.name === "i") {
+      setDrawerFocused(true)
+      return
+    }
 
     if (view === "central") {
       // Focused chat is handled earlier; here the input is unfocused.
@@ -782,6 +822,17 @@ export function App() {
     }
   })
 
+  const drawerHeight = Math.max(8, Math.floor((height - 4) * 0.4))
+  const contentHeight = drawerVisible ? height - 4 - drawerHeight : height - 4
+
+  /** Busy / unread indicator for a tab's agent. */
+  const agentDot = (id: string) =>
+    agentBusy(id) ? (
+      <span fg="#facc15"> ⚙</span>
+    ) : getStore(id).unread ? (
+      <span fg="#4ade80"> ●</span>
+    ) : null
+
   const loading = (["git", "jira", "gitlab", "tmux"] as const).filter((k) => !load[k])
   const working = loading.length > 0 || backlogLoading || epicsLoading || busy !== null
   const spinner = useSpinner(working)
@@ -800,15 +851,22 @@ export function App() {
         <text>
           <span fg="#93c5fd">CONTROL CENTER</span>
           <span fg={view === "central" ? "#ffffff" : "#6b7280"}>  [1] central</span>
+          {agentDot("central")}
           <span fg={view === "worktrees" ? "#ffffff" : "#6b7280"}>  [2] {workRows.length} worktrees</span>
+          {agentDot("worktrees")}
           <span fg={view === "qa" ? "#ffffff" : "#6b7280"}>  [3] {qaRows.length} qa</span>
+          {agentDot("qa")}
           <span fg={view === "backlog" ? "#ffffff" : "#6b7280"}>  [4] {backlog.length} backlog</span>
+          {agentDot("backlog")}
           <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [5] {epics.length} projects</span>
+          {agentDot("projects")}
           <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [6] {todos.filter((t) => !t.done).length} todos</span>
+          {agentDot("todos")}
         </text>
         <text fg="#6b7280">{statusLine}</text>
       </box>
       <box paddingLeft={1} paddingRight={1} flexGrow={1} flexDirection="column">
+        <box flexGrow={1} flexDirection="column">
         {mkpanesPrompt ? (
           <MkpanesPrompt onSubmit={submitMkpanes} />
         ) : qaPrompt ? (
@@ -846,7 +904,7 @@ export function App() {
                 setSelectedTodo(0)
               }
             }}
-            height={height - 4}
+            height={contentHeight}
           />
         ) : view === "backlog" ? (
           <Backlog
@@ -855,7 +913,7 @@ export function App() {
             worktreeKeys={new Set(rows.map((r) => r.ticketKey).filter((k): k is string => k !== null))}
             loading={backlogLoading}
             width={width - 2}
-            height={height - 4}
+            height={contentHeight}
           />
         ) : view === "projects" ? (
           <Epics
@@ -863,7 +921,7 @@ export function App() {
             selected={selectedEpic}
             loading={epicsLoading}
             width={width - 2}
-            height={height - 4}
+            height={contentHeight}
           />
         ) : view === "central" ? (
           <Chat
@@ -879,10 +937,22 @@ export function App() {
           qaRows.length === 0 ? (
             <text fg="#6b7280">no QA worktrees — press n to start one (pick repo, enter ticket)</text>
           ) : (
-            <Dashboard rows={qaRows} selected={selectedQa} load={load} width={width - 2} height={height - 4} />
+            <Dashboard rows={qaRows} selected={selectedQa} load={load} width={width - 2} height={contentHeight} />
           )
         ) : (
-          <Dashboard rows={workRows} selected={selected} load={load} width={width - 2} height={height - 4} />
+          <Dashboard rows={workRows} selected={selected} load={load} width={width - 2} height={contentHeight} />
+        )}
+        </box>
+        {drawerVisible && (
+          <Chat
+            agentId={view}
+            title={`${view} agent`}
+            emptyHint={`${view} specialist — ask about or act on this tab. Type a message and press enter.`}
+            focused={drawerFocused}
+            scroll={0}
+            width={width - 2}
+            height={drawerHeight}
+          />
         )}
       </box>
       <box paddingLeft={1}>
@@ -893,7 +963,9 @@ export function App() {
             <span fg={message.ok ? "#4ade80" : "#f87171"}>{message.text}</span>
           ) : (
             <span fg="#6b7280">
-              {mkpanesPrompt || qaPrompt
+              {drawerVisible && drawerFocused
+                ? "enter send   esc table keys   ; close agent chat"
+                : mkpanesPrompt || qaPrompt
                 ? "enter run   esc cancel"
                 : modal
                 ? "j/k move   enter select   esc cancel"
@@ -904,18 +976,18 @@ export function App() {
                     : view === "todos"
                       ? addingTodo || editingTodo
                         ? "enter save   esc cancel"
-                        : `tab views   j/k move   a add   e edit   space/enter toggle   v ${showCompletedTodos ? "hide" : "show"} completed   x delete   q quit`
+                        : `tab views   j/k move   a add   e edit   space/enter toggle   v ${showCompletedTodos ? "hide" : "show"} completed   x delete   ; agent   q quit`
                       : view === "central"
                         ? chatFocused
                           ? "enter send   esc unfocus input"
                           : "tab views   i focus input   j/k scroll   n new conversation   q quit"
                       : view === "backlog"
-                        ? "tab views   j/k move   n create ticket   s start ticket   c status   t open ticket   r refresh   q quit"
+                        ? "tab views   j/k move   n create ticket   s start ticket   c status   t open ticket   ; agent   r refresh   q quit"
                         : view === "projects"
-                          ? "tab views   j/k move   enter open epic   n new ticket   f finalize   c status   t open epic   r refresh   q quit"
+                          ? "tab views   j/k move   enter open epic   n new ticket   f finalize   c status   t open epic   ; agent   r refresh   q quit"
                           : view === "qa"
-                            ? "tab views   j/k move   enter details   n new QA   s open/jump   c status   x cleanup   r refresh   o/t open   q quit"
-                            : "tab views   j/k move   enter details   n new   s start/jump   c status   w wrap-up   x cleanup   X mass cleanup   r refresh   o/t open   q quit"}
+                            ? "tab views   j/k move   enter details   n new QA   s open/jump   c status   x cleanup   ; agent   r refresh   o/t open   q quit"
+                            : "tab views   j/k move   enter details   n new   s start/jump   c status   w wrap-up   x cleanup   X mass cleanup   ; agent   r refresh   o/t open   q quit"}
             </span>
           )}
         </text>

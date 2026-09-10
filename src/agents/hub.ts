@@ -33,6 +33,8 @@ interface Entry {
   queue: QueuedMessage[]
   running: boolean
   lastReport: string | null
+  /** did this agent call report_to_central during the current run? */
+  reportedInRun: boolean
 }
 
 interface Report {
@@ -44,7 +46,15 @@ interface Report {
 
 const entries = new Map<string, Entry>()
 for (const spec of TAB_AGENT_SPECS) {
-  entries.set(spec.id, { spec, agent: null, seeded: false, queue: [], running: false, lastReport: null })
+  entries.set(spec.id, {
+    spec,
+    agent: null,
+    seeded: false,
+    queue: [],
+    running: false,
+    lastReport: null,
+    reportedInRun: false,
+  })
 }
 
 let snapshot: Snapshot = { rows: [], backlog: [], epics: [], todos: [] }
@@ -80,7 +90,10 @@ const ctx: HubContext = {
     enqueue(id, {
       text: `[instruction from central]\n${instruction}`,
       display: "info",
-      onDone: (finalText) => reportToCentral(id, "info", `reply to instruction: ${finalText || "(no reply)"}`),
+      onDone: (finalText) => {
+        // If the specialist already reported via its tool, don't double up.
+        if (!entry.reportedInRun) reportToCentral(id, "info", `reply to instruction: ${finalText || "(no reply)"}`)
+      },
     })
     return `instruction queued for ${id} — its reply will arrive as a report`
   },
@@ -176,6 +189,7 @@ async function processQueue(entry: Entry): Promise<void> {
       store.items.push({ role: message.display, text: message.text })
       store.unread = true
       emitAgents()
+      entry.reportedInRun = false
       const finalText = await runOnce(entry, message.text)
       message.onDone?.(finalText)
     }
@@ -211,6 +225,7 @@ async function getAgent(entry: Entry): Promise<SdkAgent> {
       },
       execute: (args) => {
         const severity = typeof args.severity === "string" ? args.severity : "info"
+        entry.reportedInRun = true
         reportToCentral(entry.spec.id, severity, String(args.summary ?? ""))
         return "reported to central"
       },
@@ -225,12 +240,20 @@ async function getAgent(entry: Entry): Promise<SdkAgent> {
   return entry.agent
 }
 
+/** Custom tools surface through an MCP bridge with name "mcp"; dig out the real tool name. */
+function toolLabel(name: string, args: unknown): string {
+  if (name !== "mcp" || typeof args !== "object" || args === null) return name
+  const record = args as Record<string, unknown>
+  const tool = record.tool ?? record.toolName ?? record.name
+  return typeof tool === "string" ? tool : name
+}
+
 /** Send one message, stream into the store, return the run's assistant text. */
 async function runOnce(entry: Entry, text: string): Promise<string> {
   const store = getStore(entry.spec.id)
   let assistantOpen = false
   let finalText = ""
-  const seenCalls = new Set<string>()
+  const seenCalls = new Map<string, number>()
   try {
     const agent = await getAgent(entry)
     const payload = entry.seeded ? text : `${entry.spec.rolePrompt}\n\n---\n\n${text}`
@@ -251,10 +274,15 @@ async function runOnce(entry: Entry, text: string): Promise<string> {
         store.unread = true
         emitAgents()
       } else if (event.type === "tool_call") {
-        if (!seenCalls.has(event.call_id)) {
-          seenCalls.add(event.call_id)
-          store.items.push({ role: "tool", text: `⚙ ${event.name}` })
+        const label = `⚙ ${toolLabel(event.name, event.args)}`
+        const index = seenCalls.get(event.call_id)
+        if (index === undefined) {
+          seenCalls.set(event.call_id, store.items.length)
+          store.items.push({ role: "tool", text: label })
           assistantOpen = false
+          emitAgents()
+        } else if (store.items[index].text !== label && label !== "⚙ mcp") {
+          store.items[index].text = label
           emitAgents()
         }
       }
