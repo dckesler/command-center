@@ -10,7 +10,7 @@ import { MkpanesPrompt } from "./components/MkpanesPrompt.tsx"
 import { Modal, type ModalState } from "./components/Modal.tsx"
 import { QaTicketPrompt } from "./components/QaTicketPrompt.tsx"
 import { Todos } from "./components/Todos.tsx"
-import { addTodo, editTodo, loadTodos, removeTodo, sortTodos, toggleTodo, type Todo } from "./data/todos.ts"
+import { addTodo, editTodo, loadTodos, removeTodo, setTodoNotes, sortTodos, toggleTodo, type Todo } from "./data/todos.ts"
 import {
   agentBusy,
   disposeAll,
@@ -104,6 +104,7 @@ export function App() {
   const [showCompletedTodos, setShowCompletedTodos] = useState(false)
   const [addingTodo, setAddingTodo] = useState(false)
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
+  const [editingTodoNotes, setEditingTodoNotes] = useState<Todo | null>(null)
   const [mkpanesPrompt, setMkpanesPrompt] = useState(false)
   /** set when the QA flow has a repo picked and is waiting for the ticket key */
   const [qaPrompt, setQaPrompt] = useState<{ repo: string } | null>(null)
@@ -581,10 +582,11 @@ export function App() {
 
   useKeyboard((key) => {
     // While a text input is focused it owns all keys except escape.
-    if (addingTodo || editingTodo || mkpanesPrompt || qaPrompt) {
+    if (addingTodo || editingTodo || editingTodoNotes || mkpanesPrompt || qaPrompt) {
       if (key.name === "escape") {
         setAddingTodo(false)
         setEditingTodo(null)
+        setEditingTodoNotes(null)
         setMkpanesPrompt(false)
         setQaPrompt(null)
       }
@@ -736,6 +738,7 @@ export function App() {
       }
       if (key.name === "a") setAddingTodo(true)
       if (key.name === "e" && todo) setEditingTodo(todo)
+      if (key.name === "n" && todo) setEditingTodoNotes(todo)
       if ((key.name === "space" || key.name === "return") && todo) {
         setTodos(sortTodos(toggleTodo(todos, todo.id)))
         // When completed todos are hidden, a just-completed one leaves the list.
@@ -910,8 +913,12 @@ export function App() {
             selected={selectedTodo}
             adding={addingTodo}
             editing={editingTodo}
+            editingNotes={editingTodoNotes}
             onSubmit={(text) => {
-              if (editingTodo) {
+              if (editingTodoNotes) {
+                setTodos(sortTodos(setTodoNotes(todos, editingTodoNotes.id, text)))
+                setEditingTodoNotes(null)
+              } else if (editingTodo) {
                 setTodos(sortTodos(editTodo(todos, editingTodo.id, text)))
                 setEditingTodo(null)
               } else {
@@ -920,6 +927,7 @@ export function App() {
                 setSelectedTodo(0)
               }
             }}
+            width={width - 2}
             height={contentHeight}
           />
         ) : view === "backlog" ? (
@@ -990,9 +998,9 @@ export function App() {
                   : epicDetail
                     ? "esc back   j/k move   n new ticket   s start/jump   p in-progress+sprint   f finalize   c status   t open ticket   r refresh   q quit"
                     : view === "todos"
-                      ? addingTodo || editingTodo
+                      ? addingTodo || editingTodo || editingTodoNotes
                         ? "enter save   esc cancel"
-                        : `tab views   j/k move   a add   e edit   space/enter toggle   v ${showCompletedTodos ? "hide" : "show"} completed   x delete   ; agent   q quit`
+                        : `tab views   j/k move   a add   e edit   n notes   space/enter toggle   v ${showCompletedTodos ? "hide" : "show"} completed   x delete   ; agent   q quit`
                       : view === "central"
                         ? chatFocused
                           ? "enter send   esc unfocus input"

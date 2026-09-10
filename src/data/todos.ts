@@ -8,6 +8,8 @@ export interface Todo {
   done: boolean
   createdAt: string
   completedAt?: string
+  /** free-form extra context, for Daniel and the todos agent */
+  notes?: string
 }
 
 const TODOS_PATH = join(homedir(), ".config", "control-center", "todos.json")
@@ -47,6 +49,13 @@ export function toggleTodo(todos: Todo[], id: string): Todo[] {
       ? { ...t, done: !t.done, completedAt: !t.done ? new Date().toISOString() : undefined }
       : t,
   )
+  saveTodos(next)
+  return next
+}
+
+export function setTodoNotes(todos: Todo[], id: string, notes: string): Todo[] {
+  const trimmed = notes.trim()
+  const next = todos.map((t) => (t.id === id ? { ...t, notes: trimmed || undefined } : t))
   saveTodos(next)
   return next
 }

@@ -5,7 +5,7 @@ import { readAgentStatuses } from "../data/agents.ts"
 import { run } from "../data/exec.ts"
 import { applyTransition, getEpicChildren, getTransitions, prepTicket } from "../data/jira.ts"
 import { launchWork, runMkpanes, targetSession } from "../data/tmux.ts"
-import { addTodo, editTodo, loadTodos, removeTodo, sortTodos, toggleTodo } from "../data/todos.ts"
+import { addTodo, editTodo, loadTodos, removeTodo, setTodoNotes, sortTodos, toggleTodo } from "../data/todos.ts"
 
 /** Live TUI state pushed into the hub by the App on every change. */
 export interface Snapshot {
@@ -413,6 +413,8 @@ const todosSpec: TabAgentSpec = {
   rolePrompt:
     "You are the todos specialist of a development control center. Scope: Daniel's lightweight local todo list (no tickets, no branches). " +
     "Keep it tidy: add, edit, complete, and remove items on request. " +
+    "Each todo can carry a notes field with extra context — read the notes before acting on a todo, " +
+    "and use set_todo_notes to record useful context (links, decisions, next steps) as you learn it. " +
     REPLY_STYLE,
   makeTools(ctx) {
     const mutate = (fn: (todos: Todo[]) => Todo[]): string => {
@@ -422,19 +424,40 @@ const todosSpec: TabAgentSpec = {
     }
     return {
       list_todos: {
-        description: "List todos (including completed).",
+        description: "List todos (including completed), with their notes.",
         inputSchema: { type: "object", properties: {} },
         execute: () => {
           const todos = ctx.snapshot().todos
           return todos.length
-            ? todos.map((t) => `${t.done ? "[x]" : "[ ]"} id=${t.id} ${t.text}`).join("\n")
+            ? todos
+                .map((t) => `${t.done ? "[x]" : "[ ]"} id=${t.id} ${t.text}${t.notes ? `\n    notes: ${t.notes}` : ""}`)
+                .join("\n")
             : "no todos"
         },
       },
       add_todo: {
-        description: "Add a todo.",
-        inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
-        execute: (args) => mutate((todos) => addTodo(todos, str(args.text))),
+        description: "Add a todo, optionally with notes for extra context.",
+        inputSchema: {
+          type: "object",
+          properties: { text: { type: "string" }, notes: { type: "string" } },
+          required: ["text"],
+        },
+        execute: (args) =>
+          mutate((todos) => {
+            const next = addTodo(todos, str(args.text))
+            return typeof args.notes === "string" && args.notes.trim()
+              ? setTodoNotes(next, next[0].id, str(args.notes))
+              : next
+          }),
+      },
+      set_todo_notes: {
+        description: "Set (or clear, with empty text) a todo's notes — extra context shown to Daniel in the TUI.",
+        inputSchema: {
+          type: "object",
+          properties: { id: { type: "string" }, notes: { type: "string" } },
+          required: ["id", "notes"],
+        },
+        execute: (args) => mutate((todos) => setTodoNotes(todos, str(args.id), str(args.notes))),
       },
       edit_todo: {
         description: "Rewrite a todo's text (id from list_todos).",
