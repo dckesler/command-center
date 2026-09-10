@@ -487,22 +487,13 @@ export function App() {
     [finishAction],
   )
 
-  /** Open the central chat seeded with a jira-ticket prompt (epic optional). */
-  const openTicketChat = useCallback((epic?: TicketInfo) => {
+  /** Ticket creation runs in the owning tab's agent drawer. */
+  const openTicketChat = useCallback((tab: "projects" | "backlog", epic?: TicketInfo) => {
     setEpicDetail(null)
-    setView("central")
-    setChatFocused(true)
-    setChatScroll(0)
-    sendUser("central", createTicketPrompt(epic ? { key: epic.key, summary: epic.summary } : undefined))
-  }, [])
-
-  /** Ticket creation from the projects pane runs in the projects agent's drawer. */
-  const openProjectsTicketChat = useCallback((epic?: TicketInfo) => {
-    setEpicDetail(null)
-    setView("projects")
+    setView(tab)
     setDrawerOpen(true)
     setDrawerFocused(true)
-    sendUser("projects", createTicketPrompt(epic ? { key: epic.key, summary: epic.summary } : undefined))
+    sendUser(tab, createTicketPrompt(epic ? { key: epic.key, summary: epic.summary } : undefined))
   }, [])
 
   /** Launch the finalize-epic skill in a tmux window titled FINALIZE <key>. */
@@ -674,7 +665,7 @@ export function App() {
         if (row) startOrJump(row)
         else startBacklogTicket(ticket)
       }
-      if (key.name === "n") openProjectsTicketChat(epicDetail.epic)
+      if (key.name === "n") openTicketChat("projects", epicDetail.epic)
       if (key.name === "f") finalizeEpic(epicDetail.epic)
       if (key.name === "t" && ticket) run("open", [ticket.url])
       if (key.name === "c" && ticket) changeStatus(ticket.key, ticket.status)
@@ -802,7 +793,7 @@ export function App() {
         setSelectedEpic((s) => Math.max(s - 1, 0))
       }
       if (key.name === "return" && epic) openEpic(epic)
-      if (key.name === "n" && epic) openProjectsTicketChat(epic)
+      if (key.name === "n" && epic) openTicketChat("projects", epic)
       if (key.name === "f" && epic) finalizeEpic(epic)
       if (key.name === "c" && epic) changeStatus(epic.key, epic.status)
       if (key.name === "t" && epic) run("open", [epic.url])
@@ -817,7 +808,7 @@ export function App() {
       if (key.name === "k" || key.name === "up") {
         setSelectedBacklog((s) => Math.max(s - 1, 0))
       }
-      if (key.name === "n") openTicketChat()
+      if (key.name === "n") openTicketChat("backlog")
       if (key.name === "s" && ticket) startBacklogTicket(ticket)
       if (key.name === "c" && ticket) changeStatus(ticket.key, ticket.status)
       if (key.name === "t" && ticket) run("open", [ticket.url])
