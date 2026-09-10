@@ -496,6 +496,15 @@ export function App() {
     sendUser("central", createTicketPrompt(epic ? { key: epic.key, summary: epic.summary } : undefined))
   }, [])
 
+  /** Ticket creation from the projects pane runs in the projects agent's drawer. */
+  const openProjectsTicketChat = useCallback((epic?: TicketInfo) => {
+    setEpicDetail(null)
+    setView("projects")
+    setDrawerOpen(true)
+    setDrawerFocused(true)
+    sendUser("projects", createTicketPrompt(epic ? { key: epic.key, summary: epic.summary } : undefined))
+  }, [])
+
   /** Launch the finalize-epic skill in a tmux window titled FINALIZE <key>. */
   const finalizeEpic = useCallback((epic: TicketInfo) => {
     setBusy(`starting finalize-epic for ${epic.key}…`)
@@ -665,7 +674,7 @@ export function App() {
         if (row) startOrJump(row)
         else startBacklogTicket(ticket)
       }
-      if (key.name === "n") openTicketChat(epicDetail.epic)
+      if (key.name === "n") openProjectsTicketChat(epicDetail.epic)
       if (key.name === "f") finalizeEpic(epicDetail.epic)
       if (key.name === "t" && ticket) run("open", [ticket.url])
       if (key.name === "c" && ticket) changeStatus(ticket.key, ticket.status)
@@ -793,7 +802,7 @@ export function App() {
         setSelectedEpic((s) => Math.max(s - 1, 0))
       }
       if (key.name === "return" && epic) openEpic(epic)
-      if (key.name === "n" && epic) openTicketChat(epic)
+      if (key.name === "n" && epic) openProjectsTicketChat(epic)
       if (key.name === "f" && epic) finalizeEpic(epic)
       if (key.name === "c" && epic) changeStatus(epic.key, epic.status)
       if (key.name === "t" && epic) run("open", [epic.url])
