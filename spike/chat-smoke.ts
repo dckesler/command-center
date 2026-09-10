@@ -1,16 +1,27 @@
-/** Headless smoke test for src/data/chat.ts (run: bun run spike/chat-smoke.ts). */
-import { chatState, disposeChat, sendChat, subscribeChat } from "../src/data/chat.ts"
+/**
+ * Headless smoke test for the agent hub (run: bun run spike/chat-smoke.ts).
+ * Verifies queueing, streaming, and customTools wiring without the TUI.
+ */
+import { disposeAll, sendSystem } from "../src/agents/hub.ts"
+import { getStore } from "../src/agents/stores.ts"
 
-let events = 0
-subscribeChat(() => {
-  events++
-})
+const send = (id: string, text: string) =>
+  new Promise<string>((resolve) => sendSystem(id, text, resolve))
 
-await sendChat("Reply with exactly the single word: OK")
-await sendChat("Now reply with exactly the single word: TWICE")
+// 1. plain round trip
+console.log("central says:", await send("central", "Reply with exactly the single word: OK"))
 
-console.log(`store events emitted: ${events}`)
-for (const item of chatState.items) {
-  console.log(`[${item.role}] ${item.text.slice(0, 100)}`)
-}
-await disposeChat()
+// 2. central custom tool (list_agents)
+console.log(
+  "central agents:",
+  await send("central", "Call list_agents, then reply with only the comma-separated agent ids."),
+)
+
+// 3. specialist custom tool (list_todos on an empty snapshot)
+console.log(
+  "todos says:",
+  await send("todos", "Call list_todos, then reply with one short line describing what it returned."),
+)
+
+console.log("central items:", getStore("central").items.length, "| todos items:", getStore("todos").items.length)
+await disposeAll()

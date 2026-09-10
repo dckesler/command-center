@@ -11,7 +11,15 @@ import { Modal, type ModalState } from "./components/Modal.tsx"
 import { QaTicketPrompt } from "./components/QaTicketPrompt.tsx"
 import { Todos } from "./components/Todos.tsx"
 import { addTodo, editTodo, loadTodos, removeTodo, sortTodos, toggleTodo, type Todo } from "./data/todos.ts"
-import { disposeChat, newChat, sendChat } from "./data/chat.ts"
+import {
+  agentBusy,
+  disposeAll,
+  markRead,
+  newConversation,
+  sendUser,
+  setAppChangedHandler,
+  updateSnapshot,
+} from "./agents/hub.ts"
 import { collect } from "./data/collect.ts"
 import { run } from "./data/exec.ts"
 import { getMrExtras, mergeMr } from "./data/gitlab.ts"
@@ -31,17 +39,17 @@ import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
 
-type View = "worktrees" | "qa" | "backlog" | "projects" | "todos" | "chat"
+type View = "central" | "worktrees" | "qa" | "backlog" | "projects" | "todos"
 
-const VIEW_ORDER: View[] = ["worktrees", "qa", "backlog", "projects", "todos", "chat"]
+const VIEW_ORDER: View[] = ["central", "worktrees", "qa", "backlog", "projects", "todos"]
 
 const VIEW_BY_KEY: Record<string, View> = {
-  "1": "worktrees",
-  "2": "qa",
-  "3": "backlog",
-  "4": "projects",
-  "5": "todos",
-  "6": "chat",
+  "1": "central",
+  "2": "worktrees",
+  "3": "qa",
+  "4": "backlog",
+  "5": "projects",
+  "6": "todos",
 }
 
 /** In Progress first, then To Do, then Done — most actionable at the top. */
@@ -80,7 +88,7 @@ export function App() {
   const [modal, setModal] = useState<ModalState | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
-  const [view, setView] = useState<View>("worktrees")
+  const [view, setView] = useState<View>("central")
   const [backlog, setBacklog] = useState<TicketInfo[]>([])
   const [backlogLoading, setBacklogLoading] = useState(true)
   const [selectedBacklog, setSelectedBacklog] = useState(0)
@@ -141,6 +149,19 @@ export function App() {
 
   useEffect(() => {
     refresh()
+  }, [refresh])
+
+  // Keep the hub's snapshot in sync so agent tools read live TUI state.
+  useEffect(() => {
+    updateSnapshot({ rows, backlog, epics, todos })
+  }, [rows, backlog, epics, todos])
+
+  // Agent-driven data changes flow back into the TUI.
+  useEffect(() => {
+    setAppChangedHandler((kind) => {
+      if (kind === "todos") setTodos(sortTodos(loadTodos()))
+      else refresh()
+    })
   }, [refresh])
 
   const finishAction = useCallback(
@@ -437,13 +458,13 @@ export function App() {
     [finishAction],
   )
 
-  /** Open the embedded chat seeded with a jira-ticket prompt (epic optional). */
+  /** Open the central chat seeded with a jira-ticket prompt (epic optional). */
   const openTicketChat = useCallback((epic?: TicketInfo) => {
     setEpicDetail(null)
-    setView("chat")
+    setView("central")
     setChatFocused(true)
     setChatScroll(0)
-    sendChat(createTicketPrompt(epic ? { key: epic.key, summary: epic.summary } : undefined))
+    sendUser("central", createTicketPrompt(epic ? { key: epic.key, summary: epic.summary } : undefined))
   }, [])
 
   /** Launch the finalize-epic skill in a tmux window titled FINALIZE <key>. */
@@ -536,13 +557,13 @@ export function App() {
       }
       return
     }
-    if (view === "chat" && chatFocused && !modal) {
+    if (view === "central" && chatFocused && !modal) {
       if (key.name === "escape") setChatFocused(false)
       return
     }
     if (key.name === "q" && !busy) {
       // Best-effort agent disposal, capped so quitting never hangs.
-      Promise.race([disposeChat(), new Promise((resolve) => setTimeout(resolve, 800))]).finally(() =>
+      Promise.race([disposeAll(), new Promise((resolve) => setTimeout(resolve, 1500))]).finally(() =>
         process.exit(0),
       )
       return
@@ -616,27 +637,28 @@ export function App() {
       const next =
         key.name === "tab" ? VIEW_ORDER[(VIEW_ORDER.indexOf(view) + 1) % VIEW_ORDER.length] : VIEW_BY_KEY[key.name]
       setView(next)
-      if (next === "chat") {
+      if (next === "central") {
         setChatFocused(true)
         setChatScroll(0)
+        markRead("central")
       }
       return
     }
     if (key.name === "r") refresh()
 
-    if (view === "chat") {
+    if (view === "central") {
       // Focused chat is handled earlier; here the input is unfocused.
       if (key.name === "i" || key.name === "return" || key.name === "a") setChatFocused(true)
       if (key.name === "j" || key.name === "down") setChatScroll((s) => Math.max(0, s - 1))
       if (key.name === "k" || key.name === "up") setChatScroll((s) => s + 1)
       if (key.name === "n") {
         setModal({
-          title: "Start a new conversation? The current one is discarded.",
+          title: "Start a new central conversation? The current one is discarded.",
           options: [{ label: "New conversation", danger: true }, { label: "Cancel" }],
           selected: 1,
           onPick: (i) => {
             setModal(null)
-            if (i === 0) newChat()
+            if (i === 0) newConversation("central")
           },
         })
       }
@@ -777,12 +799,12 @@ export function App() {
       <box paddingLeft={1} paddingRight={1} flexDirection="row" justifyContent="space-between">
         <text>
           <span fg="#93c5fd">CONTROL CENTER</span>
-          <span fg={view === "worktrees" ? "#ffffff" : "#6b7280"}>  [1] {workRows.length} worktrees</span>
-          <span fg={view === "qa" ? "#ffffff" : "#6b7280"}>  [2] {qaRows.length} qa</span>
-          <span fg={view === "backlog" ? "#ffffff" : "#6b7280"}>  [3] {backlog.length} backlog</span>
-          <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [4] {epics.length} projects</span>
-          <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [5] {todos.filter((t) => !t.done).length} todos</span>
-          <span fg={view === "chat" ? "#ffffff" : "#6b7280"}>  [6] chat</span>
+          <span fg={view === "central" ? "#ffffff" : "#6b7280"}>  [1] central</span>
+          <span fg={view === "worktrees" ? "#ffffff" : "#6b7280"}>  [2] {workRows.length} worktrees</span>
+          <span fg={view === "qa" ? "#ffffff" : "#6b7280"}>  [3] {qaRows.length} qa</span>
+          <span fg={view === "backlog" ? "#ffffff" : "#6b7280"}>  [4] {backlog.length} backlog</span>
+          <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [5] {epics.length} projects</span>
+          <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [6] {todos.filter((t) => !t.done).length} todos</span>
         </text>
         <text fg="#6b7280">{statusLine}</text>
       </box>
@@ -843,8 +865,16 @@ export function App() {
             width={width - 2}
             height={height - 4}
           />
-        ) : view === "chat" ? (
-          <Chat focused={chatFocused} scroll={chatScroll} width={width - 2} height={height - 4} />
+        ) : view === "central" ? (
+          <Chat
+            agentId="central"
+            title="Central agent"
+            emptyHint="central manager agent — it directs the tab specialists and receives their reports. Type a message and press enter."
+            focused={chatFocused}
+            scroll={chatScroll}
+            width={width - 2}
+            height={height - 4}
+          />
         ) : view === "qa" ? (
           qaRows.length === 0 ? (
             <text fg="#6b7280">no QA worktrees — press n to start one (pick repo, enter ticket)</text>
@@ -875,7 +905,7 @@ export function App() {
                       ? addingTodo || editingTodo
                         ? "enter save   esc cancel"
                         : `tab views   j/k move   a add   e edit   space/enter toggle   v ${showCompletedTodos ? "hide" : "show"} completed   x delete   q quit`
-                      : view === "chat"
+                      : view === "central"
                         ? chatFocused
                           ? "enter send   esc unfocus input"
                           : "tab views   i focus input   j/k scroll   n new conversation   q quit"

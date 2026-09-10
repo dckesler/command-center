@@ -1,0 +1,302 @@
+import { homedir } from "node:os"
+import { Agent, CursorAgentError, type SDKCustomTool } from "@cursor/sdk"
+import { TAB_AGENT_SPECS, type HubContext, type Snapshot, type TabAgentSpec } from "./specs.ts"
+import { emitAgents, getStore, resetStore } from "./stores.ts"
+
+/**
+ * AgentHub: owns one SDK agent per tab spec, serializes sends per agent,
+ * routes specialist reports into the central agent's inbox, and exposes the
+ * HubContext that specs build their tools against.
+ *
+ * All agents run locally with cwd = $HOME and settingSources ["user"] so they
+ * share the saved Atlassian MCP login and the user-level skills.
+ */
+
+const MODEL = "composer-2.5"
+
+/** Max autonomous central deliveries per minute (loop/cost guard). */
+const CENTRAL_DELIVERIES_PER_MINUTE = 6
+
+type SdkAgent = Awaited<ReturnType<typeof Agent.create>>
+
+interface QueuedMessage {
+  text: string
+  /** how the message renders in the pane: user input vs system traffic */
+  display: "user" | "info"
+  onDone?: (finalText: string) => void
+}
+
+interface Entry {
+  spec: TabAgentSpec
+  agent: SdkAgent | null
+  seeded: boolean
+  queue: QueuedMessage[]
+  running: boolean
+  lastReport: string | null
+}
+
+interface Report {
+  from: string
+  severity: string
+  summary: string
+  ts: number
+}
+
+const entries = new Map<string, Entry>()
+for (const spec of TAB_AGENT_SPECS) {
+  entries.set(spec.id, { spec, agent: null, seeded: false, queue: [], running: false, lastReport: null })
+}
+
+let snapshot: Snapshot = { rows: [], backlog: [], epics: [], todos: [] }
+let onAppChanged: (kind: "todos" | "refresh") => void = () => {}
+
+const inbox: Report[] = []
+const centralDeliveries: number[] = []
+let deliveryTimer: ReturnType<typeof setTimeout> | null = null
+
+// ---------------------------------------------------------------------------
+// context handed to specs
+
+const ctx: HubContext = {
+  snapshot: () => snapshot,
+  appChanged: (kind) => onAppChanged(kind),
+  agentList: () =>
+    [...entries.values()]
+      .filter((e) => e.spec.id !== "central")
+      .map((e) => ({ id: e.spec.id, title: e.spec.title, busy: e.running, queued: e.queue.length })),
+  agentStatus: (id) => {
+    const entry = entries.get(id)
+    if (!entry) return `unknown agent "${id}"`
+    return [
+      `${id}: ${entry.running ? "busy" : "idle"}, ${entry.queue.length} queued`,
+      `last report: ${entry.lastReport ?? "(none)"}`,
+    ].join("\n")
+  },
+  instruct: (id, instruction) => {
+    const entry = entries.get(id)
+    if (!entry || id === "central") {
+      return `unknown agent "${id}" — valid: ${[...entries.keys()].filter((k) => k !== "central").join(", ")}`
+    }
+    enqueue(id, {
+      text: `[instruction from central]\n${instruction}`,
+      display: "info",
+      onDone: (finalText) => reportToCentral(id, "info", `reply to instruction: ${finalText || "(no reply)"}`),
+    })
+    return `instruction queued for ${id} — its reply will arrive as a report`
+  },
+}
+
+// ---------------------------------------------------------------------------
+// public API
+
+export function updateSnapshot(next: Partial<Snapshot>): void {
+  snapshot = { ...snapshot, ...next }
+}
+
+export function setAppChangedHandler(handler: (kind: "todos" | "refresh") => void): void {
+  onAppChanged = handler
+}
+
+export function agentIds(): string[] {
+  return [...entries.keys()]
+}
+
+export function agentBusy(id: string): boolean {
+  const entry = entries.get(id)
+  return entry ? entry.running || entry.queue.length > 0 : false
+}
+
+/** User typed a message into an agent's chat pane. */
+export function sendUser(id: string, text: string): void {
+  enqueue(id, { text, display: "user" })
+}
+
+/** Hub-originated traffic (event digests, report batches, instructions). */
+export function sendSystem(id: string, text: string, onDone?: (finalText: string) => void): void {
+  enqueue(id, { text, display: "info", onDone })
+}
+
+/** Specialists report up; central's inbox delivers when it goes idle. */
+export function reportToCentral(from: string, severity: string, summary: string): void {
+  const entry = entries.get(from)
+  if (entry) entry.lastReport = summary
+  inbox.push({ from, severity, summary, ts: Date.now() })
+  getStore("central").unread = true
+  emitAgents()
+  deliverInbox()
+}
+
+/** Drop an agent's conversation; next message starts a fresh SDK agent. */
+export function newConversation(id: string): void {
+  const entry = entries.get(id)
+  if (!entry) return
+  const old = entry.agent
+  entry.agent = null
+  entry.seeded = false
+  entry.queue = []
+  entry.lastReport = null
+  resetStore(id)
+  old?.[Symbol.asyncDispose]().catch(() => {})
+}
+
+export function markRead(id: string): void {
+  const store = getStore(id)
+  if (store.unread) {
+    store.unread = false
+    emitAgents()
+  }
+}
+
+/** Best-effort cleanup on quit (caller bounds the wait). */
+export async function disposeAll(): Promise<void> {
+  const agents = [...entries.values()].map((e) => e.agent).filter((a): a is SdkAgent => a !== null)
+  for (const entry of entries.values()) entry.agent = null
+  await Promise.all(agents.map((a) => a[Symbol.asyncDispose]().catch(() => {})))
+}
+
+// ---------------------------------------------------------------------------
+// internals
+
+function enqueue(id: string, message: QueuedMessage): void {
+  const entry = entries.get(id)
+  if (!entry) return
+  entry.queue.push(message)
+  void processQueue(entry)
+}
+
+async function processQueue(entry: Entry): Promise<void> {
+  if (entry.running) return
+  entry.running = true
+  const store = getStore(entry.spec.id)
+  store.busy = true
+  emitAgents()
+  try {
+    while (entry.queue.length > 0) {
+      const message = entry.queue.shift()!
+      store.items.push({ role: message.display, text: message.text })
+      store.unread = true
+      emitAgents()
+      const finalText = await runOnce(entry, message.text)
+      message.onDone?.(finalText)
+    }
+  } finally {
+    store.busy = false
+    entry.running = false
+    emitAgents()
+  }
+  // Central going idle is the moment to flush any reports that queued up
+  // while it was running.
+  if (entry.spec.id === "central") deliverInbox()
+}
+
+async function getAgent(entry: Entry): Promise<SdkAgent> {
+  if (entry.agent) return entry.agent
+  const apiKey = process.env.CURSOR_API_KEY
+  if (!apiKey) {
+    throw new Error("CURSOR_API_KEY is not set — export it before launching the control center")
+  }
+  const tools: Record<string, SDKCustomTool> = { ...entry.spec.makeTools(ctx) }
+  if (entry.spec.id !== "central") {
+    tools.report_to_central = {
+      description:
+        "Report a status, finding, or completed-instruction summary to the central manager agent. " +
+        "severity: info (FYI), warn (degrading), attention (needs Daniel now).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          summary: { type: "string" },
+          severity: { type: "string", enum: ["info", "warn", "attention"] },
+        },
+        required: ["summary"],
+      },
+      execute: (args) => {
+        const severity = typeof args.severity === "string" ? args.severity : "info"
+        reportToCentral(entry.spec.id, severity, String(args.summary ?? ""))
+        return "reported to central"
+      },
+    }
+  }
+  entry.agent = await Agent.create({
+    apiKey,
+    name: `control-center ${entry.spec.id}`,
+    model: { id: MODEL },
+    local: { cwd: homedir(), settingSources: ["user"], customTools: tools },
+  })
+  return entry.agent
+}
+
+/** Send one message, stream into the store, return the run's assistant text. */
+async function runOnce(entry: Entry, text: string): Promise<string> {
+  const store = getStore(entry.spec.id)
+  let assistantOpen = false
+  let finalText = ""
+  const seenCalls = new Set<string>()
+  try {
+    const agent = await getAgent(entry)
+    const payload = entry.seeded ? text : `${entry.spec.rolePrompt}\n\n---\n\n${text}`
+    entry.seeded = true
+    const run = await agent.send(payload)
+    for await (const event of run.stream()) {
+      if (event.type === "assistant") {
+        for (const block of event.message.content) {
+          if (block.type !== "text" || !block.text) continue
+          finalText += block.text
+          if (assistantOpen) {
+            store.items[store.items.length - 1].text += block.text
+          } else {
+            store.items.push({ role: "assistant", text: block.text })
+            assistantOpen = true
+          }
+        }
+        store.unread = true
+        emitAgents()
+      } else if (event.type === "tool_call") {
+        if (!seenCalls.has(event.call_id)) {
+          seenCalls.add(event.call_id)
+          store.items.push({ role: "tool", text: `⚙ ${event.name}` })
+          assistantOpen = false
+          emitAgents()
+        }
+      }
+    }
+    const result = await run.wait()
+    if (result.status !== "finished") {
+      store.items.push({ role: "error", text: `run ended: ${result.status}` })
+      emitAgents()
+    }
+  } catch (err) {
+    // Startup failures leave an unusable handle; drop it so the next send retries.
+    if (err instanceof CursorAgentError) {
+      entry.agent = null
+      entry.seeded = false
+    }
+    store.items.push({ role: "error", text: err instanceof Error ? err.message : String(err) })
+    emitAgents()
+  }
+  return finalText.trim()
+}
+
+function deliveryRateOk(): boolean {
+  const cutoff = Date.now() - 60_000
+  while (centralDeliveries.length > 0 && centralDeliveries[0] < cutoff) centralDeliveries.shift()
+  return centralDeliveries.length < CENTRAL_DELIVERIES_PER_MINUTE
+}
+
+function deliverInbox(): void {
+  if (inbox.length === 0) return
+  const central = entries.get("central")!
+  if (central.running || central.queue.length > 0) return // flushed when it goes idle
+  if (!deliveryRateOk()) {
+    if (!deliveryTimer) {
+      deliveryTimer = setTimeout(() => {
+        deliveryTimer = null
+        deliverInbox()
+      }, 15_000)
+    }
+    return
+  }
+  centralDeliveries.push(Date.now())
+  const batch = inbox.splice(0)
+  const text = `[reports]\n${batch.map((r) => `- ${r.from} (${r.severity}): ${r.summary}`).join("\n")}`
+  sendSystem("central", text)
+}

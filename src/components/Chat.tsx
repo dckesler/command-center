@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
-import { chatState, sendChat, subscribeChat, type ChatItem } from "../data/chat.ts"
+import { getStore, subscribeAgents, type ChatItem } from "../agents/stores.ts"
+import { sendUser } from "../agents/hub.ts"
 
 const C = {
   dim: "#6b7280",
@@ -19,8 +20,8 @@ function wrap(text: string, width: number): string[] {
     for (const word of raw.split(" ")) {
       if (word.length > width) {
         if (line) lines.push(line)
-        for (let i = 0; i < word.length; i += width) line = word.slice(i, i + width)
         for (let i = 0; i + width < word.length; i += width) lines.push(word.slice(i, i + width))
+        line = word.slice(Math.floor((word.length - 1) / width) * width)
         continue
       }
       if (!line) line = word
@@ -42,28 +43,36 @@ function colorFor(role: ChatItem["role"]): string {
   return C.value
 }
 
+/** Chat pane bound to one hub agent. Used full-screen (central) and as a drawer. */
 export function Chat({
+  agentId,
+  title,
+  emptyHint,
   focused,
   scroll,
   width,
   height,
 }: {
+  agentId: string
+  title: string
+  emptyHint: string
   focused: boolean
   /** lines scrolled up from the bottom (0 = pinned to latest) */
   scroll: number
   width: number
   height: number
 }) {
-  // Re-render whenever the module-level chat store changes.
+  // Re-render whenever any agent store changes.
   const [, setTick] = useState(0)
-  useEffect(() => subscribeChat(() => setTick((t) => t + 1)), [])
+  useEffect(() => subscribeAgents(() => setTick((t) => t + 1)), [])
+  const store = getStore(agentId)
 
   const [spin, setSpin] = useState(0)
   useEffect(() => {
-    if (!chatState.busy) return
+    if (!store.busy) return
     const interval = setInterval(() => setSpin((s) => s + 1), 120)
     return () => clearInterval(interval)
-  }, [chatState.busy])
+  }, [store.busy])
 
   // The input's submit event doesn't carry the value, so track it via onInput.
   // The input is uncontrolled; bumping the key remounts it empty after a send.
@@ -72,13 +81,14 @@ export function Chat({
 
   const textWidth = Math.max(20, width - 2)
   const all: { text: string; color: string }[] = []
-  for (const item of chatState.items) {
+  for (const item of store.items) {
     const prefix = item.role === "user" ? "❯ " : ""
-    const wrapped = wrap(prefix + item.text, textWidth)
-    for (const line of wrapped) all.push({ text: line, color: colorFor(item.role) })
+    for (const line of wrap(prefix + item.text, textWidth)) {
+      all.push({ text: line, color: colorFor(item.role) })
+    }
     all.push({ text: "", color: C.dim })
   }
-  if (chatState.busy) {
+  if (store.busy) {
     all.push({ text: `${SPINNER_FRAMES[spin % SPINNER_FRAMES.length]} working…`, color: C.yellow })
   }
 
@@ -92,9 +102,7 @@ export function Chat({
     <box flexDirection="column">
       <box flexDirection="column" height={bodyHeight}>
         {visible.length === 0 ? (
-          <text fg={C.dim}>
-            chat with a local Cursor agent (skills + Atlassian MCP loaded) — type a message and press enter
-          </text>
+          <text fg={C.dim}>{emptyHint}</text>
         ) : (
           visible.map((line, i) => (
             <text key={i} fg={line.color}>
@@ -104,7 +112,7 @@ export function Chat({
         )}
       </box>
       <box
-        title={chatState.busy ? "Chat (agent is working)" : "Chat"}
+        title={store.busy ? `${title} (working)` : title}
         border
         borderColor={focused ? C.header : C.dim}
         height={3}
@@ -119,10 +127,10 @@ export function Chat({
           }}
           onSubmit={() => {
             const text = draft.current.trim()
-            if (!text || chatState.busy) return
+            if (!text) return
             draft.current = ""
             setInputGen((g) => g + 1)
-            sendChat(text)
+            sendUser(agentId, text)
           }}
         />
       </box>
