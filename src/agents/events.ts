@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, readSync, statSync, watch } from "node
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import type { Row, TicketInfo } from "../types.ts"
-import { sendSystem } from "./hub.ts"
+import { currentSnapshot, sendSystem } from "./hub.ts"
 
 /**
  * Autonomous event sources. Two feeds produce per-tab "[event digest]"
@@ -103,6 +103,10 @@ function drainFeed(): void {
       if (lastStateByDir.get(event.dir) === event.state) continue
       lastStateByDir.set(event.dir, event.state)
       if (!INTERESTING_STATES.has(event.state)) continue
+      // Only ticket agents in known worktrees count. Crucially this drops the
+      // hub's own agents (they run in $HOME and fire the same hooks), which
+      // would otherwise create a digest → run → hook → digest feedback loop.
+      if (!currentSnapshot().rows.some((r) => r.worktreePath === event.dir)) continue
       const tab = event.dir.includes("_qa_") ? "qa" : "worktrees"
       pushEvent(tab, `ticket agent in ${basename(event.dir)} is now ${event.state}${event.source ? ` (${event.source})` : ""}`)
     } catch {

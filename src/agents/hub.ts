@@ -106,6 +106,10 @@ export function updateSnapshot(next: Partial<Snapshot>): void {
   snapshot = { ...snapshot, ...next }
 }
 
+export function currentSnapshot(): Snapshot {
+  return snapshot
+}
+
 export function setAppChangedHandler(handler: (kind: "todos" | "refresh") => void): void {
   onAppChanged = handler
 }
