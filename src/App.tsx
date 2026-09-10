@@ -109,7 +109,7 @@ export function App() {
   /** set when the QA flow has a repo picked and is waiting for the ticket key */
   const [qaPrompt, setQaPrompt] = useState<{ repo: string } | null>(null)
   /** chat view: whether the message input owns the keyboard */
-  const [chatFocused, setChatFocused] = useState(true)
+  const [chatFocused, setChatFocused] = useState(false)
   const [chatScroll, setChatScroll] = useState(0)
   /** per-tab agent chat drawer (tabs other than central) */
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -678,7 +678,6 @@ export function App() {
         key.name === "tab" ? VIEW_ORDER[(VIEW_ORDER.indexOf(view) + 1) % VIEW_ORDER.length] : VIEW_BY_KEY[key.name]
       setView(next)
       if (next === "central") {
-        setChatFocused(true)
         setChatScroll(0)
         markRead("central")
       }
