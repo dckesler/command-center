@@ -3,6 +3,7 @@ import type { Row, TicketInfo } from "../types.ts"
 import type { Todo } from "../data/todos.ts"
 import { readAgentStatuses } from "../data/agents.ts"
 import { run } from "../data/exec.ts"
+import { getMessageBody, sendMail, type EmailMessage } from "../data/outlook.ts"
 import { applyTransition, getEpicChildren, getTransitions, prepTicket } from "../data/jira.ts"
 import { launchWork, runMkpanes, targetSession } from "../data/tmux.ts"
 import { addTodo, editTodo, loadTodos, removeTodo, setTodoNotes, sortTodos, toggleTodo } from "../data/todos.ts"
@@ -13,6 +14,8 @@ export interface Snapshot {
   backlog: TicketInfo[]
   epics: TicketInfo[]
   todos: Todo[]
+  /** null while Outlook is unavailable (m365 not logged in) */
+  emails: EmailMessage[] | null
 }
 
 /** What specs get from the hub when building their tools. */
@@ -482,5 +485,58 @@ const todosSpec: TabAgentSpec = {
   },
 }
 
+const email: TabAgentSpec = {
+  id: "email",
+  title: "email",
+  rolePrompt:
+    "You are the email specialist of a development control center. Scope: Daniel's Outlook work inbox (recent messages). " +
+    "You can list the inbox, fetch full message bodies, and send mail. " +
+    "Sending is serious: only use send_mail when Daniel explicitly asked you to send something, and always show him the " +
+    "exact to/subject/body in this chat and get his confirmation first. Never send on your own initiative. " +
+    "Report genuinely important-looking unread mail to central (severity attention only for truly urgent items). " +
+    REPLY_STYLE +
+    " " +
+    EVENT_STYLE,
+  makeTools(ctx) {
+    return {
+      list_inbox: {
+        description: "List recent inbox messages (id, from, subject, received, read state).",
+        inputSchema: { type: "object", properties: {} },
+        execute: () => {
+          const emails = ctx.snapshot().emails
+          if (emails === null) return "Outlook unavailable — m365 CLI is not logged in"
+          return emails.length
+            ? emails
+                .map(
+                  (e) =>
+                    `${e.isRead ? "[read]  " : "[unread]"} id=${e.id} | ${e.from} <${e.fromAddress}> | ${e.subject} | ${e.receivedAt}`,
+                )
+                .join("\n")
+            : "inbox empty (last 7 days)"
+        },
+      },
+      read_message: {
+        description: "Fetch the full plain-text body of one message (id from list_inbox).",
+        inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+        execute: async (args) => (await getMessageBody(str(args.id))) ?? "could not fetch message",
+      },
+      send_mail: {
+        description:
+          "Send an email from Daniel's account. Only after Daniel explicitly approved the exact to/subject/body in chat.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            to: { type: "string", description: "recipient email address(es), comma separated" },
+            subject: { type: "string" },
+            body: { type: "string", description: "plain-text body" },
+          },
+          required: ["to", "subject", "body"],
+        },
+        execute: async (args) => (await sendMail(str(args.to), str(args.subject), str(args.body))).message,
+      },
+    }
+  },
+}
+
 /** Tab agents in tab order. Adding a new pane = adding a spec here. */
-export const TAB_AGENT_SPECS: TabAgentSpec[] = [central, worktrees, qa, backlog, projects, todosSpec]
+export const TAB_AGENT_SPECS: TabAgentSpec[] = [central, worktrees, qa, backlog, projects, todosSpec, email]

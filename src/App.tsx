@@ -21,7 +21,9 @@ import {
   updateSnapshot,
 } from "./agents/hub.ts"
 import { getStore, subscribeAgents } from "./agents/stores.ts"
-import { ingestRows, ingestTickets, startEventWatchers } from "./agents/events.ts"
+import { Email } from "./components/Email.tsx"
+import { getInbox, type EmailMessage } from "./data/outlook.ts"
+import { ingestEmails, ingestRows, ingestTickets, startEventWatchers } from "./agents/events.ts"
 import { collect } from "./data/collect.ts"
 import { run } from "./data/exec.ts"
 import { getMrExtras, mergeMr } from "./data/gitlab.ts"
@@ -41,9 +43,9 @@ import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
 
-type View = "central" | "worktrees" | "qa" | "backlog" | "projects" | "todos"
+type View = "central" | "worktrees" | "qa" | "backlog" | "projects" | "todos" | "email"
 
-const VIEW_ORDER: View[] = ["central", "worktrees", "qa", "backlog", "projects", "todos"]
+const VIEW_ORDER: View[] = ["central", "worktrees", "qa", "backlog", "projects", "todos", "email"]
 
 const VIEW_BY_KEY: Record<string, View> = {
   "1": "central",
@@ -52,6 +54,7 @@ const VIEW_BY_KEY: Record<string, View> = {
   "4": "backlog",
   "5": "projects",
   "6": "todos",
+  "7": "email",
 }
 
 /** In Progress first, then To Do, then Done — most actionable at the top. */
@@ -105,6 +108,9 @@ export function App() {
   const [addingTodo, setAddingTodo] = useState(false)
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
   const [editingTodoNotes, setEditingTodoNotes] = useState<Todo | null>(null)
+  const [emails, setEmails] = useState<EmailMessage[] | null>(null)
+  const [emailsLoading, setEmailsLoading] = useState(true)
+  const [selectedEmail, setSelectedEmail] = useState(0)
   const [mkpanesPrompt, setMkpanesPrompt] = useState(false)
   /** set when the QA flow has a repo picked and is waiting for the ticket key */
   const [qaPrompt, setQaPrompt] = useState<{ repo: string } | null>(null)
@@ -145,6 +151,11 @@ export function App() {
       if (result) setEpics(result)
       setEpicsLoading(false)
     })
+    setEmailsLoading(true)
+    getInbox().then((result) => {
+      setEmails(result)
+      setEmailsLoading(false)
+    })
     try {
       await collect((newRows, newLoad) => {
         setRows(newRows)
@@ -162,8 +173,8 @@ export function App() {
 
   // Keep the hub's snapshot in sync so agent tools read live TUI state.
   useEffect(() => {
-    updateSnapshot({ rows, backlog, epics, todos })
-  }, [rows, backlog, epics, todos])
+    updateSnapshot({ rows, backlog, epics, todos, emails })
+  }, [rows, backlog, epics, todos, emails])
 
   // Autonomous events: hook-feed watcher plus refresh diffs (only complete
   // loads are diffed, so progressive refresh states don't fake changes).
@@ -179,6 +190,9 @@ export function App() {
   useEffect(() => {
     if (!epicsLoading) ingestTickets("projects", epics)
   }, [epics, epicsLoading])
+  useEffect(() => {
+    if (!emailsLoading && emails !== null) ingestEmails(emails)
+  }, [emails, emailsLoading])
 
   // Agent-driven data changes flow back into the TUI.
   useEffect(() => {
@@ -761,6 +775,18 @@ export function App() {
       return
     }
 
+    if (view === "email") {
+      const mail = emails?.[selectedEmail]
+      if (key.name === "j" || key.name === "down") {
+        setSelectedEmail((s) => Math.min(s + 1, Math.max(0, (emails?.length ?? 1) - 1)))
+      }
+      if (key.name === "k" || key.name === "up") {
+        setSelectedEmail((s) => Math.max(s - 1, 0))
+      }
+      if ((key.name === "o" || key.name === "return") && mail?.webLink) run("open", [mail.webLink])
+      return
+    }
+
     if (view === "qa") {
       const row = qaRows[selectedQa]
       if (key.name === "j" || key.name === "down") {
@@ -880,6 +906,10 @@ export function App() {
           {agentDot("projects")}
           <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [6] {todos.filter((t) => !t.done).length} todos</span>
           {agentDot("todos")}
+          <span fg={view === "email" ? "#ffffff" : "#6b7280"}>
+            {"  "}[7] {emails === null ? "" : `${emails.filter((e) => !e.isRead).length} `}email
+          </span>
+          {agentDot("email")}
         </text>
         <text fg="#6b7280">{statusLine}</text>
       </box>
@@ -956,6 +986,14 @@ export function App() {
             width={width - 2}
             height={height - 4}
           />
+        ) : view === "email" ? (
+          <Email
+            emails={emails}
+            loading={emailsLoading}
+            selected={selectedEmail}
+            width={width - 2}
+            height={contentHeight}
+          />
         ) : view === "qa" ? (
           qaRows.length === 0 ? (
             <text fg="#6b7280">no QA worktrees — press n to start one (pick repo, enter ticket)</text>
@@ -1004,6 +1042,8 @@ export function App() {
                         ? chatFocused
                           ? "enter send   esc unfocus input"
                           : "tab views   i focus input   j/k scroll   n new conversation   q quit"
+                      : view === "email"
+                        ? "tab views   j/k move   o/enter open in Outlook   ; agent   r refresh   q quit"
                       : view === "backlog"
                         ? "tab views   j/k move   n create ticket   s start ticket   c status   t open ticket   ; agent   r refresh   q quit"
                         : view === "projects"

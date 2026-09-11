@@ -2,6 +2,7 @@ import { closeSync, existsSync, openSync, readSync, statSync, watch } from "node
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import type { Row, TicketInfo } from "../types.ts"
+import type { EmailMessage } from "../data/outlook.ts"
 import { currentSnapshot, sendSystem } from "./hub.ts"
 
 /**
@@ -142,6 +143,20 @@ export function ingestRows(rows: Row[]): void {
     }
     if (old.ticket && row.ticket && old.ticket.status !== row.ticket.status) {
       pushEvent(tab, `${label}: ticket ${row.ticketKey} went ${old.ticket.status} → ${row.ticket.status}`)
+    }
+  }
+}
+
+let prevEmailIds: Set<string> | null = null
+
+/** New unread arrivals since the previous completed inbox fetch → email agent. */
+export function ingestEmails(emails: EmailMessage[]): void {
+  const prev = prevEmailIds
+  prevEmailIds = new Set(emails.map((e) => e.id))
+  if (!prev) return
+  for (const mail of emails) {
+    if (!mail.isRead && !prev.has(mail.id)) {
+      pushEvent("email", `new unread mail from ${mail.from} <${mail.fromAddress}>: ${mail.subject}`)
     }
   }
 }
