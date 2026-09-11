@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "bun run src/index.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "skills": "bun scripts/skills.ts"
   },
   "dependencies": {
     "@cursor/sdk": "^1.0.30",
