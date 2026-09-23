@@ -9,6 +9,9 @@ export type ChatRole = "user" | "assistant" | "tool" | "error" | "info"
 export interface ChatItem {
   role: ChatRole
   text: string
+  ts?: number
+  /** render hint: a recognised `/skill` invocation */
+  accent?: "skill"
 }
 
 export interface ChatStore {
@@ -16,6 +19,8 @@ export interface ChatStore {
   busy: boolean
   /** undelivered activity while the user is on another tab */
   unread: boolean
+  /** Unsent input text. Kept per agent so tab switches don't share a prompt. */
+  draft: string
 }
 
 const stores = new Map<string, ChatStore>()
@@ -24,7 +29,7 @@ const listeners = new Set<() => void>()
 export function getStore(id: string): ChatStore {
   let store = stores.get(id)
   if (!store) {
-    store = { items: [], busy: false, unread: false }
+    store = { items: [], busy: false, unread: false, draft: "" }
     stores.set(id, store)
   }
   return store
@@ -44,5 +49,6 @@ export function resetStore(id: string): void {
   store.items = []
   store.busy = false
   store.unread = false
+  store.draft = ""
   emitAgents()
 }

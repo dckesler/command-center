@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname } from "node:path"
+import { statePath } from "../config.ts"
 
 export interface Todo {
   id: string
@@ -12,7 +12,7 @@ export interface Todo {
   notes?: string
 }
 
-const TODOS_PATH = join(homedir(), ".config", "control-center", "todos.json")
+const TODOS_PATH = statePath("todos.json")
 
 export function loadTodos(): Todo[] {
   if (!existsSync(TODOS_PATH)) return []

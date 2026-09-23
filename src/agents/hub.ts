@@ -1,7 +1,10 @@
 import { homedir } from "node:os"
 import { Agent, CursorAgentError, type SDKCustomTool } from "@cursor/sdk"
 import { TAB_AGENT_SPECS, type HubContext, type Snapshot, type TabAgentSpec } from "./specs.ts"
-import { emitAgents, getStore, resetStore } from "./stores.ts"
+import { ackInbox, appendInbox, formatCatchUp, formatClock, unreadInbox } from "../data/inbox.ts"
+import { parseSlash } from "../data/skills.ts"
+import { config } from "../config.ts"
+import { emitAgents, getStore, resetStore, type ChatItem } from "./stores.ts"
 
 /**
  * AgentHub: owns one SDK agent per tab spec, serializes sends per agent,
@@ -12,7 +15,8 @@ import { emitAgents, getStore, resetStore } from "./stores.ts"
  * share the saved Atlassian MCP login and the user-level skills.
  */
 
-const MODEL = "composer-2.5"
+const MODEL = config().model
+const USER = config().user.name
 
 /** Max autonomous central deliveries per minute (loop/cost guard). */
 const CENTRAL_DELIVERIES_PER_MINUTE = 6
@@ -20,9 +24,13 @@ const CENTRAL_DELIVERIES_PER_MINUTE = 6
 type SdkAgent = Awaited<ReturnType<typeof Agent.create>>
 
 interface QueuedMessage {
+  /** what shows in the pane */
   text: string
+  /** what the agent receives when it differs from `text` (e.g. a `/skill` expansion) */
+  payload?: string
   /** how the message renders in the pane: user input vs system traffic */
   display: "user" | "info"
+  accent?: ChatItem["accent"]
   onDone?: (finalText: string) => void
 }
 
@@ -35,6 +43,8 @@ interface Entry {
   lastReport: string | null
   /** did this agent call report_to_central during the current run? */
   reportedInRun: boolean
+  /** Unread inbox injected into the first run after (re)create. */
+  pendingCatchUp: string | null
 }
 
 interface Report {
@@ -54,10 +64,11 @@ for (const spec of TAB_AGENT_SPECS) {
     running: false,
     lastReport: null,
     reportedInRun: false,
+    pendingCatchUp: null,
   })
 }
 
-let snapshot: Snapshot = { rows: [], backlog: [], epics: [], todos: [], emails: null }
+let snapshot: Snapshot = { rows: [], tickets: [], epics: [], projects: [], todos: [], emails: null, cloud: [] }
 let onAppChanged: (kind: "todos" | "refresh") => void = () => {}
 
 const inbox: Report[] = []
@@ -123,8 +134,43 @@ export function agentBusy(id: string): boolean {
   return entry ? entry.running || entry.queue.length > 0 : false
 }
 
-/** User typed a message into an agent's chat pane. */
+/** True when this tab already has a live SDK handle (catch-up uses the inbox instead). */
+export function isAgentLive(id: string): boolean {
+  return entries.get(id)?.agent != null
+}
+
+/**
+ * User typed a message into an agent's chat pane. `/skill-name args` is
+ * expanded into an explicit instruction to read and follow that SKILL.md;
+ * `/skills` lists what is installed; an unknown `/name` is answered locally
+ * and never sent.
+ */
 export function sendUser(id: string, text: string): void {
+  if (text.includes("/")) {
+    const slash = parseSlash(text)
+    if (slash.kind === "mentions") {
+      enqueue(id, { text, payload: slash.payload, display: "user", accent: "skill" })
+      return
+    }
+    if (slash.kind === "list") {
+      addItem(id, { role: "user", text, accent: "skill" })
+      const lines = slash.skills.map((s) => `/${s.name}${s.description ? ` — ${s.description.slice(0, 90)}${s.description.length > 90 ? "…" : ""}` : ""}`)
+      addItem(id, { role: "info", text: lines.length ? `${lines.length} skills:\n${lines.join("\n")}` : "no skills found" })
+      emitAgents()
+      return
+    }
+    if (slash.kind === "unknown") {
+      addItem(id, { role: "user", text })
+      const hint = slash.suggestions.length ? ` Did you mean: ${slash.suggestions.map((s) => `/${s.name}`).join(", ")}?` : ""
+      addItem(id, { role: "error", text: `no skill named "${slash.name}".${hint} Type /skills to list them.` })
+      emitAgents()
+      return
+    }
+    if (slash.kind === "skill") {
+      enqueue(id, { text, payload: slash.payload, display: "user", accent: "skill" })
+      return
+    }
+  }
   enqueue(id, { text, display: "user" })
 }
 
@@ -133,11 +179,22 @@ export function sendSystem(id: string, text: string, onDone?: (finalText: string
   enqueue(id, { text, display: "info", onDone })
 }
 
+const REPORT_MAX = 160
+
 /** Specialists report up; central's inbox delivers when it goes idle. */
 export function reportToCentral(from: string, severity: string, summary: string): void {
+  const clipped = summary.replace(/\s+/g, " ").trim().slice(0, REPORT_MAX)
   const entry = entries.get(from)
-  if (entry) entry.lastReport = summary
-  inbox.push({ from, severity, summary, ts: Date.now() })
+  if (entry) entry.lastReport = clipped
+  const ts = Date.now()
+  inbox.push({ from, severity, summary: clipped, ts })
+  appendInbox({
+    to: "central",
+    from,
+    severity: severity === "warn" || severity === "attention" ? severity : "info",
+    summary: clipped,
+    ts,
+  })
   getStore("central").unread = true
   emitAgents()
   deliverInbox()
@@ -152,6 +209,7 @@ export function newConversation(id: string): void {
   entry.seeded = false
   entry.queue = []
   entry.lastReport = null
+  entry.pendingCatchUp = null
   resetStore(id)
   old?.[Symbol.asyncDispose]().catch(() => {})
 }
@@ -174,6 +232,10 @@ export async function disposeAll(): Promise<void> {
 // ---------------------------------------------------------------------------
 // internals
 
+function addItem(id: string, item: Omit<ChatItem, "ts">): void {
+  getStore(id).items.push({ ...item, ts: Date.now() })
+}
+
 function enqueue(id: string, message: QueuedMessage): void {
   const entry = entries.get(id)
   if (!entry) return
@@ -190,11 +252,11 @@ async function processQueue(entry: Entry): Promise<void> {
   try {
     while (entry.queue.length > 0) {
       const message = entry.queue.shift()!
-      store.items.push({ role: message.display, text: message.text })
+      addItem(entry.spec.id, { role: message.display, text: message.text, accent: message.accent })
       store.unread = true
       emitAgents()
       entry.reportedInRun = false
-      const finalText = await runOnce(entry, message.text)
+      const finalText = await runOnce(entry, message.payload ?? message.text)
       message.onDone?.(finalText)
     }
   } finally {
@@ -217,12 +279,16 @@ async function getAgent(entry: Entry): Promise<SdkAgent> {
   if (entry.spec.id !== "central") {
     tools.report_to_central = {
       description:
-        "Report a status, finding, or completed-instruction summary to the central manager agent. " +
-        "severity: info (FYI), warn (degrading), attention (needs Daniel now).",
+        "One-line status for the central manager. Include the ticket key and what changed. " +
+        "Max ~160 characters. Do not quote the ticket agent's last message. " +
+        `severity: info (FYI), warn (degrading), attention (needs ${USER} now).`,
       inputSchema: {
         type: "object",
         properties: {
-          summary: { type: "string" },
+          summary: {
+            type: "string",
+            description: 'e.g. "LW-17790 idle, tests pass, no MR yet"',
+          },
           severity: { type: "string", enum: ["info", "warn", "attention"] },
         },
         required: ["summary"],
@@ -242,6 +308,11 @@ async function getAgent(entry: Entry): Promise<SdkAgent> {
     agents: entry.spec.agents,
     local: { cwd: homedir(), settingSources: ["user"], customTools: tools },
   })
+  const missed = unreadInbox(entry.spec.id)
+  if (missed.length > 0) {
+    entry.pendingCatchUp = formatCatchUp(missed)
+    ackInbox(entry.spec.id, missed[missed.length - 1].id)
+  }
   return entry.agent
 }
 
@@ -261,8 +332,12 @@ async function runOnce(entry: Entry, text: string): Promise<string> {
   const seenCalls = new Map<string, number>()
   try {
     const agent = await getAgent(entry)
-    const payload = entry.seeded ? text : `${entry.spec.rolePrompt}\n\n---\n\n${text}`
+    let payload = entry.seeded ? text : `${entry.spec.rolePrompt}\n\n---\n\n${text}`
     entry.seeded = true
+    if (entry.pendingCatchUp) {
+      payload = `${entry.pendingCatchUp}\n\n---\n\n${payload}`
+      entry.pendingCatchUp = null
+    }
     const run = await agent.send(payload)
     for await (const event of run.stream()) {
       if (event.type === "assistant") {
@@ -272,7 +347,7 @@ async function runOnce(entry: Entry, text: string): Promise<string> {
           if (assistantOpen) {
             store.items[store.items.length - 1].text += block.text
           } else {
-            store.items.push({ role: "assistant", text: block.text })
+            addItem(entry.spec.id, { role: "assistant", text: block.text })
             assistantOpen = true
           }
         }
@@ -283,7 +358,7 @@ async function runOnce(entry: Entry, text: string): Promise<string> {
         const index = seenCalls.get(event.call_id)
         if (index === undefined) {
           seenCalls.set(event.call_id, store.items.length)
-          store.items.push({ role: "tool", text: label })
+          addItem(entry.spec.id, { role: "tool", text: label })
           assistantOpen = false
           emitAgents()
         } else if (store.items[index].text !== label && label !== "⚙ mcp") {
@@ -294,7 +369,7 @@ async function runOnce(entry: Entry, text: string): Promise<string> {
     }
     const result = await run.wait()
     if (result.status !== "finished") {
-      store.items.push({ role: "error", text: `run ended: ${result.status}` })
+      addItem(entry.spec.id, { role: "error", text: `run ended: ${result.status}` })
       emitAgents()
     }
   } catch (err) {
@@ -303,7 +378,7 @@ async function runOnce(entry: Entry, text: string): Promise<string> {
       entry.agent = null
       entry.seeded = false
     }
-    store.items.push({ role: "error", text: err instanceof Error ? err.message : String(err) })
+    addItem(entry.spec.id, { role: "error", text: err instanceof Error ? err.message : String(err) })
     emitAgents()
   }
   return finalText.trim()
@@ -319,7 +394,8 @@ function deliverInbox(): void {
   if (inbox.length === 0) return
   const central = entries.get("central")!
   if (central.running || central.queue.length > 0) return // flushed when it goes idle
-  if (!deliveryRateOk()) {
+  const hasAttention = inbox.some((r) => r.severity === "attention")
+  if (!hasAttention && !deliveryRateOk()) {
     if (!deliveryTimer) {
       deliveryTimer = setTimeout(() => {
         deliveryTimer = null
@@ -328,8 +404,10 @@ function deliverInbox(): void {
     }
     return
   }
-  centralDeliveries.push(Date.now())
+  if (!hasAttention) centralDeliveries.push(Date.now())
   const batch = inbox.splice(0)
-  const text = `[reports]\n${batch.map((r) => `- ${r.from} (${r.severity}): ${r.summary}`).join("\n")}`
+  const lastDisk = unreadInbox("central")
+  if (lastDisk.length) ackInbox("central", lastDisk[lastDisk.length - 1].id)
+  const text = `[reports]\n${batch.map((r) => `- [${formatClock(r.ts)}] ${r.from} (${r.severity}): ${r.summary}`).join("\n")}`
   sendSystem("central", text)
 }

@@ -1,21 +1,34 @@
 import type { AgentDefinition, SDKCustomTool } from "@cursor/sdk"
 import type { Row, TicketInfo } from "../types.ts"
+import { config } from "../config.ts"
 import type { Todo } from "../data/todos.ts"
-import { readAgentStatuses } from "../data/agents.ts"
+import { findTranscript, readAgentStatuses, readTranscriptTail } from "../data/agents.ts"
+import { ackInbox, formatCatchUp, readInbox, unreadInbox } from "../data/inbox.ts"
+import {
+  cancelCloudRun,
+  followUpCloudAgent,
+  fmtCloudAgent,
+  listCloudRepos,
+  startCloudAgent,
+  type CloudAgent,
+} from "../data/cloud.ts"
 import { run } from "../data/exec.ts"
 import { getMessageBody, sendMail, type EmailMessage } from "../data/outlook.ts"
 import { applyTransition, getEpicChildren, getTransitions, prepTicket } from "../data/jira.ts"
-import { launchWork, runMkpanes, targetSession } from "../data/tmux.ts"
+import { createProject, fmtProject, readBriefRaw, readProjectReports, type Project } from "../data/projects.ts"
+import { launchWork, openProjectWindow, projectSessionName, runMkpanes, targetSession } from "../data/tmux.ts"
 import { addTodo, editTodo, loadTodos, removeTodo, setTodoNotes, sortTodos, toggleTodo } from "../data/todos.ts"
 
 /** Live TUI state pushed into the hub by the App on every change. */
 export interface Snapshot {
   rows: Row[]
-  backlog: TicketInfo[]
+  tickets: TicketInfo[]
   epics: TicketInfo[]
+  projects: Project[]
   todos: Todo[]
   /** null while Outlook is unavailable (m365 not logged in) */
   emails: EmailMessage[] | null
+  cloud: CloudAgent[]
 }
 
 /** What specs get from the hub when building their tools. */
@@ -39,14 +52,18 @@ export interface TabAgentSpec {
   agents?: Record<string, AgentDefinition>
 }
 
+/** How prompts address the human (config.user.name). */
+const USER = config().user.name
+
 const REPLY_STYLE =
   "Your replies render in a small terminal pane: be brief and plain-text (no markdown tables, no headers). " +
   "Use the report_to_central tool for anything the manager should know; don't repeat reports in chat replies."
 
 const EVENT_STYLE =
-  "You will also receive automated '[event digest]' messages listing changes in your area. For each digest: " +
-  "call report_to_central when something deserves the manager's or Daniel's awareness (severity attention if it needs Daniel now); " +
-  "otherwise reply with a single short acknowledgment line and nothing else. Never call tools just to re-verify a digest."
+  "You will also receive '[event digest]' and sometimes '[catch-up]' messages (updates that arrived while you were down). " +
+  "For each: call report_to_central with ONE short line — ticket key + what changed, no quotes of the ticket agent's last message — " +
+  `when central or ${USER} should know (severity attention if ${USER} is needed now). ` +
+  "Otherwise reply with a single short acknowledgment. Never call tools just to re-verify a digest."
 
 // ---------------------------------------------------------------------------
 // formatting helpers (compact, token-frugal)
@@ -94,18 +111,78 @@ const WORKTREE_INSPECTOR: AgentDefinition = {
   model: "inherit",
 }
 
+/** Per-turn cap for transcript output: user turns can carry huge attached-skill preambles. */
+const TRANSCRIPT_TURN_MAX = 1200
+
+/** Durable inbox access for one tab (updates that arrived while the specialist was down). */
+function inboxTools(tab: string): Record<string, SDKCustomTool> {
+  return {
+    read_inbox: {
+      description:
+        "Read durable updates addressed to this tab. Default is unread (arrived while you were down). scope=all shows the last 20.",
+      inputSchema: {
+        type: "object",
+        properties: { scope: { type: "string", description: '"unread" (default) or "all"' } },
+      },
+      execute: (args) => {
+        const all = str(args.scope) === "all"
+        const items = all ? readInbox().filter((r) => r.to === tab).slice(-20) : unreadInbox(tab)
+        return items.length ? formatCatchUp(items) : "inbox empty"
+      },
+    },
+    ack_inbox: {
+      description: "Mark durable inbox items as read through the given id (from read_inbox).",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      execute: (args) => {
+        ackInbox(tab, str(args.id))
+        return `acked through ${str(args.id)}`
+      },
+    },
+  }
+}
+
 function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCustomTool> {
   const rowsFor = () => ctx.snapshot().rows.filter((r) => r.isQa === qa)
   const findWindow = (window: string): Row | undefined => rowsFor().find((r) => r.tmuxWindow === window)
   return {
+    ...inboxTools(qa ? "qa" : "worktrees"),
     get_agent_feed: {
       description: "Latest hook status per worktree directory for the external ticket agents (cursor/claude).",
       inputSchema: { type: "object", properties: {} },
       execute: () => {
         const statuses = [...readAgentStatuses().entries()].filter(([dir]) => dir.includes("_qa_") === qa)
         return statuses.length
-          ? statuses.map(([dir, s]) => `${dir}: ${s.state} (${s.source}, ${s.ts})`).join("\n")
+          ? statuses
+              .map(([dir, s]) => `${dir}: ${s.state} (${s.source}, ${s.ts})${s.summary ? ` — ${s.summary}` : ""}`)
+              .join("\n")
           : "no active ticket agents"
+      },
+    },
+    read_ticket_transcript: {
+      description:
+        "Read the last N user/assistant turns of a ticket agent's conversation transcript (Cursor or Claude) for the " +
+        "worktree behind a tmux window. Richer than the pane: full text of what the agent said and was told, nothing scrolled off.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          window: { type: "string", description: 'tmux window id from list output, e.g. "0:5"' },
+          turns: { type: "number", description: "how many turns to return (default 6, max 20)" },
+        },
+        required: ["window"],
+      },
+      execute: (args) => {
+        const window = str(args.window)
+        const row = findWindow(window)
+        if (!row) return `no ${qa ? "QA" : "dev"} worktree row has tmux window "${window}"`
+        const status = readAgentStatuses().get(row.worktreePath)
+        const path = findTranscript(row.worktreePath, status)
+        if (!path) return `no transcript found for ${row.worktreePath}`
+        const turns = Math.min(20, Math.max(1, Number(args.turns) || 6))
+        const tail = readTranscriptTail(path, turns)
+        if (tail.length === 0) return `transcript ${path} has no text turns yet`
+        return tail
+          .map((t) => `[${t.role}] ${t.text.length > TRANSCRIPT_TURN_MAX ? `${t.text.slice(0, TRANSCRIPT_TURN_MAX)}…` : t.text}`)
+          .join("\n\n")
       },
     },
     read_ticket_pane: {
@@ -145,9 +222,11 @@ function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCusto
 }
 
 const TICKET_AGENT_STYLE =
-  "Tools for the external ticket agents: get_agent_feed (hook statuses), read_ticket_pane(window), " +
-  "message_ticket_agent(window, text) to nudge or answer one. For deep read-only inspection of a single " +
-  "worktree, spawn the worktree-inspector subagent with the worktree path and your question."
+  "Tools for the external ticket agents: get_agent_feed (hook statuses), read_inbox for durable updates that arrived while you were down, " +
+  "read_ticket_transcript(window, turns) for what an agent said and was told, read_ticket_pane(window) for its live screen, " +
+  "message_ticket_agent(window, text) to nudge or answer one. Event digests already include last reply, files edited, git commands, " +
+  "and new commits — read those before reaching for tools. report_to_central must stay one short line. For deep read-only inspection " +
+  "of a single worktree, spawn the worktree-inspector subagent with the worktree path and your question."
 
 // ---------------------------------------------------------------------------
 // central
@@ -156,12 +235,12 @@ const central: TabAgentSpec = {
   id: "central",
   title: "central",
   rolePrompt:
-    "You are the central manager agent of Daniel's development control center TUI. " +
-    "Specialist agents run one per tab (worktrees, qa, backlog, projects, todos); external ticket agents work in tmux windows. " +
+    `You are the central manager agent of ${USER}'s development control center TUI. ` +
+    "Specialist agents run one per tab (worktrees, qa, tickets, epics, projects, todos, email, cloud); external ticket agents and project agents work in tmux windows. " +
     "Your tools: list_agents, get_status(agent), instruct(agent, instruction). " +
-    "You receive batched '[reports]' messages from specialists — treat them as information; only instruct an agent or reply at length when action or a decision is actually needed, otherwise acknowledge in one short line. " +
+    "You receive batched '[reports]' messages (each line is timestamped and one sentence) from specialists — treat them as information; only instruct an agent or reply at length when action or a decision is actually needed, otherwise acknowledge in one short line. " +
     "Never instruct agents in a loop: after instructing, wait for the resulting report. " +
-    "You also have your own shell, skills (jira-ticket, start-ticket, …) and Atlassian MCP access for direct requests from Daniel. " +
+    `You also have your own shell, skills (jira-ticket, start-ticket, …) and Atlassian MCP access for direct requests from ${USER}. ` +
     REPLY_STYLE,
   makeTools(ctx) {
     return {
@@ -209,8 +288,8 @@ const worktrees: TabAgentSpec = {
   rolePrompt:
     "You are the worktrees specialist of a development control center, and the field manager of the external ticket agents (cursor-cli/claude) working in tmux windows — one per worktree. " +
     "Scope: local git worktrees, their branches, MRs, CI, and the ticket agents working in them. " +
-    "You get event digests about agent activity and MR/CI changes; report anything needing Daniel's attention to central (severity: info < warn < attention). " +
-    "Destructive operations (removing worktrees, merging) are done by Daniel via TUI keys — recommend, don't attempt. " +
+    `You get event digests about agent activity and MR/CI changes; report anything needing ${USER}'s attention to central (severity: info < warn < attention). ` +
+    `Destructive operations (removing worktrees, merging) are done by ${USER} via TUI keys — recommend, don't attempt. ` +
     TICKET_AGENT_STYLE +
     " " +
     REPLY_STYLE +
@@ -253,8 +332,8 @@ const qa: TabAgentSpec = {
   id: "qa",
   title: "qa",
   rolePrompt:
-    "You are the QA specialist of a development control center. Scope: QA worktrees (directories named <repo>_qa_<branch>) where Daniel tests other people's tickets, and the QA ticket agents in their tmux windows. " +
-    "Report QA sessions needing attention to central. Cleanup is done by Daniel via TUI keys — recommend, don't attempt. " +
+    `You are the QA specialist of a development control center. Scope: QA worktrees (directories named <repo>_qa_<branch>) where ${USER} tests other people's tickets, and the QA ticket agents in their tmux windows. ` +
+    `Report QA sessions needing attention to central. Cleanup is done by ${USER} via TUI keys — recommend, don't attempt. ` +
     TICKET_AGENT_STYLE +
     " " +
     REPLY_STYLE +
@@ -293,25 +372,26 @@ const qa: TabAgentSpec = {
   },
 }
 
-const backlog: TabAgentSpec = {
-  id: "backlog",
-  title: "backlog",
+const tickets: TabAgentSpec = {
+  id: "tickets",
+  title: "tickets",
   rolePrompt:
-    "You are the backlog specialist of a development control center. Scope: Daniel's assigned-but-not-in-progress Jira tickets. " +
+    `You are the tickets specialist of a development control center. Scope: ${USER}'s assigned Jira tickets that are not Done/Closed (epics live on the epics tab). ` +
+    "The list is ordered closest-to-shipped first (Ready For Deployment / In Test / code review, then In Progress, then Blocked, then To Do, with Backlog last). " +
     "You can transition tickets, prep them (In Progress + current sprint), and start work on them via tmux. " +
     "You also create Jira tickets: when asked to create one (directly or via a seeded prompt), follow the jira-ticket skill " +
-    "and ask Daniel the questions it needs one at a time in this chat. " +
+    `and ask ${USER} the questions it needs one at a time in this chat. ` +
     REPLY_STYLE +
     " " +
     EVENT_STYLE,
   makeTools(ctx) {
     return {
-      list_backlog: {
-        description: "List backlog tickets (assigned, not in progress).",
+      list_tickets: {
+        description: `List ${USER}'s open assigned tickets (no epics), closest to shipped first.`,
         inputSchema: { type: "object", properties: {} },
         execute: () => {
-          const tickets = ctx.snapshot().backlog
-          return tickets.length ? tickets.map(fmtTicket).join("\n") : "backlog empty"
+          const list = ctx.snapshot().tickets
+          return list.length ? list.map(fmtTicket).join("\n") : "no open tickets"
         },
       },
       transition_ticket: {
@@ -354,21 +434,21 @@ const backlog: TabAgentSpec = {
   },
 }
 
-const projects: TabAgentSpec = {
-  id: "projects",
-  title: "projects",
+const epicsSpec: TabAgentSpec = {
+  id: "epics",
+  title: "epics",
   rolePrompt:
-    "You are the projects specialist of a development control center. Scope: Daniel's Jira epics and their child tickets. " +
+    `You are the epics specialist of a development control center. Scope: ${USER}'s Jira epics and their child tickets. ` +
     "You can list epics, drill into children, transition and prep tickets. " +
     "You also create Jira tickets: when asked to create one (directly or via a seeded prompt), follow the jira-ticket skill, " +
-    "ask Daniel the questions it needs one at a time in this chat, and link the ticket to the epic when one is given. " +
+    `ask ${USER} the questions it needs one at a time in this chat, and link the ticket to the epic when one is given. ` +
     REPLY_STYLE +
     " " +
     EVENT_STYLE,
   makeTools(ctx) {
     return {
       list_epics: {
-        description: "List Daniel's open epics.",
+        description: `List ${USER}'s open epics.`,
         inputSchema: { type: "object", properties: {} },
         execute: () => {
           const epics = ctx.snapshot().epics
@@ -410,11 +490,174 @@ const projects: TabAgentSpec = {
   },
 }
 
+// ---------------------------------------------------------------------------
+// projects (~/projects directories + their tmux project agents)
+
+const PROJECT_INSPECTOR: AgentDefinition = {
+  description:
+    "Inspect one ~/projects directory in depth: PROJECT.md, file layout, recent changes. " +
+    "Give it the project path and what to find out.",
+  prompt:
+    "You are a read-only project inspector. You get a project directory and a question. " +
+    "Read PROJECT.md first, then whatever files answer the question (ls, cat, git log if it is a repo). " +
+    "Never modify anything. Reply with a concise plain-text summary.",
+  model: "inherit",
+}
+
+const projectsSpec: TabAgentSpec = {
+  id: "projects",
+  title: "projects",
+  rolePrompt:
+    "You are the projects specialist of a development control center, and the field manager of the project agents (cursor-cli) " +
+    "working in tmux windows — one per directory under ~/projects (the control center itself is excluded). " +
+    "Each project is tracked by a PROJECT.md brief: Goal, Current state, Next steps (checkboxes), dated Log. " +
+    "Reporting chain: task-tab workers → (cc-report project:<name>) → the project's central agent → (cc-report projects) → you → (report_to_central) → central. " +
+    "Central-agent reports arrive as event digests and inbox items; read_project_reports shows the worker-level reports underneath when a digest is unclear. " +
+    "You can list projects, read a brief, read a central agent's pane or transcript, message it, list its task tabs, and open/resume a project (start-project skill). " +
+    `Creating directories is done by ${USER} via the TUI (n) or by you with create_project only when he asks. ` +
+    `Always pass upward: every digest that changes a project's state, finishes a task, or needs ${USER} gets one report_to_central line (severity: info < warn < attention). ` +
+    "For deep read-only inspection of one project, spawn the project-inspector subagent with the path and your question. " +
+    REPLY_STYLE +
+    " " +
+    EVENT_STYLE,
+  agents: { "project-inspector": PROJECT_INSPECTOR },
+  makeTools(ctx) {
+    const find = (name: string): Project | undefined => ctx.snapshot().projects.find((p) => p.name === name)
+    return {
+      ...inboxTools("projects"),
+      list_projects: {
+        description: "List ~/projects directories with brief status, next-step count, tmux window, and agent state.",
+        inputSchema: { type: "object", properties: {} },
+        execute: () => {
+          const projects = ctx.snapshot().projects
+          return projects.length ? projects.map(fmtProject).join("\n") : "no projects"
+        },
+      },
+      read_project_brief: {
+        description: "Read a project's PROJECT.md in full.",
+        inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+        execute: (args) => {
+          const project = find(str(args.name))
+          if (!project) return `no project named "${str(args.name)}"`
+          return readBriefRaw(project.path) ?? `${project.name} has no PROJECT.md yet`
+        },
+      },
+      read_project_transcript: {
+        description: "Last N user/assistant turns of the project agent's transcript (Cursor or Claude).",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" }, turns: { type: "number", description: "default 6, max 20" } },
+          required: ["name"],
+        },
+        execute: (args) => {
+          const project = find(str(args.name))
+          if (!project) return `no project named "${str(args.name)}"`
+          const status = readAgentStatuses().get(project.path)
+          const path = findTranscript(project.path, status)
+          if (!path) return `no transcript found for ${project.path}`
+          const turns = Math.min(20, Math.max(1, Number(args.turns) || 6))
+          const tail = readTranscriptTail(path, turns)
+          if (tail.length === 0) return `transcript ${path} has no text turns yet`
+          return tail
+            .map((t) => `[${t.role}] ${t.text.length > TRANSCRIPT_TURN_MAX ? `${t.text.slice(0, TRANSCRIPT_TURN_MAX)}…` : t.text}`)
+            .join("\n\n")
+        },
+      },
+      read_project_pane: {
+        description: "Capture the visible tmux pane of a project's window.",
+        inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+        execute: async (args) => {
+          const project = find(str(args.name))
+          if (!project) return `no project named "${str(args.name)}"`
+          if (!project.tmuxWindow) return `${project.name} has no tmux window`
+          const res = await run("tmux", ["capture-pane", "-t", project.tmuxWindow, "-p"])
+          if (!res.ok) return `capture failed: ${res.stderr.trim()}`
+          const lines = res.stdout.replace(/\s+$/, "").split("\n")
+          return lines.slice(-60).join("\n") || "(pane is empty)"
+        },
+      },
+      message_project_agent: {
+        description: "Type a message into a project window's active pane and press enter.",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" }, text: { type: "string" } },
+          required: ["name", "text"],
+        },
+        execute: async (args) => {
+          const project = find(str(args.name))
+          if (!project) return `no project named "${str(args.name)}"`
+          if (!project.tmuxWindow) return `${project.name} has no tmux window — open_project first`
+          const text = str(args.text)
+          const typed = await run("tmux", ["send-keys", "-t", project.tmuxWindow, "-l", text])
+          if (!typed.ok) return `send failed: ${typed.stderr.trim()}`
+          await run("tmux", ["send-keys", "-t", project.tmuxWindow, "Enter"])
+          return `sent to ${project.name}: ${text}`
+        },
+      },
+      open_project: {
+        description:
+          "Open or resume a project in its own tmux session + terminal window (starts the project agent on first open).",
+        inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+        execute: async (args) => {
+          const project = find(str(args.name))
+          if (!project) return `no project named "${str(args.name)}"`
+          const result = await openProjectWindow(project)
+          ctx.appChanged("refresh")
+          return result.message
+        },
+      },
+      read_project_reports: {
+        description:
+          "Last N worker reports sent to a project's central agent (cc-report project:<name> → .cc/inbox.jsonl). " +
+          "Shows what the task tabs told the central agent, even if it has not passed them upward yet.",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" }, count: { type: "number", description: "default 20, max 100" } },
+          required: ["name"],
+        },
+        execute: (args) => {
+          const project = find(str(args.name))
+          if (!project) return `no project named "${str(args.name)}"`
+          const reports = readProjectReports(project.path, Math.min(100, Math.max(1, Number(args.count) || 20)))
+          return reports.length ? reports.join("\n") : `${project.name} has no worker reports yet`
+        },
+      },
+      list_project_tasks: {
+        description: "Task tabs (tmux windows other than central) currently open in a project's session.",
+        inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+        execute: async (args) => {
+          const project = find(str(args.name))
+          if (!project) return `no project named "${str(args.name)}"`
+          const res = await run("tmux", ["list-windows", "-t", `=${projectSessionName(project.name)}`, "-F", "#{window_index} #{window_name}"])
+          if (!res.ok) return `${project.name} has no running session`
+          const tabs = res.stdout.split("\n").filter((l) => l.trim() && !l.endsWith(" central"))
+          return tabs.length ? tabs.join("\n") : `${project.name}: no task tabs open`
+        },
+      },
+      create_project: {
+        description: `Create a new ~/projects directory with a PROJECT.md template and open its agent window. Only when ${USER} asked.`,
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" }, goal: { type: "string", description: "optional one-paragraph goal" } },
+          required: ["name"],
+        },
+        execute: async (args) => {
+          const created = createProject(str(args.name), str(args.goal))
+          if (!created.ok || !created.project) return created.message
+          const result = await openProjectWindow(created.project, "new")
+          ctx.appChanged("refresh")
+          return `${created.message}; ${result.message}`
+        },
+      },
+    }
+  },
+}
+
 const todosSpec: TabAgentSpec = {
   id: "todos",
   title: "todos",
   rolePrompt:
-    "You are the todos specialist of a development control center. Scope: Daniel's lightweight local todo list (no tickets, no branches). " +
+    `You are the todos specialist of a development control center. Scope: ${USER}'s lightweight local todo list (no tickets, no branches). ` +
     "Keep it tidy: add, edit, complete, and remove items on request. " +
     "Each todo can carry a notes field with extra context — read the notes before acting on a todo, " +
     "and use set_todo_notes to record useful context (links, decisions, next steps) as you learn it. " +
@@ -454,7 +697,7 @@ const todosSpec: TabAgentSpec = {
           }),
       },
       set_todo_notes: {
-        description: "Set (or clear, with empty text) a todo's notes — extra context shown to Daniel in the TUI.",
+        description: `Set (or clear, with empty text) a todo's notes — extra context shown to ${USER} in the TUI.`,
         inputSchema: {
           type: "object",
           properties: { id: { type: "string" }, notes: { type: "string" } },
@@ -489,9 +732,9 @@ const email: TabAgentSpec = {
   id: "email",
   title: "email",
   rolePrompt:
-    "You are the email specialist of a development control center. Scope: Daniel's Outlook work inbox (recent messages). " +
+    `You are the email specialist of a development control center. Scope: ${USER}'s Outlook work inbox (recent messages). ` +
     "You can list the inbox, fetch full message bodies, and send mail. " +
-    "Sending is serious: only use send_mail when Daniel explicitly asked you to send something, and always show him the " +
+    `Sending is serious: only use send_mail when ${USER} explicitly asked you to send something, and always show him the ` +
     "exact to/subject/body in this chat and get his confirmation first. Never send on your own initiative. " +
     "Report genuinely important-looking unread mail to central (severity attention only for truly urgent items). " +
     REPLY_STYLE +
@@ -522,7 +765,7 @@ const email: TabAgentSpec = {
       },
       send_mail: {
         description:
-          "Send an email from Daniel's account. Only after Daniel explicitly approved the exact to/subject/body in chat.",
+          `Send an email from ${USER}'s account. Only after ${USER} explicitly approved the exact to/subject/body in chat.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -538,5 +781,83 @@ const email: TabAgentSpec = {
   },
 }
 
+const cloud: TabAgentSpec = {
+  id: "cloud",
+  title: "cloud",
+  rolePrompt:
+    `You are the cloud specialist of a development control center. Scope: ${USER}'s Cursor Cloud agents (bc- ids) that run on Cursor VMs against his git remotes. ` +
+    "You can list them, start a new one on a mkpanes repo alias (lists, core, …), send a follow-up, or cancel a running run. " +
+    `Starting a cloud agent is a real remote job that costs API usage — only start one when ${USER} asked. Default is no PR. ` +
+    "Report failed or finished runs that need attention to central. " +
+    REPLY_STYLE +
+    " " +
+    EVENT_STYLE,
+  makeTools(ctx) {
+    return {
+      list_cloud_agents: {
+        description: `List ${USER}'s Cursor Cloud agents (status, repo, branch, summary).`,
+        inputSchema: { type: "object", properties: {} },
+        execute: () => {
+          const agents = ctx.snapshot().cloud
+          return agents.length ? agents.map(fmtCloudAgent).join("\n") : "no cloud agents"
+        },
+      },
+      list_cloud_repos: {
+        description: "List mkpanes repo aliases that can be used to start a cloud agent.",
+        inputSchema: { type: "object", properties: {} },
+        execute: async () => {
+          const repos = await listCloudRepos()
+          return repos.length
+            ? repos.map((r) => `${r.alias} → ${r.url} (ref ${r.startingRef})`).join("\n")
+            : "no mkpanes repos found"
+        },
+      },
+      start_cloud_agent: {
+        description: "Start a Cursor Cloud agent on a mkpanes repo alias with a prompt. Does not open a PR.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            repo: { type: "string", description: "mkpanes alias, e.g. lists" },
+            prompt: { type: "string" },
+            branch: { type: "string", description: "optional starting ref; defaults to the repo's origin HEAD" },
+          },
+          required: ["repo", "prompt"],
+        },
+        execute: async (args) => {
+          const result = await startCloudAgent(str(args.repo), str(args.prompt), str(args.branch) || undefined)
+          if (result.ok) ctx.appChanged("refresh")
+          return result.message
+        },
+      },
+      follow_up_cloud: {
+        description: "Send a follow-up prompt to an existing cloud agent (bc- id from list_cloud_agents).",
+        inputSchema: {
+          type: "object",
+          properties: { agent_id: { type: "string" }, prompt: { type: "string" } },
+          required: ["agent_id", "prompt"],
+        },
+        execute: async (args) => {
+          const result = await followUpCloudAgent(str(args.agent_id), str(args.prompt))
+          if (result.ok) ctx.appChanged("refresh")
+          return result.message
+        },
+      },
+      cancel_cloud_run: {
+        description: "Cancel the latest running run of a cloud agent (bc- id).",
+        inputSchema: {
+          type: "object",
+          properties: { agent_id: { type: "string" } },
+          required: ["agent_id"],
+        },
+        execute: async (args) => {
+          const result = await cancelCloudRun(str(args.agent_id))
+          if (result.ok) ctx.appChanged("refresh")
+          return result.message
+        },
+      },
+    }
+  },
+}
+
 /** Tab agents in tab order. Adding a new pane = adding a spec here. */
-export const TAB_AGENT_SPECS: TabAgentSpec[] = [central, worktrees, qa, backlog, projects, todosSpec, email]
+export const TAB_AGENT_SPECS: TabAgentSpec[] = [central, worktrees, qa, tickets, epicsSpec, projectsSpec, todosSpec, email, cloud]

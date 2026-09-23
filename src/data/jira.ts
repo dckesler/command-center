@@ -1,7 +1,9 @@
 import type { TicketInfo, TransitionOption } from "../types.ts"
 import { run } from "./exec.ts"
+import { config } from "../config.ts"
 
-const JIRA_BASE = "https://smartsensebydigi.atlassian.net"
+/** Jira site (config.jira.baseUrl / JIRA_BASE_URL). */
+const JIRA_BASE = config().jira.baseUrl
 
 /**
  * Transitions use the Jira REST API directly (acli can execute a transition by
@@ -12,7 +14,7 @@ function restAuth(): { base: string; headers: Record<string, string> } | null {
   const email = process.env.JIRA_EMAIL
   const token = process.env.JIRA_API_TOKEN
   if (!email || !token) return null
-  const base = process.env.JIRA_BASE_URL ?? JIRA_BASE
+  const base = JIRA_BASE
   return {
     base,
     headers: {
@@ -76,13 +78,60 @@ async function searchRest(jql: string, maxResults = 100): Promise<TicketInfo[] |
 }
 
 /**
- * Assigned-but-not-active tickets. Uses REST (not acli) because acli's search
- * doesn't allow requesting the `updated` field.
+ * Assigned tickets that aren't Done/Closed, excluding epics (those live on
+ * the projects tab). Sorted closest-to-shipped first; Backlog last. Uses REST
+ * (not acli) because acli's search doesn't allow requesting the `updated` field.
  */
-export function getBacklog(): Promise<TicketInfo[] | null> {
-  return searchRest(
-    'assignee = currentUser() AND statusCategory != Done AND status != "In Progress" ORDER BY updated DESC',
+export async function getAssignedTickets(): Promise<TicketInfo[] | null> {
+  const tickets = await searchRest(
+    "assignee = currentUser() AND statusCategory != Done AND issuetype != Epic ORDER BY updated DESC",
   )
+  return tickets ? sortAssignedTickets(tickets) : null
+}
+
+/**
+ * Pipeline order: closer to shipped sorts first. Unknown statuses sit just
+ * above Backlog. Ties break on most recently updated.
+ */
+const STATUS_RANK: Record<string, number> = {
+  "ready for deployment": 0,
+  "waiting for release": 0,
+  "in test": 1,
+  "in validation": 1,
+  "validation": 1,
+  "verifying": 1,
+  "planning qa": 1,
+  "in code review": 2,
+  "in review": 2,
+  "awaiting review": 2,
+  "review": 2,
+  "remediating": 3,
+  "in progress": 4,
+  "implementation": 4,
+  "assembling": 4,
+  "shaping": 4,
+  "blocked": 5,
+  "needs attention": 5,
+  "awaiting direction": 5,
+  "awaiting decision": 5,
+  "selected for development": 6,
+  "to do": 7,
+  "refine": 7,
+  "researching": 7,
+  backlog: 9,
+}
+
+const UNKNOWN_STATUS_RANK = 8
+
+export function sortAssignedTickets(tickets: TicketInfo[]): TicketInfo[] {
+  return [...tickets].sort((a, b) => {
+    const rankA = STATUS_RANK[a.status.toLowerCase()] ?? UNKNOWN_STATUS_RANK
+    const rankB = STATUS_RANK[b.status.toLowerCase()] ?? UNKNOWN_STATUS_RANK
+    if (rankA !== rankB) return rankA - rankB
+    const updatedA = a.updated ? Date.parse(a.updated) : 0
+    const updatedB = b.updated ? Date.parse(b.updated) : 0
+    return updatedB - updatedA
+  })
 }
 
 /** Open epics assigned to the user, for the projects view. */
@@ -105,7 +154,7 @@ export async function getEpicChildren(epicKey: string): Promise<TicketInfo[] | n
 }
 
 /** Jira sprint field (same constant the start-ticket skill uses). */
-const SPRINT_FIELD = "customfield_10007"
+const SPRINT_FIELD = config().jira.sprintField
 
 interface SprintValue {
   id: number

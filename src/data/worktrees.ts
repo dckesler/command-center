@@ -26,14 +26,15 @@ export async function listWorktrees(repo: RepoInfo): Promise<Worktree[]> {
 export async function getGitStatus(worktreePath: string): Promise<GitStatus> {
   const [statusRes, ageRes, upstreamRes] = await Promise.all([
     run("git", ["-C", worktreePath, "status", "--porcelain"]),
-    run("git", ["-C", worktreePath, "log", "-1", "--format=%cr"]),
+    run("git", ["-C", worktreePath, "log", "-1", "--format=%H %cr"]),
     run("git", ["-C", worktreePath, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"]),
   ])
 
   const dirtyCount = statusRes.ok
     ? statusRes.stdout.split("\n").filter((l) => l.trim()).length
     : 0
-  const lastCommitRelative = ageRes.ok ? ageRes.stdout.trim() : ""
+  const [head = "", ...ageParts] = ageRes.ok ? ageRes.stdout.trim().split(" ") : []
+  const lastCommitRelative = ageParts.join(" ")
 
   let ahead: number | null = null
   let behind: number | null = null
@@ -60,7 +61,7 @@ export async function getGitStatus(worktreePath: string): Promise<GitStatus> {
     }
   }
 
-  return { dirtyCount, ahead, behind, hasUpstream, lastCommitRelative }
+  return { dirtyCount, ahead, behind, hasUpstream, lastCommitRelative, head }
 }
 
 export interface ActionResult {

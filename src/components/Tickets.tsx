@@ -1,4 +1,4 @@
-import type { Row, TicketInfo } from "../types.ts"
+import type { TicketInfo } from "../types.ts"
 
 const C = {
   dim: "#6b7280",
@@ -48,7 +48,7 @@ const PRIORITY_COLORS: Record<string, string> = {
   Lowest: "#6b7280",
 }
 
-export function Backlog({
+export function Tickets({
   tickets,
   selected,
   worktreeKeys,
@@ -76,7 +76,7 @@ export function Backlog({
   if (loading && tickets.length === 0) {
     return (
       <box>
-        <text fg={C.dim}>loading backlog…</text>
+        <text fg={C.dim}>loading tickets…</text>
       </box>
     )
   }
@@ -113,7 +113,7 @@ export function Backlog({
         )
       })}
       {tickets.length === 0 && !loading && (
-        <text fg={C.dim}>backlog is empty — nothing assigned that isn't already in progress</text>
+        <text fg={C.dim}>no open tickets assigned to you</text>
       )}
     </box>
   )

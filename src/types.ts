@@ -12,6 +12,8 @@ export interface GitStatus {
   /** true when ahead/behind is vs the branch's own upstream, false when vs origin default */
   hasUpstream: boolean
   lastCommitRelative: string
+  /** full HEAD sha; "" if unknown */
+  head: string
 }
 
 export interface TicketInfo {
@@ -22,7 +24,7 @@ export interface TicketInfo {
   type: string
   url: string
   priority?: string
-  /** ISO timestamp of last update (backlog view only) */
+  /** ISO timestamp of last update (tickets view) */
   updated?: string
   /** Assignee display name (epic children view) */
   assignee?: string

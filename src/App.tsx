@@ -1,11 +1,14 @@
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Backlog } from "./components/Backlog.tsx"
+import { Cloud } from "./components/Cloud.tsx"
+import { CloudPrompt } from "./components/CloudPrompt.tsx"
+import { Tickets } from "./components/Tickets.tsx"
 import { Chat } from "./components/Chat.tsx"
 import { Dashboard } from "./components/Dashboard.tsx"
 import { DetailPanel } from "./components/DetailPanel.tsx"
 import { EpicDetail } from "./components/EpicDetail.tsx"
 import { Epics } from "./components/Epics.tsx"
+import { Projects } from "./components/Projects.tsx"
 import { MkpanesPrompt } from "./components/MkpanesPrompt.tsx"
 import { Modal, type ModalState } from "./components/Modal.tsx"
 import { QaTicketPrompt } from "./components/QaTicketPrompt.tsx"
@@ -13,7 +16,6 @@ import { Todos } from "./components/Todos.tsx"
 import { addTodo, editTodo, loadTodos, removeTodo, setTodoNotes, sortTodos, toggleTodo, type Todo } from "./data/todos.ts"
 import {
   agentBusy,
-  disposeAll,
   markRead,
   newConversation,
   sendUser,
@@ -23,11 +25,26 @@ import {
 import { getStore, subscribeAgents } from "./agents/stores.ts"
 import { Email } from "./components/Email.tsx"
 import { getInbox, type EmailMessage } from "./data/outlook.ts"
-import { ingestEmails, ingestRows, ingestTickets, startEventWatchers } from "./agents/events.ts"
+import {
+  ingestCloud,
+  ingestEmails,
+  ingestProjects,
+  ingestRows,
+  ingestTickets,
+  startEventWatchers,
+} from "./agents/events.ts"
+import { createProject, listProjects, type Project } from "./data/projects.ts"
+import {
+  cancelCloudRun,
+  followUpCloudAgent,
+  listCloudAgents,
+  startCloudAgent,
+  type CloudAgent,
+} from "./data/cloud.ts"
 import { collect } from "./data/collect.ts"
 import { run } from "./data/exec.ts"
 import { getMrExtras, mergeMr } from "./data/gitlab.ts"
-import { applyTransition, getBacklog, getEpicChildren, getEpics, getTransitions, prepTicket } from "./data/jira.ts"
+import { applyTransition, getAssignedTickets, getEpicChildren, getEpics, getTransitions, prepTicket } from "./data/jira.ts"
 import { parseRepoMap } from "./data/repos.ts"
 import {
   createTicketPrompt,
@@ -35,6 +52,7 @@ import {
   killWindow,
   launchWork,
   openFinalizeEpic,
+  openProjectWindow,
   runMkpanes,
   targetSession,
 } from "./data/tmux.ts"
@@ -43,18 +61,20 @@ import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
 
-type View = "central" | "worktrees" | "qa" | "backlog" | "projects" | "todos" | "email"
+type View = "central" | "worktrees" | "qa" | "tickets" | "epics" | "projects" | "todos" | "email" | "cloud"
 
-const VIEW_ORDER: View[] = ["central", "worktrees", "qa", "backlog", "projects", "todos", "email"]
+const VIEW_ORDER: View[] = ["central", "worktrees", "qa", "tickets", "epics", "projects", "todos", "email", "cloud"]
 
 const VIEW_BY_KEY: Record<string, View> = {
   "1": "central",
   "2": "worktrees",
   "3": "qa",
-  "4": "backlog",
-  "5": "projects",
-  "6": "todos",
-  "7": "email",
+  "4": "tickets",
+  "5": "epics",
+  "6": "projects",
+  "7": "todos",
+  "8": "email",
+  "9": "cloud",
 }
 
 /** In Progress first, then To Do, then Done — most actionable at the top. */
@@ -94,14 +114,19 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
   const [view, setView] = useState<View>("central")
-  const [backlog, setBacklog] = useState<TicketInfo[]>([])
-  const [backlogLoading, setBacklogLoading] = useState(true)
-  const [selectedBacklog, setSelectedBacklog] = useState(0)
+  const [tickets, setTickets] = useState<TicketInfo[]>([])
+  const [ticketsLoading, setTicketsLoading] = useState(true)
+  const [selectedTicket, setSelectedTicket] = useState(0)
   const [epics, setEpics] = useState<TicketInfo[]>([])
   const [epicsLoading, setEpicsLoading] = useState(true)
   const [selectedEpic, setSelectedEpic] = useState(0)
   const [epicDetail, setEpicDetail] = useState<{ epic: TicketInfo; tickets: TicketInfo[] | null } | null>(null)
   const [selectedEpicTicket, setSelectedEpicTicket] = useState(0)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [projectsLoading, setProjectsLoading] = useState(true)
+  const [selectedProject, setSelectedProject] = useState(0)
+  /** new-project name prompt */
+  const [projectPrompt, setProjectPrompt] = useState(false)
   const [todos, setTodos] = useState<Todo[]>(() => sortTodos(loadTodos()))
   const [selectedTodo, setSelectedTodo] = useState(0)
   const [showCompletedTodos, setShowCompletedTodos] = useState(false)
@@ -111,6 +136,13 @@ export function App() {
   const [emails, setEmails] = useState<EmailMessage[] | null>(null)
   const [emailsLoading, setEmailsLoading] = useState(true)
   const [selectedEmail, setSelectedEmail] = useState(0)
+  const [cloudAgents, setCloudAgents] = useState<CloudAgent[]>([])
+  const [cloudLoading, setCloudLoading] = useState(true)
+  const [cloudError, setCloudError] = useState<string | null>(null)
+  const [selectedCloud, setSelectedCloud] = useState(0)
+  const [cloudPrompt, setCloudPrompt] = useState<
+    { kind: "start"; repo: string } | { kind: "followup"; agentId: string; name: string } | null
+  >(null)
   const [mkpanesPrompt, setMkpanesPrompt] = useState(false)
   /** set when the QA flow has a repo picked and is waiting for the ticket key */
   const [qaPrompt, setQaPrompt] = useState<{ repo: string } | null>(null)
@@ -141,20 +173,36 @@ export function App() {
     if (refreshing.current) return
     refreshing.current = true
     setLoad(INITIAL_LOAD)
-    setBacklogLoading(true)
-    getBacklog().then((tickets) => {
-      if (tickets) setBacklog(tickets)
-      setBacklogLoading(false)
+    setTicketsLoading(true)
+    getAssignedTickets().then((result) => {
+      if (result) setTickets(result)
+      setTicketsLoading(false)
     })
     setEpicsLoading(true)
     getEpics().then((result) => {
       if (result) setEpics(result)
       setEpicsLoading(false)
     })
+    setProjectsLoading(true)
+    listProjects().then((result) => {
+      setProjects(result)
+      setProjectsLoading(false)
+    })
     setEmailsLoading(true)
     getInbox().then((result) => {
       setEmails(result)
       setEmailsLoading(false)
+    })
+    setCloudLoading(true)
+    listCloudAgents().then((result) => {
+      if (result.ok) {
+        setCloudAgents(result.agents)
+        setCloudError(null)
+      } else {
+        setCloudError(result.message ?? "cloud list failed")
+        if (result.agents.length) setCloudAgents(result.agents)
+      }
+      setCloudLoading(false)
     })
     try {
       await collect((newRows, newLoad) => {
@@ -173,8 +221,8 @@ export function App() {
 
   // Keep the hub's snapshot in sync so agent tools read live TUI state.
   useEffect(() => {
-    updateSnapshot({ rows, backlog, epics, todos, emails })
-  }, [rows, backlog, epics, todos, emails])
+    updateSnapshot({ rows, tickets, epics, projects, todos, emails, cloud: cloudAgents })
+  }, [rows, tickets, epics, projects, todos, emails, cloudAgents])
 
   // Autonomous events: hook-feed watcher plus refresh diffs (only complete
   // loads are diffed, so progressive refresh states don't fake changes).
@@ -185,14 +233,20 @@ export function App() {
     if (load.git && load.jira && load.gitlab && load.tmux) ingestRows(rows)
   }, [rows, load])
   useEffect(() => {
-    if (!backlogLoading) ingestTickets("backlog", backlog)
-  }, [backlog, backlogLoading])
+    if (!ticketsLoading) ingestTickets("tickets", tickets)
+  }, [tickets, ticketsLoading])
   useEffect(() => {
-    if (!epicsLoading) ingestTickets("projects", epics)
+    if (!epicsLoading) ingestTickets("epics", epics)
   }, [epics, epicsLoading])
+  useEffect(() => {
+    if (!projectsLoading) ingestProjects(projects)
+  }, [projects, projectsLoading])
   useEffect(() => {
     if (!emailsLoading && emails !== null) ingestEmails(emails)
   }, [emails, emailsLoading])
+  useEffect(() => {
+    if (!cloudLoading) ingestCloud(cloudAgents)
+  }, [cloudAgents, cloudLoading])
 
   // Agent-driven data changes flow back into the TUI.
   useEffect(() => {
@@ -284,7 +338,7 @@ export function App() {
     [finishAction],
   )
 
-  const startBacklogTicket = useCallback(
+  const startAssignedTicket = useCallback(
     (ticket: TicketInfo) => {
       const repos = parseRepoMap()
       setModal({
@@ -502,9 +556,8 @@ export function App() {
     [finishAction],
   )
 
-  /** Ticket creation runs in the owning tab's agent drawer. */
-  const openTicketChat = useCallback((tab: "projects" | "backlog", epic?: TicketInfo) => {
-    setEpicDetail(null)
+  /** Ticket creation runs in the owning tab's agent drawer (an open epic stays open). */
+  const openTicketChat = useCallback((tab: "epics" | "tickets", epic?: TicketInfo) => {
     setView(tab)
     setDrawerOpen(true)
     setDrawerFocused(true)
@@ -544,6 +597,34 @@ export function App() {
     })
   }, [])
 
+  /**
+   * Open a project in its own tmux session + terminal window: starts the
+   * project agent on first open (creating PROJECT.md if missing), otherwise
+   * re-attaches the existing session.
+   */
+  const openProject = useCallback(
+    (project: Project) => {
+      setBusy(`${project.tmuxWindow ? "opening" : project.brief ? "resuming" : "starting"} ${project.name}…`)
+      openProjectWindow(project).then(finishAction)
+    },
+    [finishAction],
+  )
+
+  const submitNewProject = useCallback(
+    (name: string) => {
+      setProjectPrompt(false)
+      const created = createProject(name)
+      if (!created.ok || !created.project) {
+        setMessage({ text: created.message, ok: false })
+        return
+      }
+      const project = created.project
+      setBusy(`starting ${project.name}…`)
+      openProjectWindow(project, "new").then(finishAction)
+    },
+    [finishAction],
+  )
+
   const submitMkpanes = useCallback(
     (args: string[]) => {
       setMkpanesPrompt(false)
@@ -569,6 +650,53 @@ export function App() {
     })
   }, [])
 
+  const startCloud = useCallback(() => {
+    const repos = parseRepoMap()
+    setModal({
+      title: "New cloud agent — pick a repo",
+      options: [...repos.map((r) => ({ label: r.alias })), { label: "Cancel" }],
+      selected: 0,
+      onPick: (i) => {
+        setModal(null)
+        if (i >= repos.length) return
+        setCloudPrompt({ kind: "start", repo: repos[i].alias })
+      },
+    })
+  }, [])
+
+  const submitCloudPrompt = useCallback(
+    (text: string) => {
+      if (!cloudPrompt) return
+      const pending = cloudPrompt
+      setCloudPrompt(null)
+      if (pending.kind === "start") {
+        setBusy(`starting cloud agent on ${pending.repo}…`)
+        startCloudAgent(pending.repo, text).then(finishAction)
+      } else {
+        setBusy(`sending follow-up to ${pending.name}…`)
+        followUpCloudAgent(pending.agentId, text).then(finishAction)
+      }
+    },
+    [cloudPrompt, finishAction],
+  )
+
+  const cancelSelectedCloud = useCallback(
+    (agent: CloudAgent) => {
+      setModal({
+        title: `Cancel running work on ${agent.name}?`,
+        options: [{ label: "Cancel run", danger: true }, { label: "Keep running" }],
+        selected: 1,
+        onPick: (i) => {
+          setModal(null)
+          if (i !== 0) return
+          setBusy(`cancelling ${agent.name}…`)
+          cancelCloudRun(agent.id).then(finishAction)
+        },
+      })
+    },
+    [finishAction],
+  )
+
   const submitQaTicket = useCallback(
     (ticket: string) => {
       if (!qaPrompt) return
@@ -590,19 +718,28 @@ export function App() {
   const workRows = rows.filter((r) => !r.isQa)
   const qaRows = rows.filter((r) => r.isQa)
 
+  // An open epic is a view within the epics tab, not an overlay: its agent
+  // drawer stays usable.
   const overlayActive =
-    modal !== null || detailRow !== null || epicDetail !== null || mkpanesPrompt || qaPrompt !== null
+    modal !== null ||
+    detailRow !== null ||
+    mkpanesPrompt ||
+    projectPrompt ||
+    qaPrompt !== null ||
+    cloudPrompt !== null
   const drawerVisible = drawerOpen && view !== "central" && !overlayActive
 
   useKeyboard((key) => {
     // While a text input is focused it owns all keys except escape.
-    if (addingTodo || editingTodo || editingTodoNotes || mkpanesPrompt || qaPrompt) {
+    if (addingTodo || editingTodo || editingTodoNotes || mkpanesPrompt || projectPrompt || qaPrompt || cloudPrompt) {
       if (key.name === "escape") {
         setAddingTodo(false)
         setEditingTodo(null)
         setEditingTodoNotes(null)
         setMkpanesPrompt(false)
+        setProjectPrompt(false)
         setQaPrompt(null)
+        setCloudPrompt(null)
       }
       return
     }
@@ -613,13 +750,6 @@ export function App() {
     // While the tab's agent drawer input is focused it owns all keys.
     if (drawerVisible && drawerFocused) {
       if (key.name === "escape") setDrawerFocused(false)
-      return
-    }
-    if (key.name === "q" && !busy) {
-      // Best-effort agent disposal, capped so quitting never hangs.
-      Promise.race([disposeAll(), new Promise((resolve) => setTimeout(resolve, 1500))]).finally(() =>
-        process.exit(0),
-      )
       return
     }
     if (busy) return
@@ -641,7 +771,37 @@ export function App() {
       if (key.name === "t" && detailRow.ticket) run("open", [detailRow.ticket.url])
       return
     }
-    if (epicDetail) {
+    if (key.name === "tab" || VIEW_BY_KEY[key.name]) {
+      const next =
+        key.name === "tab" ? VIEW_ORDER[(VIEW_ORDER.indexOf(view) + 1) % VIEW_ORDER.length] : VIEW_BY_KEY[key.name]
+      setView(next)
+      if (next === "central") {
+        setChatScroll(0)
+        markRead("central")
+      }
+      return
+    }
+
+    // Per-tab agent drawer: ; toggles, i refocuses the input when open.
+    // Handled before per-view keys so it also works inside an open epic.
+    const sequence = (key as unknown as { sequence?: string }).sequence
+    if (view !== "central" && (key.name === ";" || sequence === ";")) {
+      if (drawerOpen) {
+        setDrawerOpen(false)
+        setDrawerFocused(false)
+      } else {
+        setDrawerOpen(true)
+        setDrawerFocused(true)
+        markRead(view)
+      }
+      return
+    }
+    if (drawerVisible && key.name === "i") {
+      setDrawerFocused(true)
+      return
+    }
+
+    if (epicDetail && view === "epics") {
       const tickets = epicDetail.tickets ?? []
       const ticket = tickets[selectedEpicTicket]
       if (key.name === "escape") setEpicDetail(null)
@@ -679,43 +839,15 @@ export function App() {
         // resume the existing worktree; otherwise pick a repo and start fresh.
         const row = rows.find((r) => r.ticketKey === ticket.key)
         if (row) startOrJump(row)
-        else startBacklogTicket(ticket)
+        else startAssignedTicket(ticket)
       }
-      if (key.name === "n") openTicketChat("projects", epicDetail.epic)
+      if (key.name === "n") openTicketChat("epics", epicDetail.epic)
       if (key.name === "f") finalizeEpic(epicDetail.epic)
       if (key.name === "t" && ticket) run("open", [ticket.url])
       if (key.name === "c" && ticket) changeStatus(ticket.key, ticket.status)
       return
     }
-    if (key.name === "tab" || VIEW_BY_KEY[key.name]) {
-      const next =
-        key.name === "tab" ? VIEW_ORDER[(VIEW_ORDER.indexOf(view) + 1) % VIEW_ORDER.length] : VIEW_BY_KEY[key.name]
-      setView(next)
-      if (next === "central") {
-        setChatScroll(0)
-        markRead("central")
-      }
-      return
-    }
     if (key.name === "r") refresh()
-
-    // Per-tab agent drawer: ; toggles, i refocuses the input when open.
-    const sequence = (key as unknown as { sequence?: string }).sequence
-    if (view !== "central" && (key.name === ";" || sequence === ";")) {
-      if (drawerOpen) {
-        setDrawerOpen(false)
-        setDrawerFocused(false)
-      } else {
-        setDrawerOpen(true)
-        setDrawerFocused(true)
-        markRead(view)
-      }
-      return
-    }
-    if (drawerVisible && key.name === "i") {
-      setDrawerFocused(true)
-      return
-    }
 
     if (view === "central") {
       // Focused chat is handled earlier; here the input is unfocused.
@@ -775,6 +907,21 @@ export function App() {
       return
     }
 
+    if (view === "cloud") {
+      const agent = cloudAgents[selectedCloud]
+      if (key.name === "j" || key.name === "down") {
+        setSelectedCloud((s) => Math.min(s + 1, Math.max(0, cloudAgents.length - 1)))
+      }
+      if (key.name === "k" || key.name === "up") {
+        setSelectedCloud((s) => Math.max(s - 1, 0))
+      }
+      if (key.name === "n") startCloud()
+      if (key.name === "s" && agent) setCloudPrompt({ kind: "followup", agentId: agent.id, name: agent.name })
+      if (key.name === "x" && agent) cancelSelectedCloud(agent)
+      if ((key.name === "o" || key.name === "return") && agent) run("open", [agent.url])
+      return
+    }
+
     if (view === "email") {
       const mail = emails?.[selectedEmail]
       if (key.name === "j" || key.name === "down") {
@@ -812,7 +959,7 @@ export function App() {
       return
     }
 
-    if (view === "projects") {
+    if (view === "epics") {
       const epic = epics[selectedEpic]
       if (key.name === "j" || key.name === "down") {
         setSelectedEpic((s) => Math.min(s + 1, Math.max(0, epics.length - 1)))
@@ -821,23 +968,38 @@ export function App() {
         setSelectedEpic((s) => Math.max(s - 1, 0))
       }
       if (key.name === "return" && epic) openEpic(epic)
-      if (key.name === "n" && epic) openTicketChat("projects", epic)
+      if (key.name === "n" && epic) openTicketChat("epics", epic)
       if (key.name === "f" && epic) finalizeEpic(epic)
       if (key.name === "c" && epic) changeStatus(epic.key, epic.status)
       if (key.name === "t" && epic) run("open", [epic.url])
       return
     }
 
-    if (view === "backlog") {
-      const ticket = backlog[selectedBacklog]
+    if (view === "projects") {
+      const project = projects[selectedProject]
       if (key.name === "j" || key.name === "down") {
-        setSelectedBacklog((s) => Math.min(s + 1, Math.max(0, backlog.length - 1)))
+        setSelectedProject((s) => Math.min(s + 1, Math.max(0, projects.length - 1)))
       }
       if (key.name === "k" || key.name === "up") {
-        setSelectedBacklog((s) => Math.max(s - 1, 0))
+        setSelectedProject((s) => Math.max(s - 1, 0))
       }
-      if (key.name === "n") openTicketChat("backlog")
-      if (key.name === "s" && ticket) startBacklogTicket(ticket)
+      if ((key.name === "return" || key.name === "s") && project) openProject(project)
+      if (key.name === "n") setProjectPrompt(true)
+      if (key.name === "o" && project) run("open", [project.path])
+      if (key.name === "t" && project) run("open", [`${project.path}/PROJECT.md`])
+      return
+    }
+
+    if (view === "tickets") {
+      const ticket = tickets[selectedTicket]
+      if (key.name === "j" || key.name === "down") {
+        setSelectedTicket((s) => Math.min(s + 1, Math.max(0, tickets.length - 1)))
+      }
+      if (key.name === "k" || key.name === "up") {
+        setSelectedTicket((s) => Math.max(s - 1, 0))
+      }
+      if (key.name === "n") openTicketChat("tickets")
+      if (key.name === "s" && ticket) startAssignedTicket(ticket)
       if (key.name === "c" && ticket) changeStatus(ticket.key, ticket.status)
       if (key.name === "t" && ticket) run("open", [ticket.url])
       return
@@ -878,13 +1040,14 @@ export function App() {
     ) : null
 
   const loading = (["git", "jira", "gitlab", "tmux"] as const).filter((k) => !load[k])
-  const working = loading.length > 0 || backlogLoading || epicsLoading || busy !== null
+  const working =
+    loading.length > 0 || ticketsLoading || epicsLoading || projectsLoading || cloudLoading || busy !== null
   const spinner = useSpinner(working)
   const statusLine =
     loading.length > 0
       ? `${spinner} loading: ${loading.join(", ")}…`
-      : backlogLoading
-        ? `${spinner} loading backlog…`
+      : ticketsLoading
+        ? `${spinner} loading tickets…`
         : lastRefresh
           ? `refreshed ${lastRefresh.toLocaleTimeString()}`
           : ""
@@ -900,16 +1063,20 @@ export function App() {
           {agentDot("worktrees")}
           <span fg={view === "qa" ? "#ffffff" : "#6b7280"}>  [3] {qaRows.length} qa</span>
           {agentDot("qa")}
-          <span fg={view === "backlog" ? "#ffffff" : "#6b7280"}>  [4] {backlog.length} backlog</span>
-          {agentDot("backlog")}
-          <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [5] {epics.length} projects</span>
+          <span fg={view === "tickets" ? "#ffffff" : "#6b7280"}>  [4] {tickets.length} tickets</span>
+          {agentDot("tickets")}
+          <span fg={view === "epics" ? "#ffffff" : "#6b7280"}>  [5] {epics.length} epics</span>
+          {agentDot("epics")}
+          <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [6] {projects.length} projects</span>
           {agentDot("projects")}
-          <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [6] {todos.filter((t) => !t.done).length} todos</span>
+          <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [7] {todos.filter((t) => !t.done).length} todos</span>
           {agentDot("todos")}
           <span fg={view === "email" ? "#ffffff" : "#6b7280"}>
-            {"  "}[7] {emails === null ? "" : `${emails.filter((e) => !e.isRead).length} `}email
+            {"  "}[8] {emails === null ? "" : `${emails.filter((e) => !e.isRead).length} `}email
           </span>
           {agentDot("email")}
+          <span fg={view === "cloud" ? "#ffffff" : "#6b7280"}>  [9] {cloudAgents.length} cloud</span>
+          {agentDot("cloud")}
         </text>
         <text fg="#6b7280">{statusLine}</text>
       </box>
@@ -917,13 +1084,39 @@ export function App() {
         <box flexGrow={1} flexDirection="column">
         {mkpanesPrompt ? (
           <MkpanesPrompt onSubmit={submitMkpanes} />
+        ) : projectPrompt ? (
+          <CloudPrompt
+            title="New project"
+            placeholder="project name (enter to create, esc to cancel)"
+            hint="creates ~/projects/<name> with a PROJECT.md brief and opens a tmux window running its project agent"
+            onSubmit={submitNewProject}
+          />
         ) : qaPrompt ? (
           <QaTicketPrompt repo={qaPrompt.repo} onSubmit={submitQaTicket} />
+        ) : cloudPrompt ? (
+          <CloudPrompt
+            title={
+              cloudPrompt.kind === "start"
+                ? `New cloud agent in ${cloudPrompt.repo}`
+                : `Follow-up — ${cloudPrompt.name}`
+            }
+            placeholder={
+              cloudPrompt.kind === "start"
+                ? "what should the cloud agent do? (enter to start, esc to cancel)"
+                : "follow-up prompt (enter to send, esc to cancel)"
+            }
+            hint={
+              cloudPrompt.kind === "start"
+                ? `starts a Cursor Cloud VM on the ${cloudPrompt.repo} remote — no PR`
+                : `sends a new run to ${cloudPrompt.agentId}`
+            }
+            onSubmit={submitCloudPrompt}
+          />
         ) : modal ? (
           <Modal modal={modal} />
         ) : detailRow ? (
           <DetailPanel row={detailRow} extras={extras} extrasLoading={extrasLoading} />
-        ) : epicDetail ? (
+        ) : view === "epics" && epicDetail ? (
           <EpicDetail
             epic={epicDetail.epic}
             tickets={epicDetail.tickets}
@@ -933,7 +1126,7 @@ export function App() {
             )}
             selected={selectedEpicTicket}
             width={width - 2}
-            height={height - 4}
+            height={contentHeight}
           />
         ) : view === "todos" ? (
           <Todos
@@ -959,20 +1152,28 @@ export function App() {
             width={width - 2}
             height={contentHeight}
           />
-        ) : view === "backlog" ? (
-          <Backlog
-            tickets={backlog}
-            selected={selectedBacklog}
+        ) : view === "tickets" ? (
+          <Tickets
+            tickets={tickets}
+            selected={selectedTicket}
             worktreeKeys={new Set(rows.map((r) => r.ticketKey).filter((k): k is string => k !== null))}
-            loading={backlogLoading}
+            loading={ticketsLoading}
             width={width - 2}
             height={contentHeight}
           />
-        ) : view === "projects" ? (
+        ) : view === "epics" ? (
           <Epics
             epics={epics}
             selected={selectedEpic}
             loading={epicsLoading}
+            width={width - 2}
+            height={contentHeight}
+          />
+        ) : view === "projects" ? (
+          <Projects
+            projects={projects}
+            selected={selectedProject}
+            loading={projectsLoading}
             width={width - 2}
             height={contentHeight}
           />
@@ -994,6 +1195,15 @@ export function App() {
             width={width - 2}
             height={contentHeight}
           />
+        ) : view === "cloud" ? (
+          <Cloud
+            agents={cloudAgents}
+            selected={selectedCloud}
+            loading={cloudLoading}
+            error={cloudError}
+            width={width - 2}
+            height={contentHeight}
+          />
         ) : view === "qa" ? (
           qaRows.length === 0 ? (
             <text fg="#6b7280">no QA worktrees — press n to start one (pick repo, enter ticket)</text>
@@ -1006,6 +1216,7 @@ export function App() {
         </box>
         {drawerVisible && (
           <Chat
+            key={view}
             agentId={view}
             title={`${view} agent`}
             emptyHint={`${view} specialist — ask about or act on this tab. Type a message and press enter.`}
@@ -1026,31 +1237,35 @@ export function App() {
             <span fg="#6b7280">
               {drawerVisible && drawerFocused
                 ? "enter send   esc table keys   ; close agent chat"
-                : mkpanesPrompt || qaPrompt
+                : mkpanesPrompt || projectPrompt || qaPrompt || cloudPrompt
                 ? "enter run   esc cancel"
                 : modal
                 ? "j/k move   enter select   esc cancel"
                 : detailRow
-                  ? "esc/enter back   o open MR   t open ticket   q quit"
-                  : epicDetail
-                    ? "esc back   j/k move   n new ticket   s start/jump   p in-progress+sprint   f finalize   c status   t open ticket   r refresh   q quit"
+                  ? "esc/enter back   o open MR   t open ticket   ctrl+c quit"
+                  : view === "epics" && epicDetail
+                    ? "tab views   esc back   j/k move   n new ticket   s start/jump   p in-progress+sprint   f finalize   c status   t open ticket   ; agent   r refresh   ctrl+c quit"
                     : view === "todos"
                       ? addingTodo || editingTodo || editingTodoNotes
                         ? "enter save   esc cancel"
-                        : `tab views   j/k move   a add   e edit   n notes   space/enter toggle   v ${showCompletedTodos ? "hide" : "show"} completed   x delete   ; agent   q quit`
+                        : `tab views   j/k move   a add   e edit   n notes   space/enter toggle   v ${showCompletedTodos ? "hide" : "show"} completed   x delete   ; agent   ctrl+c quit`
                       : view === "central"
                         ? chatFocused
                           ? "enter send   esc unfocus input"
-                          : "tab views   i focus input   j/k scroll   n new conversation   q quit"
+                          : "tab views   i focus input   j/k scroll   n new conversation   ctrl+c quit"
                       : view === "email"
-                        ? "tab views   j/k move   o/enter open in Outlook   ; agent   r refresh   q quit"
-                      : view === "backlog"
-                        ? "tab views   j/k move   n create ticket   s start ticket   c status   t open ticket   ; agent   r refresh   q quit"
+                        ? "tab views   j/k move   o/enter open in Outlook   ; agent   r refresh   ctrl+c quit"
+                      : view === "cloud"
+                        ? "tab views   j/k move   n start   s follow-up   x cancel run   o/enter open   ; agent   r refresh   ctrl+c quit"
+                      : view === "tickets"
+                        ? "tab views   j/k move   n create ticket   s start ticket   c status   t open ticket   ; agent   r refresh   ctrl+c quit"
+                        : view === "epics"
+                          ? "tab views   j/k move   enter open epic   n new ticket   f finalize   c status   t open epic   ; agent   r refresh   ctrl+c quit"
                         : view === "projects"
-                          ? "tab views   j/k move   enter open epic   n new ticket   f finalize   c status   t open epic   ; agent   r refresh   q quit"
+                          ? "tab views   j/k move   enter/s open or resume   n new project   o open folder   t open PROJECT.md   ; agent   r refresh   ctrl+c quit"
                           : view === "qa"
-                            ? "tab views   j/k move   enter details   n new QA   s open/jump   c status   x cleanup   ; agent   r refresh   o/t open   q quit"
-                            : "tab views   j/k move   enter details   n new   s start/jump   c status   w wrap-up   x cleanup   X mass cleanup   ; agent   r refresh   o/t open   q quit"}
+                            ? "tab views   j/k move   enter details   n new QA   s open/jump   c status   x cleanup   ; agent   r refresh   o/t open   ctrl+c quit"
+                            : "tab views   j/k move   enter details   n new   s start/jump   c status   w wrap-up   x cleanup   X mass cleanup   ; agent   r refresh   o/t open   ctrl+c quit"}
             </span>
           )}
         </text>

@@ -1,8 +1,13 @@
+import { existsSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
+import { config } from "../config.ts"
 import { run } from "./exec.ts"
 
-const MKPANES = join(homedir(), ".local", "bin", "mkpanes")
+const MKPANES = config().commands.mkpanes
+/** Command typed into a tmux pane to start an AI agent (config.commands.agent). */
+const AGENT_CMD = config().commands.agent
 
 export interface TmuxWindow {
   target: string // session:index
@@ -28,6 +33,8 @@ export async function listTmuxWindows(): Promise<TmuxWindow[]> {
  * or the most recently active attached session when running outside tmux.
  */
 export async function targetSession(): Promise<string | null> {
+  const pinned = config().commands.tmuxSession
+  if (pinned) return pinned
   if (process.env.TMUX) {
     const res = await run("tmux", ["display-message", "-p", "#{session_name}"])
     if (res.ok) return res.stdout.trim()
@@ -116,7 +123,7 @@ export async function openTicketCreator(
   }
   const target = created.stdout.trim()
   // send-keys types into an interactive zsh, so the cursor-cli alias resolves.
-  await run("tmux", ["send-keys", "-t", target, `cursor-cli ${JSON.stringify(createTicketPrompt(parentEpic))}`, "Enter"])
+  await run("tmux", ["send-keys", "-t", target, `${AGENT_CMD} ${JSON.stringify(createTicketPrompt(parentEpic))}`, "Enter"])
   return { ok: true, message: `ticket creator opened in ${target} — refresh (r) when done` }
 }
 
@@ -143,8 +150,40 @@ export async function openFinalizeEpic(
     '"Which Epic are we finalizing?" and do not ask me for it. ' +
     "Start with the skill's MCP detection step and then walk me through the acceptance criteria interactively."
   // send-keys types into an interactive zsh, so the cursor-cli alias resolves.
-  await run("tmux", ["send-keys", "-t", target, `cursor-cli ${JSON.stringify(prompt)}`, "Enter"])
+  await run("tmux", ["send-keys", "-t", target, `${AGENT_CMD} ${JSON.stringify(prompt)}`, "Enter"])
   return { ok: true, message: `finalize-epic for ${epic.key} started in ${target}` }
+}
+
+/** tmux session names may not contain ':' or '.'. Must match start-project / cc-report. */
+export function projectSessionName(name: string): string {
+  return name.replace(/[:.]/g, "-")
+}
+
+/** The start-project skill script: repo copy first, then the synced user copy. */
+function startProjectScript(): string {
+  const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "skills", "start-project", "start-project")
+  if (existsSync(repo)) return repo
+  return join(homedir(), ".agents", "skills", "start-project", "start-project")
+}
+
+/**
+ * Open or resume a project through the start-project skill, so the TUI, the
+ * projects specialist, and any agent invoking /start-project share one
+ * implementation: own tmux session (window "central", mkpanes-style panes)
+ * in a new Alacritty window, cursor-cli as the project's central agent, which
+ * reports to the projects specialist via `cc-report projects`.
+ */
+export async function openProjectWindow(
+  project: { name: string; path: string },
+  mode: "new" | "resume" | "auto" = "auto",
+): Promise<{ ok: boolean; message: string }> {
+  const args = [project.path]
+  if (mode !== "auto") args.push(`--${mode}`)
+  const res = await run(startProjectScript(), args, { timeoutMs: 60_000 })
+  const lines = res.stdout.trim().split("\n").filter((l) => l.trim())
+  const last = lines[lines.length - 1] ?? ""
+  if (!res.ok) return { ok: false, message: res.stderr.trim() || last || "start-project failed" }
+  return { ok: true, message: last || `opened ${project.name}` }
 }
 
 /** Match a dashboard row to a tmux window by ticket key or branch name. */
