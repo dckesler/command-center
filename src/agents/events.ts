@@ -17,6 +17,7 @@ import {
 } from "../data/inbox.ts"
 import { run } from "../data/exec.ts"
 import type { EmailMessage } from "../data/outlook.ts"
+import { fmtEvent, fmtMinutes, fmtRange, isNow, minutesUntil, type CalendarEvent } from "../data/calendar.ts"
 import { isProjectDir, projectRootOf, type Project } from "../data/projects.ts"
 import { currentSnapshot, isAgentLive, sendSystem } from "./hub.ts"
 
@@ -59,7 +60,18 @@ const buffers = new Map<string, TabBuffer>()
 const waking = new Set<string>()
 const wakeTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-const WAKE_TABS = ["worktrees", "qa", "tickets", "epics", "projects", "todos", "email", "cloud", "central"] as const
+const WAKE_TABS = [
+  "worktrees",
+  "qa",
+  "tickets",
+  "epics",
+  "projects",
+  "todos",
+  "email",
+  "cloud",
+  "calendar",
+  "central",
+] as const
 
 function reportTab(to: string | undefined, dir: string): string {
   if (to && (WAKE_TABS as readonly string[]).includes(to)) return to
@@ -378,6 +390,99 @@ export function ingestEmails(emails: EmailMessage[]): void {
     if (!mail.isRead && !prev.has(mail.id)) {
       pushEvent("email", `new unread mail from ${mail.from} <${mail.fromAddress}>: ${mail.subject}`)
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// calendar: schedule digest on load, diffs on refresh, reminders before start
+
+/** Lead time for the "starting soon" reminder. */
+const MEETING_REMINDER_MIN = 10
+const REMINDER_TICK_MS = 60_000
+
+let calendarEvents: CalendarEvent[] | null = null
+let calendarDay = ""
+/** Events already announced as starting soon (id+start, so recurrences count once each). */
+const remindedEvents = new Set<string>()
+let reminderTimer: ReturnType<typeof setInterval> | null = null
+
+const eventKey = (e: CalendarEvent) => `${e.id}@${e.start}`
+/** Meetings that count as commitments: not cancelled, not declined, not all-day. */
+const isCommitment = (e: CalendarEvent) => !e.isCancelled && !e.isAllDay && e.response !== "declined"
+
+/** One-line summary of what's left today, for central. */
+function scheduleSummary(events: CalendarEvent[], now = Date.now()): string {
+  const remaining = events.filter((e) => isCommitment(e) && new Date(e.end).getTime() > now)
+  if (remaining.length === 0) return "no more meetings today"
+  const current = remaining.find((e) => isNow(e, now))
+  const next = remaining.find((e) => minutesUntil(e, now) > 0)
+  const last = remaining[remaining.length - 1]
+  const parts = [`${remaining.length} meeting${remaining.length === 1 ? "" : "s"} left`]
+  if (current) parts.push(`now: ${current.subject} until ${fmtRange(current).split("–")[1]}`)
+  if (next) parts.push(`next: ${next.subject} at ${fmtRange(next).split("–")[0]} (in ${fmtMinutes(minutesUntil(next, now))})`)
+  if (last) parts.push(`free after ${fmtRange(last).split("–")[1]}`)
+  return parts.join("; ")
+}
+
+/** Today's schedule → calendar specialist: digest on first load / new day, diffs afterwards. */
+export function ingestCalendar(events: CalendarEvent[]): void {
+  const prev = calendarEvents
+  const today = new Date().toDateString()
+  calendarEvents = events
+  startReminderTicker()
+  if (!prev || calendarDay !== today) {
+    calendarDay = today
+    remindedEvents.clear()
+    const now = Date.now()
+    const listed = events.filter(isCommitment).map((e) => fmtEvent(e, now))
+    pushEvent(
+      "calendar",
+      `today's schedule loaded — ${scheduleSummary(events, now)}${listed.length ? `\n${listed.join("\n")}` : ""}`,
+      "info",
+      { inboxSummary: `today's schedule loaded — ${scheduleSummary(events, now)}` },
+    )
+    return
+  }
+  const before = new Map(prev.map((e) => [eventKey(e), e]))
+  const after = new Map(events.map((e) => [eventKey(e), e]))
+  for (const [key, e] of after) {
+    const old = before.get(key)
+    if (!old) {
+      if (isCommitment(e)) pushEvent("calendar", `new meeting today: ${fmtRange(e)} ${e.subject}${e.organizer ? ` (${e.organizer})` : ""}`)
+    } else if (!old.isCancelled && e.isCancelled) {
+      pushEvent("calendar", `cancelled: ${fmtRange(e)} ${e.subject}`)
+    } else if (old.end !== e.end || old.location !== e.location || old.subject !== e.subject) {
+      pushEvent("calendar", `changed: ${e.subject} now ${fmtRange(e)}${e.location ? ` @ ${e.location}` : ""}`)
+    }
+  }
+  for (const [key, old] of before) {
+    if (!after.has(key) && isCommitment(old)) pushEvent("calendar", `removed from today: ${fmtRange(old)} ${old.subject}`)
+  }
+}
+
+function startReminderTicker(): void {
+  if (reminderTimer) return
+  reminderTimer = setInterval(checkReminders, REMINDER_TICK_MS)
+  checkReminders()
+}
+
+/** Announce commitments starting within the lead time, once each. */
+function checkReminders(): void {
+  if (!calendarEvents) return
+  const now = Date.now()
+  for (const e of calendarEvents) {
+    if (!isCommitment(e)) continue
+    const key = eventKey(e)
+    if (remindedEvents.has(key)) continue
+    const minutes = minutesUntil(e, now)
+    if (minutes > MEETING_REMINDER_MIN || minutes < -1) continue
+    remindedEvents.add(key)
+    const where = e.location || (e.isOnline ? "Teams" : "")
+    pushEvent(
+      "calendar",
+      `${e.subject} starts ${minutes <= 0 ? "now" : `in ${minutes}m`}${where ? ` (${where})` : ""}${e.organizer ? ` — ${e.organizer}` : ""}`,
+      "attention",
+    )
   }
 }
 

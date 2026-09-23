@@ -14,6 +14,7 @@ import {
 } from "../data/cloud.ts"
 import { run } from "../data/exec.ts"
 import { getMessageBody, sendMail, type EmailMessage } from "../data/outlook.ts"
+import { dayBounds, fmtEvent, getEventDetail, getEvents, type CalendarEvent } from "../data/calendar.ts"
 import { applyTransition, getEpicChildren, getTransitions, prepTicket } from "../data/jira.ts"
 import { createProject, fmtProject, readBriefRaw, readProjectReports, type Project } from "../data/projects.ts"
 import { launchWork, openProjectWindow, projectSessionName, runMkpanes, targetSession } from "../data/tmux.ts"
@@ -28,6 +29,8 @@ export interface Snapshot {
   todos: Todo[]
   /** null while Outlook is unavailable (m365 not logged in) */
   emails: EmailMessage[] | null
+  /** today's calendar; null while the calendar is unavailable */
+  events: CalendarEvent[] | null
   cloud: CloudAgent[]
 }
 
@@ -236,7 +239,8 @@ const central: TabAgentSpec = {
   title: "central",
   rolePrompt:
     `You are the central manager agent of ${USER}'s development command center TUI. ` +
-    "Specialist agents run one per tab (worktrees, qa, tickets, epics, projects, todos, email, cloud); external ticket agents and project agents work in tmux windows. " +
+    "Specialist agents run one per tab (worktrees, qa, tickets, epics, projects, todos, email, cloud, calendar); external ticket agents and project agents work in tmux windows. " +
+    `The calendar specialist tells you about ${USER}'s upcoming meetings — use that context when timing suggestions (don't propose long tasks right before a meeting; ask calendar when you need his availability). ` +
     "Your tools: list_agents, get_status(agent), instruct(agent, instruction). " +
     "You receive batched '[reports]' messages (each line is timestamped and one sentence) from specialists — treat them as information; only instruct an agent or reply at length when action or a decision is actually needed, otherwise acknowledge in one short line. " +
     "Never instruct agents in a loop: after instructing, wait for the resulting report. " +
@@ -781,6 +785,71 @@ const email: TabAgentSpec = {
   },
 }
 
+const calendar: TabAgentSpec = {
+  id: "calendar",
+  title: "calendar",
+  rolePrompt:
+    `You are the calendar specialist of a development command center. Scope: ${USER}'s Outlook work calendar, read-only. ` +
+    "Your two jobs: (1) keep central aware of what is coming up — when a meeting is about to start, when the day's schedule " +
+    `loads or changes — so central can time its suggestions around ${USER}'s availability; (2) answer ${USER}'s questions about ` +
+    "his schedule (today by default; use list_events for other days). " +
+    "Tools: today_schedule (cached, free), list_events(start, end) for any range, event_detail(id) for attendees/body. " +
+    "Local time is what matters — always quote times as given by the tools, never convert. " +
+    "Never mention declined or cancelled meetings as commitments. You cannot create, change or respond to events. " +
+    "Reports to central: one line, e.g. \"standup in 10m (Teams)\" or \"schedule loaded: 4 meetings, next 10:00 design review, free after 15:00\"; " +
+    "severity attention only when a meeting starts within 10 minutes. " +
+    REPLY_STYLE +
+    " " +
+    EVENT_STYLE,
+  makeTools(ctx) {
+    const schedule = () => {
+      const events = ctx.snapshot().events
+      if (events === null) return "calendar unavailable — m365 CLI is not logged in (needs Calendars.Read)"
+      const now = Date.now()
+      const header = `today ${new Date().toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}, now ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}`
+      return events.length ? `${header}\n${events.map((e) => fmtEvent(e, now)).join("\n")}` : `${header}\nno meetings today`
+    }
+    return {
+      today_schedule: {
+        description: "Today's events from the TUI's cached calendar (time range, subject, location, organizer, flags, id).",
+        inputSchema: { type: "object", properties: {} },
+        execute: schedule,
+      },
+      list_events: {
+        description:
+          "Fetch events for a date range (local dates, YYYY-MM-DD; end is inclusive). Use for tomorrow / this week / a given day.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            start: { type: "string", description: "first day, YYYY-MM-DD" },
+            end: { type: "string", description: "last day, YYYY-MM-DD (defaults to start)" },
+          },
+          required: ["start"],
+        },
+        execute: async (args) => {
+          const first = new Date(`${str(args.start)}T00:00:00`)
+          const last = new Date(`${str(args.end) || str(args.start)}T00:00:00`)
+          if (Number.isNaN(first.getTime()) || Number.isNaN(last.getTime())) return "dates must be YYYY-MM-DD"
+          const { start } = dayBounds(first)
+          const { end } = dayBounds(last)
+          const events = await getEvents(start, end)
+          if (events === null) return "calendar unavailable — m365 CLI is not logged in"
+          if (events.length === 0) return `no events ${str(args.start)}${str(args.end) ? ` → ${str(args.end)}` : ""}`
+          const now = Date.now()
+          return events
+            .map((e) => `${new Date(e.start).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} ${fmtEvent(e, now)}`)
+            .join("\n")
+        },
+      },
+      event_detail: {
+        description: "Full detail of one event (id from today_schedule/list_events): attendees with responses, online link, body.",
+        inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+        execute: async (args) => (await getEventDetail(str(args.id))) ?? "could not fetch event",
+      },
+    }
+  },
+}
+
 const cloud: TabAgentSpec = {
   id: "cloud",
   title: "cloud",
@@ -860,4 +929,15 @@ const cloud: TabAgentSpec = {
 }
 
 /** Tab agents in tab order. Adding a new pane = adding a spec here. */
-export const TAB_AGENT_SPECS: TabAgentSpec[] = [central, worktrees, qa, tickets, epicsSpec, projectsSpec, todosSpec, email, cloud]
+export const TAB_AGENT_SPECS: TabAgentSpec[] = [
+  central,
+  worktrees,
+  qa,
+  tickets,
+  epicsSpec,
+  projectsSpec,
+  todosSpec,
+  email,
+  cloud,
+  calendar,
+]

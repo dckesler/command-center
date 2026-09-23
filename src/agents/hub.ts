@@ -68,7 +68,7 @@ for (const spec of TAB_AGENT_SPECS) {
   })
 }
 
-let snapshot: Snapshot = { rows: [], tickets: [], epics: [], projects: [], todos: [], emails: null, cloud: [] }
+let snapshot: Snapshot = { rows: [], tickets: [], epics: [], projects: [], todos: [], emails: null, events: null, cloud: [] }
 let onAppChanged: (kind: "todos" | "refresh") => void = () => {}
 
 const inbox: Report[] = []

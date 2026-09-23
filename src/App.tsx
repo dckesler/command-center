@@ -24,8 +24,11 @@ import {
 } from "./agents/hub.ts"
 import { getStore, subscribeAgents } from "./agents/stores.ts"
 import { Email } from "./components/Email.tsx"
+import { Calendar } from "./components/Calendar.tsx"
 import { getInbox, type EmailMessage } from "./data/outlook.ts"
+import { getTodayEvents, type CalendarEvent } from "./data/calendar.ts"
 import {
+  ingestCalendar,
   ingestCloud,
   ingestEmails,
   ingestProjects,
@@ -61,9 +64,20 @@ import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
 
-type View = "central" | "worktrees" | "qa" | "tickets" | "epics" | "projects" | "todos" | "email" | "cloud"
+type View = "central" | "worktrees" | "qa" | "tickets" | "epics" | "projects" | "todos" | "email" | "cloud" | "calendar"
 
-const VIEW_ORDER: View[] = ["central", "worktrees", "qa", "tickets", "epics", "projects", "todos", "email", "cloud"]
+const VIEW_ORDER: View[] = [
+  "central",
+  "worktrees",
+  "qa",
+  "tickets",
+  "epics",
+  "projects",
+  "todos",
+  "email",
+  "cloud",
+  "calendar",
+]
 
 const VIEW_BY_KEY: Record<string, View> = {
   "1": "central",
@@ -75,7 +89,11 @@ const VIEW_BY_KEY: Record<string, View> = {
   "7": "todos",
   "8": "email",
   "9": "cloud",
+  "0": "calendar",
 }
+
+/** How often today's calendar is re-fetched on its own (meetings move). */
+const CALENDAR_REFRESH_MS = 15 * 60_000
 
 /** In Progress first, then To Do, then Done — most actionable at the top. */
 const CATEGORY_RANK: Record<string, number> = { "In Progress": 0, "To Do": 1, New: 1, Done: 2 }
@@ -136,6 +154,9 @@ export function App() {
   const [emails, setEmails] = useState<EmailMessage[] | null>(null)
   const [emailsLoading, setEmailsLoading] = useState(true)
   const [selectedEmail, setSelectedEmail] = useState(0)
+  const [events, setEvents] = useState<CalendarEvent[] | null>(null)
+  const [eventsLoading, setEventsLoading] = useState(true)
+  const [selectedEvent, setSelectedEvent] = useState(0)
   const [cloudAgents, setCloudAgents] = useState<CloudAgent[]>([])
   const [cloudLoading, setCloudLoading] = useState(true)
   const [cloudError, setCloudError] = useState<string | null>(null)
@@ -169,9 +190,18 @@ export function App() {
     }
   }, [])
 
+  const refreshCalendar = useCallback(() => {
+    setEventsLoading(true)
+    getTodayEvents().then((result) => {
+      setEvents(result)
+      setEventsLoading(false)
+    })
+  }, [])
+
   const refresh = useCallback(async () => {
     if (refreshing.current) return
     refreshing.current = true
+    refreshCalendar()
     setLoad(INITIAL_LOAD)
     setTicketsLoading(true)
     getAssignedTickets().then((result) => {
@@ -213,16 +243,22 @@ export function App() {
     } finally {
       refreshing.current = false
     }
-  }, [])
+  }, [refreshCalendar])
 
   useEffect(() => {
     refresh()
   }, [refresh])
 
+  // The calendar refreshes itself; everything else waits for `r` or an agent.
+  useEffect(() => {
+    const interval = setInterval(refreshCalendar, CALENDAR_REFRESH_MS)
+    return () => clearInterval(interval)
+  }, [refreshCalendar])
+
   // Keep the hub's snapshot in sync so agent tools read live TUI state.
   useEffect(() => {
-    updateSnapshot({ rows, tickets, epics, projects, todos, emails, cloud: cloudAgents })
-  }, [rows, tickets, epics, projects, todos, emails, cloudAgents])
+    updateSnapshot({ rows, tickets, epics, projects, todos, emails, events, cloud: cloudAgents })
+  }, [rows, tickets, epics, projects, todos, emails, events, cloudAgents])
 
   // Autonomous events: hook-feed watcher plus refresh diffs (only complete
   // loads are diffed, so progressive refresh states don't fake changes).
@@ -244,6 +280,9 @@ export function App() {
   useEffect(() => {
     if (!emailsLoading && emails !== null) ingestEmails(emails)
   }, [emails, emailsLoading])
+  useEffect(() => {
+    if (!eventsLoading && events !== null) ingestCalendar(events)
+  }, [events, eventsLoading])
   useEffect(() => {
     if (!cloudLoading) ingestCloud(cloudAgents)
   }, [cloudAgents, cloudLoading])
@@ -934,6 +973,22 @@ export function App() {
       return
     }
 
+    if (view === "calendar") {
+      const event = events?.[selectedEvent]
+      if (key.name === "j" || key.name === "down") {
+        setSelectedEvent((s) => Math.min(s + 1, Math.max(0, (events?.length ?? 1) - 1)))
+      }
+      if (key.name === "k" || key.name === "up") {
+        setSelectedEvent((s) => Math.max(s - 1, 0))
+      }
+      if (key.name === "o" && event?.webLink) run("open", [event.webLink])
+      if (key.name === "return" && event) {
+        const url = event.joinUrl || event.webLink
+        if (url) run("open", [url])
+      }
+      return
+    }
+
     if (view === "qa") {
       const row = qaRows[selectedQa]
       if (key.name === "j" || key.name === "down") {
@@ -1077,6 +1132,10 @@ export function App() {
           {agentDot("email")}
           <span fg={view === "cloud" ? "#ffffff" : "#6b7280"}>  [9] {cloudAgents.length} cloud</span>
           {agentDot("cloud")}
+          <span fg={view === "calendar" ? "#ffffff" : "#6b7280"}>
+            {"  "}[0] {events === null ? "" : `${events.filter((e) => !e.isCancelled && new Date(e.end).getTime() > Date.now()).length} `}calendar
+          </span>
+          {agentDot("calendar")}
         </text>
         <text fg="#6b7280">{statusLine}</text>
       </box>
@@ -1195,6 +1254,14 @@ export function App() {
             width={width - 2}
             height={contentHeight}
           />
+        ) : view === "calendar" ? (
+          <Calendar
+            events={events}
+            loading={eventsLoading}
+            selected={selectedEvent}
+            width={width - 2}
+            height={contentHeight}
+          />
         ) : view === "cloud" ? (
           <Cloud
             agents={cloudAgents}
@@ -1255,6 +1322,8 @@ export function App() {
                           : "tab views   i focus input   j/k scroll   n new conversation   ctrl+c quit"
                       : view === "email"
                         ? "tab views   j/k move   o/enter open in Outlook   ; agent   r refresh   ctrl+c quit"
+                      : view === "calendar"
+                        ? "tab views   j/k move   enter join/open   o open in Outlook   ; agent   r refresh   ctrl+c quit"
                       : view === "cloud"
                         ? "tab views   j/k move   n start   s follow-up   x cancel run   o/enter open   ; agent   r refresh   ctrl+c quit"
                       : view === "tickets"

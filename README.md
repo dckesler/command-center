@@ -47,18 +47,18 @@ bun start
 | an agent CLI | typed into panes to start agents: `commands.agent` in config (default `cursor-cli`; `claude` works) | Cursor CLI / Claude Code |
 | `glab` (optional) | MRs, CI, merge on the worktrees tab | `brew install glab`, `glab auth login` |
 | `acli` (optional) | tickets and epics tabs | Atlassian CLI, `acli jira auth login` |
-| `m365` (optional) | Email tab | `npm i -g @pnp/cli-microsoft365`, see below |
+| `m365` (optional) | Email and Calendar tabs | `npm i -g @pnp/cli-microsoft365`, see below |
 | Alacritty (optional) | new OS windows for projects (`commands.terminal`) | or set `"terminal": "terminal"` / `"none"` |
 | `mkpanes` (optional) | worktree launcher + repo alias registry | your own script; or fill `repos` in config |
 
-### Email tab and Microsoft 365
+### Email / Calendar tabs and Microsoft 365
 
-`src/data/outlook.ts` reads and sends mail through the CLI for Microsoft 365 (`m365`),
-which holds a delegated OAuth token obtained with `m365 login --authType deviceCode`.
-The token cache and the app registration it uses live in `~/.config/configstore/`
-(`cli-m365-config.json` holds `clientId` / `tenantId`). Required Graph permissions
-(delegated, admin-consented): `Mail.Read`, `Mail.Send`. Nothing in this repo stores or
-reads the token directly. There is no calendar integration yet.
+`src/data/outlook.ts` (mail) and `src/data/calendar.ts` (calendar, read-only) go through
+the CLI for Microsoft 365 (`m365`), which holds a delegated OAuth token obtained with
+`m365 login --authType deviceCode`. The token cache and the app registration it uses live
+in `~/.config/configstore/` (`cli-m365-config.json` holds `clientId` / `tenantId`).
+Required Graph permissions (delegated, admin-consented): `Mail.Read`, `Mail.Send`,
+`Calendars.Read`. Nothing in this repo stores or reads the token directly.
 
 ## Configuration reference (`config.json`)
 
@@ -88,8 +88,8 @@ and the agents it launches. `bun run doctor` reports what is missing.
 
 ## Views
 
-Tabs are `1`–`9` (or `tab` to cycle): central, worktrees, qa, tickets, epics, projects,
-todos, email, cloud.
+Tabs are `1`–`9`, `0` (or `tab` to cycle): central, worktrees, qa, tickets, epics,
+projects, todos, email, cloud, calendar.
 
 - **[2] Worktrees** — one row per git worktree, joining local git state, Jira, GitLab MR,
   and tmux.
@@ -131,6 +131,17 @@ todos, email, cloud.
 - **[9] Cloud** — Cursor Cloud agents started from here. `n` picks a mkpanes repo and a
   prompt (clones that repo's git remote on a Cursor VM, no PR). `s` sends a follow-up,
   `x` cancels the latest run, `o` opens the agent in the browser.
+- **[0] Calendar** — today's Outlook calendar, read-only (`Calendars.Read`). Rows show
+  time, subject, where (room or Teams), organizer and your response (`✓` accepted, `?`
+  tentative, `!` not responded, `✗` declined/cancelled); the current meeting is green,
+  anything starting within 15 minutes yellow. `enter` joins the online meeting (or opens
+  it in Outlook), `o` opens it in Outlook. Re-fetched every 15 minutes on its own. The
+  calendar specialist's job is context for central: it gets the day's schedule when it
+  loads, diffs (new / moved / cancelled meetings) on each refresh, and a reminder 10
+  minutes before each meeting you haven't declined, and relays those to central in one
+  line. Ask it about your schedule (`;` drawer): `today_schedule`, `list_events(start,
+  end)` for other days, `event_detail(id)` for attendees and the invite body. It has no
+  write tools.
 - **[7] Todos** — simple local list for things without a ticket or branch, stored in
   `dirs.config/todos.json`. `a` adds, `space`/`enter` toggles done,
   `x` deletes (with confirm). Pending items sort above completed ones.
