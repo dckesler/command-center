@@ -1,0 +1,45 @@
+{
+  "$comment": "Copy to ~/.config/control-center/config.json (or $CC_CONFIG_DIR/config.json). Every key is optional; missing keys use the defaults shown here. `~` and `$HOME` are expanded. Secrets do NOT go here — see .env.example.",
+
+  "user": {
+    "$comment": "How the agents refer to you, and your Atlassian identity for skills that assign tickets.",
+    "name": "Your Name",
+    "email": "you@example.com",
+    "jiraAccountId": ""
+  },
+
+  "dirs": {
+    "$comment": "config = state dir (agents.jsonl, inbox.jsonl, todos.json, tui.log). projects = where project directories live. skills = roots scanned for /skill-name completion in chats.",
+    "config": "~/.config/control-center",
+    "projects": "~/projects",
+    "skills": ["~/.cursor/skills", "~/.cursor/skills-cursor", "~/.claude/skills", "~/.agents/skills"]
+  },
+
+  "commands": {
+    "$comment": "agent = command typed into a tmux pane to start an AI agent (a shell alias such as cursor-cli or claude is fine — panes run your interactive shell). mkpanes = path to the mkpanes script. terminal = alacritty | terminal (macOS Terminal.app) | none. tmuxSession = session that receives new ticket windows; null = current/first.",
+    "agent": "cursor-cli",
+    "mkpanes": "~/.local/bin/mkpanes",
+    "editor": "vim",
+    "terminal": "alacritty",
+    "tmuxSession": null
+  },
+
+  "jira": {
+    "$comment": "baseUrl for browse links and REST transitions. cloudId is what the Atlassian MCP tools need. sprintField is the custom field holding the sprint.",
+    "baseUrl": "https://your-site.atlassian.net",
+    "cloudId": "",
+    "sprintField": "customfield_10007"
+  },
+
+  "model": "composer-2.5",
+
+  "projects": {
+    "$comment": "Directory names under dirs.projects that are not projects.",
+    "exclude": ["control-center", "command-center", "node_modules"]
+  },
+
+  "repos": {
+    "$comment": "Repo alias → path for the worktrees tab and mkpanes-style launches. Leave empty to parse the alias list from the mkpanes script instead.",
+    "example-repo": "~/code/example-repo"
+  }
+}

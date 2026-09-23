@@ -1,39 +1,138 @@
 # Control Center
 
 Keyboard-first TUI dashboard for all in-progress work: git worktrees, agents in tmux,
-GitLab MRs, and Jira tickets. See `PLAN.md` for the roadmap and verified feasibility notes.
+GitLab MRs, Jira tickets and epics, local projects, todos, Outlook mail, and Cursor
+Cloud agents — with one Cursor SDK "specialist" agent per tab and a central manager
+they report to. See `PLAN.md` for the roadmap and verified feasibility notes.
 
-## Requirements
-
-- Bun (`brew install oven-sh/bun/bun`) — OpenTUI's native renderer requires it
-- `glab` authenticated to gitlab.com
-- `acli` authenticated to the SmartSense Jira
-- `JIRA_EMAIL`, `JIRA_API_TOKEN` (and optionally `JIRA_BASE_URL`) env vars — used for
-  listing/executing ticket transitions via the Jira REST API, which acli cannot list
-- `tmux` running
-- `~/.local/bin/mkpanes` — parsed at startup as the source of truth for the repo map
-
-## Run
+## Install on a new machine
 
 ```bash
-npm install
-npm start
+git clone <this repo> ~/projects/control-center   # any path works
+cd control-center
+brew install oven-sh/bun/bun tmux jq              # required tools (macOS)
+bun install
+bun run setup                                     # config, hooks, skills, health check
 ```
 
-Best run as a dedicated tmux window.
+`bun run setup` creates `~/.config/control-center/config.json` from
+`config.example.json` and `.env` from `.env.example`, links `hooks/agent-event.sh` into
+the config dir, symlinks `skills/*` into `~/.agents/skills` and the skill CLIs
+(`cc-report`, `start-project`, `project-task`) into `~/.local/bin`, then runs the same
+checks as `bun run doctor`. It never edits `~/.cursor/hooks.json` or
+`~/.claude/settings.json`; merge `hooks/cursor-hooks.example.json` (and the Claude one
+if you use Claude Code) yourself so agents in tmux report their status into the feed.
+
+Then edit the two files it created:
+
+- **`~/.config/control-center/config.json`** — everything machine/user-specific and
+  non-secret. All keys optional; see the reference below and `config.example.json`.
+- **`.env`** (git-ignored, loaded by Bun) — secrets: `CURSOR_API_KEY` (hub specialists
+  and Cloud agents), `JIRA_EMAIL` + `JIRA_API_TOKEN` (ticket transitions via the Jira
+  REST API). Already-exported shell variables win over `.env`.
+
+Run it as a dedicated tmux window:
+
+```bash
+bun start
+```
+
+### Requirements
+
+| Tool | Needed for | Install |
+|---|---|---|
+| Bun | runtime (OpenTUI's native renderer needs it) | `brew install oven-sh/bun/bun` |
+| tmux | agent windows, project sessions | `brew install tmux` |
+| jq | `cc-report`, the hook script | `brew install jq` |
+| an agent CLI | typed into panes to start agents: `commands.agent` in config (default `cursor-cli`; `claude` works) | Cursor CLI / Claude Code |
+| `glab` (optional) | MRs, CI, merge on the worktrees tab | `brew install glab`, `glab auth login` |
+| `acli` (optional) | tickets and epics tabs | Atlassian CLI, `acli jira auth login` |
+| `m365` (optional) | Email tab | `npm i -g @pnp/cli-microsoft365`, see below |
+| Alacritty (optional) | new OS windows for projects (`commands.terminal`) | or set `"terminal": "terminal"` / `"none"` |
+| `mkpanes` (optional) | worktree launcher + repo alias registry | your own script; or fill `repos` in config |
+
+### Email tab and Microsoft 365
+
+`src/data/outlook.ts` reads and sends mail through the CLI for Microsoft 365 (`m365`),
+which holds a delegated OAuth token obtained with `m365 login --authType deviceCode`.
+The token cache and the app registration it uses live in `~/.config/configstore/`
+(`cli-m365-config.json` holds `clientId` / `tenantId`). Required Graph permissions
+(delegated, admin-consented): `Mail.Read`, `Mail.Send`. Nothing in this repo stores or
+reads the token directly. There is no calendar integration yet.
+
+## Configuration reference (`config.json`)
+
+Resolution order: environment variable → `config.json` → default.
+
+| Key | Env | Default | Purpose |
+|---|---|---|---|
+| `user.name` | | `"the user"` | how agent prompts address you |
+| `user.email`, `user.jiraAccountId` | | `""` | your Atlassian identity (used by ticket skills) |
+| `dirs.config` | `CC_CONFIG_DIR` | `~/.config/control-center` | state: `agents.jsonl`, `inbox.jsonl`, `todos.json`, `tui.log` |
+| `dirs.projects` | `CC_PROJECTS_DIR` | `~/projects` | Projects tab root |
+| `dirs.skills` | | cursor/claude/agents skill dirs | roots scanned for `/skill` completion |
+| `commands.agent` | `CC_AGENT_CMD` | `cursor-cli` | command typed into tmux panes to start an agent (alias OK) |
+| `commands.mkpanes` | `MKPANES_BIN` | `~/.local/bin/mkpanes` | worktree launcher; parsed for repo aliases when `repos` is empty |
+| `commands.editor` | | `vim` | opened in the left pane of project/task windows |
+| `commands.terminal` | | `alacritty` | `alacritty` \| `terminal` \| `none` for new project windows |
+| `commands.tmuxSession` | | `null` | pin the session that receives ticket windows |
+| `jira.baseUrl` | `JIRA_BASE_URL` | `""` | Jira site; empty disables links and transitions |
+| `jira.cloudId`, `jira.sprintField` | | `""`, `customfield_10007` | Atlassian MCP cloud id; sprint custom field |
+| `model` | `CC_MODEL` | `composer-2.5` | Cursor SDK model for specialists and Cloud agents |
+| `projects.exclude` | | `control-center, command-center, node_modules` | dirs under `dirs.projects` that are not projects |
+| `repos` | | `{}` | alias → path; overrides the mkpanes registry when non-empty |
+
+The shell skills (`cc-report`, `start-project`, `project-task`) and
+`hooks/agent-event.sh` read the same file with `jq`, so one config drives both the TUI
+and the agents it launches. `bun run doctor` reports what is missing.
 
 ## Views
 
-- **[1] Worktrees** — one row per git worktree, joining local git state, Jira, GitLab MR,
-  and tmux. `tab` (or `1`/`2`) switches views.
-- **[2] Backlog** — tickets assigned to you that aren't In Progress or Done, sorted by
-  last update. The WT column marks tickets that already have a local worktree. `s` starts
-  a ticket: pick a repo and it launches `mkpanes <repo> -w <KEY> -s <session>`. `n` opens
-  a "new ticket" tmux window running `cursor-cli` with a prompt to create a ticket via the
-  jira-ticket skill (it asks for the parent epic, platform, type, and details); refresh
-  afterward and the new ticket appears in the backlog, ready to start with `s`.
-- **[3] Todos** — simple local list for things without a ticket or branch, stored in
-  `~/.config/control-center/todos.json`. `a` adds, `space`/`enter` toggles done,
+Tabs are `1`–`9` (or `tab` to cycle): central, worktrees, qa, tickets, epics, projects,
+todos, email, cloud.
+
+- **[2] Worktrees** — one row per git worktree, joining local git state, Jira, GitLab MR,
+  and tmux.
+- **[4] Tickets** — tickets assigned to you that aren't Done/Closed (epics stay on
+  Epics). Sorted closest-to-shipped first (In Test / code review above In Progress,
+  Blocked below it, Backlog last). The WT column marks tickets that already have a local
+  worktree. `s` starts a ticket: pick a repo and it launches
+  `mkpanes <repo> -w <KEY> -s <session>`. `n` creates a ticket in the tab's agent drawer.
+- **[5] Epics** — your open Jira epics. `enter` opens an epic's child tickets (the open
+  epic stays put while you switch tabs; `esc` closes it). `n` creates a ticket under the
+  epic, `f` runs finalize-epic in a tmux window.
+- **[6] Projects** — every directory in `dirs.projects` (default `~/projects`, minus
+  `projects.exclude` and linked git worktrees). Each project is
+  tracked by a `PROJECT.md` brief — `# Title`, `**Status:** active|paused|done`,
+  `**Updated:** YYYY-MM-DD`, then `## Goal`, `## Current state`, `## Next steps`
+  (checkbox list) and a dated `## Log`. The table shows status, open next steps, the
+  project's tmux window, and its agent state. `n` creates `~/projects/<name>` with a
+  template brief; `enter`/`s` runs the `start-project` skill: the project gets its own
+  tmux session (named after the project, window `central`, mkpanes-style panes) shown in
+  a new terminal window (`commands.terminal`) — not a window of the work session — with
+  `commands.agent` running as the
+  project's **central agent**. An existing session is re-attached instead. `o` opens the
+  folder, `t` opens `PROJECT.md`.
+
+  Reporting chain (all via the `cc-report` skill; every layer reports upward):
+  `project-task` worker tabs → `cc-report project:<name>` → the project's central agent
+  (typed into its pane + `.cc/inbox.jsonl`) → `cc-report projects` → the projects
+  specialist → `report_to_central` → central. The central agent owns `PROJECT.md` and
+  delegates self-contained work with `project-task "<title>" "<task>"`, which opens a
+  tab in the project session running a worker agent. Code changes always go through
+  `project-task --repo <alias|path> --ticket <KEY>` (or `--branch <name>`, default
+  `<project>-<title-slug>`): it calls `mkpanes <repo> -w <branch> -s <project-session>`,
+  so the work lands in a `<repo>_<branch>` worktree that also appears on the worktrees
+  tab, and the worker starts with `/start-ticket <KEY>` while reporting to the project's
+  central agent.
+
+  Skills in `skills/` (synced to `~/.agents/skills`, binaries linked into
+  `~/.local/bin`): `start-project`, `project-task`, `cc-report`.
+- **[9] Cloud** — Cursor Cloud agents started from here. `n` picks a mkpanes repo and a
+  prompt (clones that repo's git remote on a Cursor VM, no PR). `s` sends a follow-up,
+  `x` cancels the latest run, `o` opens the agent in the browser.
+- **[7] Todos** — simple local list for things without a ticket or branch, stored in
+  `dirs.config/todos.json`. `a` adds, `space`/`enter` toggles done,
   `x` deletes (with confirm). Pending items sort above completed ones.
 
 ## Keys
@@ -51,7 +150,18 @@ Best run as a dedicated tmux window.
 | `r` | refresh all data |
 | `o` | open selected row's MR in browser |
 | `t` | open selected row's Jira ticket in browser |
-| `q` | quit |
+| `ctrl+c` | quit |
+
+In any agent chat, `/skill-name args` invokes an installed skill explicitly (the
+specialist is told to read that `SKILL.md` and follow it with the given arguments);
+`/skills` lists what is installed (`dirs.skills`, Cursor plugin skills, and this repo's
+`skills/`). A message that
+merely mentions `/skill-name` mid-sentence is sent as typed with a footnote pointing
+the agent at each referenced `SKILL.md`. A message that *is* an unknown `/name` is
+answered locally with suggestions and not sent. While typing, each `/name` token is
+coloured in place — yellow while it prefixes some skills, green once it resolves, red
+when nothing matches — and the box title shows `N matches` / `✓ /name` until you type
+a space. Paths like `/tmp/x` are ignored.
 
 ## Reading the dashboard
 
@@ -62,3 +172,22 @@ Best run as a dedicated tmux window.
 - **READY** — merge readiness of an open MR (`✓ ready`), or the blocker: `approval`,
   `threads` (unresolved discussions), `conflicts`, `rebase`, `ci`, `changes`, `draft`.
 - **TMUX** — `session:index` of the tmux window whose name matches the ticket/branch.
+
+## Layout
+
+```
+src/            TUI (OpenTUI/React), data layer, hub agents and their specs
+src/config.ts   config loader (defaults ← config.json ← env)
+skills/         first-party agent skills; `bun run skills sync` links them into ~/.agents/skills
+hooks/          agent-event.sh (Cursor/Claude hook → agents.jsonl) and example hook wiring
+scripts/        setup.ts (setup/doctor), skills.ts (skill manager)
+config.example.json, .env.example
+```
+
+State written at runtime lives only in `dirs.config` (default `~/.config/control-center`):
+`agents.jsonl` (hook feed), `inbox.jsonl` + `cursors.json` (durable specialist inbox),
+`todos.json`, `tui.log`. Nothing is written inside the repo.
+
+Personal constants baked into some skill docs (`skills/*/SKILL.md` "Known constants":
+Atlassian account ids, cloud id, GitLab group) are still the author's; adjust them when
+adopting the skills.
