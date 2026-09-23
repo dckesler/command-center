@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# Open a task tab (tmux window) inside a project's own tmux session, running
+# cursor-cli as a worker agent that reports to the project's central agent.
+#
+# Usage:
+#   project-task "<title>" "<what to do>"                          plain tab in the project dir
+#   project-task --repo <alias|path> --ticket <KEY> ["<task>"]     worktree tab for a Jira ticket
+#   project-task --repo <alias|path> --branch <name> "<title>" "<task>"
+#   project-task --repo <alias|path> "<title>" "<task>"            worktree tab, branch derived
+#   project-task --message "<title>" "<text>"                      type a reply into a task tab's agent
+#   project-task --list                                            list task tabs of the project
+#
+# Options:
+#   --project <name>  project directory name; default: the project owning $PWD or the tmux session
+#   --dir <subdir>    (plain tabs) working directory relative to the project root
+#   --repo <r>        code changes go here → the tab runs in a git WORKTREE of this repo
+#                     (mkpanes alias or path), created exactly like control center's worktrees:
+#                     <repo>_<branch> next to the repo, via mkpanes.
+#   --ticket <KEY>    Jira key; becomes the branch name (and the title if none given).
+#                     The worker starts with /start-ticket <KEY>.
+#   --branch <name>   explicit branch when there is no ticket. Default when --repo is given
+#                     without --ticket/--branch: <project>-<title-slug>.
+#   --from <base>     branch off <base> instead of the repo default (new branches only)
+#
+# Layout (mirrors mkpanes): pane 1 vim, pane 2 worker agent, panes 3-5 shells.
+#
+# Reporting chain: worker ──cc-report project:<name>──▶ central agent (window "central").
+
+set -euo pipefail
+
+# --- control-center config -------------------------------------------------
+# Values come from env, then $CC_CONFIG_DIR/config.json (see config.example.json
+# in the control-center repo), then the defaults here.
+CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/control-center}"
+cc_cfg() { # cc_cfg <jq path> <default>
+  local v=""
+  if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
+    v="$(jq -r "$1 // empty" "$CC_CONFIG_DIR/config.json" 2>/dev/null || true)"
+  fi
+  v="${v:-$2}"
+  case "$v" in "~/"*) v="$HOME/${v#\~/}" ;; '$HOME/'*) v="$HOME/${v#\$HOME/}" ;; esac
+  printf '%s' "$v"
+}
+PROJECTS_DIR="${CC_PROJECTS_DIR:-$(cc_cfg .dirs.projects "$HOME/projects")}"
+MKPANES="${MKPANES_BIN:-$(cc_cfg .commands.mkpanes "$HOME/.local/bin/mkpanes")}"
+AGENT_CMD="${CC_AGENT_CMD:-$(cc_cfg .commands.agent cursor-cli)}"
+EDITOR_CMD="$(cc_cfg .commands.editor vim)"
+PROJECT=""
+SUBDIR=""
+REPO=""
+TICKET=""
+BRANCH=""
+FROM=""
+ACTION="open"
+ARGS=()
+
+usage() {
+  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' >&2
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --project) PROJECT="${2:-}"; shift 2 ;;
+    --dir) SUBDIR="${2:-}"; shift 2 ;;
+    --repo) REPO="${2:-}"; shift 2 ;;
+    --ticket) TICKET="${2:-}"; shift 2 ;;
+    --branch) BRANCH="${2:-}"; shift 2 ;;
+    --from) FROM="${2:-}"; shift 2 ;;
+    --message) ACTION="message"; shift ;;
+    --list) ACTION="list"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+TMUX_BIN="$(command -v tmux || true)"
+if [ -z "$TMUX_BIN" ]; then
+  for c in /opt/homebrew/bin/tmux /usr/local/bin/tmux; do [ -x "$c" ] && TMUX_BIN="$c" && break; done
+fi
+[ -n "$TMUX_BIN" ] || { echo "project-task: tmux not found" >&2; exit 1; }
+
+slugify() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//'
+}
+
+# Resolve the project from --project, cwd, or the tmux session.
+PROJ_REAL="$(cd "$PROJECTS_DIR" 2>/dev/null && pwd -P || printf '%s' "$PROJECTS_DIR")"
+if [ -z "$PROJECT" ]; then
+  CWD="$(pwd -P)"
+  case "$CWD" in
+    "$PROJECTS_DIR"/*) PROJECT="${CWD#"$PROJECTS_DIR"/}"; PROJECT="${PROJECT%%/*}" ;;
+    "$PROJ_REAL"/*) PROJECT="${CWD#"$PROJ_REAL"/}"; PROJECT="${PROJECT%%/*}" ;;
+  esac
+fi
+if [ -z "$PROJECT" ] && [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
+  S="$("$TMUX_BIN" display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)"
+  [ -n "$S" ] && [ -d "$PROJECTS_DIR/$S" ] && PROJECT="$S"
+fi
+if [ -z "$PROJECT" ]; then
+  echo "project-task: cannot tell which project this is — pass --project <name>" >&2
+  exit 1
+fi
+
+DIR="$PROJECTS_DIR/$PROJECT"
+[ -d "$DIR" ] || { echo "project-task: no project directory $DIR" >&2; exit 1; }
+SESSION="$(printf '%s' "$PROJECT" | tr ':.' '--')"
+if ! "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
+  echo "project-task: project session \"$SESSION\" is not running — run: start-project $PROJECT" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# --list
+
+if [ "$ACTION" = "list" ]; then
+  "$TMUX_BIN" list-windows -t "=$SESSION" -F '#{window_index}|#{window_name}|#{@cc_role}|#{pane_current_path}' \
+    | while IFS='|' read -r idx name role path; do
+        [ "$name" = "central" ] && continue
+        echo "$idx: $name  [$path]"
+      done
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# --message "<title>" "<text>"
+
+if [ "$ACTION" = "message" ]; then
+  TITLE="${ARGS[0]:-}"
+  TEXT="${ARGS[1]:-}"
+  [ -n "$TITLE" ] && [ -n "$TEXT" ] || { echo "usage: project-task --message \"<title>\" \"<text>\"" >&2; exit 1; }
+  PANE="$("$TMUX_BIN" show-option -wqv -t "=$SESSION:$TITLE" @agent_pane 2>/dev/null || true)"
+  [ -n "$PANE" ] || { echo "project-task: no task tab named \"$TITLE\" in $SESSION (see --list)" >&2; exit 1; }
+  "$TMUX_BIN" send-keys -t "$PANE" -l "$TEXT"
+  "$TMUX_BIN" send-keys -t "$PANE" Enter
+  echo "sent to $TITLE: $TEXT"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# open
+
+TITLE="${ARGS[0]:-}"
+TASK="${ARGS[1]:-}"
+
+if [ -n "$TICKET" ]; then
+  if ! printf '%s' "$TICKET" | grep -Eq '^[A-Z][A-Z0-9]+-[0-9]+$'; then
+    echo "project-task: --ticket must be a Jira key like LW-17124 (got \"$TICKET\")" >&2
+    exit 1
+  fi
+  [ -n "$REPO" ] || { echo "project-task: --ticket needs --repo <alias|path> (ticket work happens in a worktree)" >&2; exit 1; }
+  # With a ticket the single positional is the task description; title defaults to the key.
+  if [ -z "$TASK" ] && [ -n "$TITLE" ] && ! printf '%s' "$TITLE" | grep -Eq '^[A-Z][A-Z0-9]+-[0-9]+'; then
+    TASK="$TITLE"; TITLE=""
+  fi
+  [ -n "$TITLE" ] || TITLE="$TICKET"
+  [ -n "$TASK" ] || TASK="Work Jira ticket $TICKET to completion."
+fi
+
+if [ -z "$TITLE" ] || [ -z "$TASK" ]; then
+  usage
+  exit 1
+fi
+TITLE="$(printf '%s' "$TITLE" | tr ':.' '--' | cut -c1-40)"
+[ "$TITLE" != "central" ] || { echo "project-task: \"central\" is the central agent's window" >&2; exit 1; }
+
+if "$TMUX_BIN" list-windows -t "=$SESSION" -F '#{window_name}' | grep -qx -- "$TITLE"; then
+  echo "project-task: a tab named \"$TITLE\" already exists in $SESSION — pick another title or use --message" >&2
+  exit 1
+fi
+
+mkdir -p "$DIR/.cc/tasks"
+SLUG="$(slugify "$TITLE")"
+PROMPT_FILE="$DIR/.cc/tasks/$SLUG.txt"
+
+REPORT_RULE="Reporting upward: your manager is the project's central agent (not Control Center). Use the cc-report skill. Run now: cc-report project:$PROJECT \"$TITLE: started\" — then again after real progress, when blocked or when you need a decision (--severity attention), and when done. One line, lead with \"$TITLE:\". Do not report every step. Replies from the central agent or Daniel arrive in this chat as normal messages."
+
+# ---------------------------------------------------------------------------
+# worktree tab (code changes) — delegated to mkpanes so it matches control center
+
+if [ -n "$REPO" ]; then
+  [ -x "$MKPANES" ] || { echo "project-task: mkpanes not found at $MKPANES" >&2; exit 1; }
+  if [ -z "$BRANCH" ]; then
+    if [ -n "$TICKET" ]; then
+      BRANCH="$TICKET"
+    else
+      BRANCH="$(slugify "$PROJECT")-$SLUG"
+    fi
+  fi
+  if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1 || printf '%s' "$BRANCH" | grep -q '/'; then
+    echo "project-task: \"$BRANCH\" is not usable as a worktree branch (no slashes; see git check-ref-format)" >&2
+    exit 1
+  fi
+
+  if [ -n "$TICKET" ]; then
+    TICKET_STEPS="This task is Jira ticket $TICKET on branch $TICKET. Begin with the start-ticket skill (the equivalent of /start-ticket $TICKET): fetch and format the ticket, assign it to Daniel, set it In Progress, investigate, and present a plan — implement only after Daniel approves in this chat. When implementation is complete, use the push-branch skill to open the MR and babysit-branch to watch CI and review comments. Report to the central agent at these points: started, plan ready for approval (--severity attention), MR opened (include the MR link), pipeline green or red, review comments needing decisions, done."
+  else
+    TICKET_STEPS="This task has no Jira ticket. You are on branch $BRANCH. Commit as you go with clear messages. When the work is done, report with --severity attention asking whether to open an MR (push-branch skill) or whether a ticket should be created first (jira-ticket skill) — do not push without that answer."
+  fi
+
+  cat > "$PROMPT_FILE" <<EOF
+You are a worker agent for the project "$PROJECT" ($DIR), in the task tab "$TITLE". You are in a dedicated git worktree of the $REPO repo — this checkout is yours; never edit the main $REPO checkout or another worktree.
+
+Task: $TASK
+
+$TICKET_STEPS
+
+Context: read $DIR/PROJECT.md first (Goal, Current state, Next steps). Do not edit PROJECT.md — the project's central agent owns it; report to it instead and it will fold your results in.
+
+$REPORT_RULE
+EOF
+
+  MK_ARGS=("$REPO" -w "$BRANCH" -s "$SESSION" --prompt-file "$PROMPT_FILE" --print-window-id)
+  [ -n "$TICKET" ] && MK_ARGS+=(-t "$TICKET")
+  [ -n "$FROM" ] && MK_ARGS+=(--from "$FROM")
+  # mkpanes honours MKPANES_AI_CMD; hand it the configured agent command.
+  WIN_ID="$(MKPANES_AI_CMD="$AGENT_CMD" "$MKPANES" "${MK_ARGS[@]}" | tail -n 1)"
+  if [ -z "$WIN_ID" ]; then
+    echo "project-task: mkpanes did not report a window id" >&2
+    exit 1
+  fi
+  WORKDIR="$("$TMUX_BIN" display-message -p -t "$WIN_ID" '#{pane_current_path}')"
+  # Keep the ticket key/branch in the tab name so the worktrees tab can match it.
+  case "$TITLE" in
+    *"$BRANCH"*) ;;
+    *) TITLE="$TITLE ($BRANCH)"; TITLE="$(printf '%s' "$TITLE" | cut -c1-48)" ;;
+  esac
+  "$TMUX_BIN" rename-window -t "$WIN_ID" "$TITLE"
+  KIND="worktree $(basename "$WORKDIR")"
+else
+  # -------------------------------------------------------------------------
+  # plain tab in the project directory
+
+  WORKDIR="$DIR"
+  if [ -n "$SUBDIR" ]; then
+    WORKDIR="$DIR/${SUBDIR#/}"
+    mkdir -p "$WORKDIR"
+  fi
+
+  cat > "$PROMPT_FILE" <<EOF
+You are a worker agent for the project "$PROJECT" ($DIR), in the task tab "$TITLE". Working directory: $WORKDIR.
+
+Task: $TASK
+
+Context: read PROJECT.md in the project root first (Goal, Current state, Next steps). Do not edit PROJECT.md — the project's central agent owns it; report to the central agent instead and it will fold your results in. If this task turns out to need code changes in a repo, stop and report that with --severity attention so the central agent can reopen it as a worktree tab (project-task --repo).
+
+$REPORT_RULE
+
+When the task is complete: send the final report, summarize in this chat, and stop.
+EOF
+
+  WIN_ID="$("$TMUX_BIN" new-window -P -F '#{window_id}' -t "=$SESSION:" -n "$TITLE" -c "$WORKDIR")"
+  "$TMUX_BIN" split-window -v -l 15% -t "$WIN_ID" -c "$WORKDIR"
+  "$TMUX_BIN" split-window -h -l 50% -t "$WIN_ID" -c "$WORKDIR"
+  "$TMUX_BIN" split-window -h -l 50% -t "$WIN_ID" -c "$WORKDIR"
+  "$TMUX_BIN" select-pane -t "$WIN_ID.1"
+  "$TMUX_BIN" split-window -h -l 50% -t "$WIN_ID.1" -c "$WORKDIR"
+  # send-keys types into an interactive zsh, so the cursor-cli alias resolves.
+  # AGENT_CMD: config commands.agent, or CC_AGENT_CMD (e.g. claude, or echo for tests).
+  "$TMUX_BIN" send-keys -t "$WIN_ID.2" "$AGENT_CMD \"\$(cat '$PROMPT_FILE')\"" Enter
+  "$TMUX_BIN" send-keys -t "$WIN_ID.1" "$EDITOR_CMD" Enter
+  KIND="project dir"
+fi
+
+AGENT_PANE="$("$TMUX_BIN" display-message -p -t "$WIN_ID.2" '#{pane_id}')"
+"$TMUX_BIN" set-option -w -t "$WIN_ID" @agent_pane "$AGENT_PANE"
+"$TMUX_BIN" set-option -w -t "$WIN_ID" @cc_role task
+"$TMUX_BIN" set-option -w -t "$WIN_ID" @cc_project "$PROJECT"
+"$TMUX_BIN" select-pane -t "$AGENT_PANE"
+
+# Opening a tab switches the session to it; return focus to the caller's window
+# when the central agent is the one delegating.
+if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
+  CUR="$("$TMUX_BIN" display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)"
+  [ "$CUR" = "$SESSION" ] && "$TMUX_BIN" last-window -t "=$SESSION" >/dev/null 2>&1 || true
+fi
+
+INDEX="$("$TMUX_BIN" display-message -p -t "$WIN_ID" '#{window_index}')"
+echo "task tab \"$TITLE\" opened in $SESSION:$INDEX ($KIND) — worker reports to project:$PROJECT"
+exit 0

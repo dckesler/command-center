@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+# Start or resume a ~/projects project in its own tmux session, shown in a new
+# Alacritty window, with cursor-cli running as the project's central agent.
+#
+# Usage:
+#   start-project <name | path> [--new | --resume] [--no-attach] [--goal "<text>"]
+#
+#   <name>        directory name under ~/projects (created if missing, slugified)
+#   <path>        an existing directory (must live under ~/projects)
+#   --new         force the "fill in the brief" opening prompt
+#   --resume      force the "summarize where we are" opening prompt
+#   --no-attach   create the session but do not open a terminal window
+#   --goal        one-paragraph goal written into a freshly created PROJECT.md
+#
+# Layout of the session's "central" window (mirrors mkpanes):
+#   pane 1 vim (top-left)   pane 2 central agent (top-right)   panes 3-5 shells (bottom)
+#
+# Reporting chain this sets up:
+#   task-tab workers ──cc-report project:<name>──▶ central agent (this window)
+#   central agent ────cc-report projects─────────▶ Control Center projects specialist
+#
+# Prints a one-line summary last; exits non-zero only when nothing could be started.
+
+set -euo pipefail
+
+# --- control-center config -------------------------------------------------
+# Values come from env, then $CC_CONFIG_DIR/config.json (see config.example.json
+# in the control-center repo), then the defaults here.
+CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/control-center}"
+cc_cfg() { # cc_cfg <jq path> <default>
+  local v=""
+  if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
+    v="$(jq -r "$1 // empty" "$CC_CONFIG_DIR/config.json" 2>/dev/null || true)"
+  fi
+  v="${v:-$2}"
+  case "$v" in "~/"*) v="$HOME/${v#\~/}" ;; '$HOME/'*) v="$HOME/${v#\$HOME/}" ;; esac
+  printf '%s' "$v"
+}
+PROJECTS_DIR="${CC_PROJECTS_DIR:-$(cc_cfg .dirs.projects "$HOME/projects")}"
+AGENT_CMD="${CC_AGENT_CMD:-$(cc_cfg .commands.agent cursor-cli)}"
+EDITOR_CMD="$(cc_cfg .commands.editor vim)"
+TERMINAL_APP="$(cc_cfg .commands.terminal alacritty)"
+RESERVED="control-center command-center node_modules"
+MODE="auto"
+ATTACH=1
+GOAL=""
+TARGET=""
+
+usage() {
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' >&2
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --new) MODE="new"; shift ;;
+    --resume) MODE="resume"; shift ;;
+    --no-attach) ATTACH=0; shift ;;
+    --goal) GOAL="${2:-}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      if [ -z "$TARGET" ]; then TARGET="$1"; else TARGET="$TARGET $1"; fi
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$TARGET" ]; then
+  usage
+  exit 1
+fi
+
+slugify() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^[-.]+//; s/[-.]+$//' | cut -c1-64
+}
+
+# Resolve the project directory.
+if [ -d "$TARGET" ]; then
+  DIR="$(cd "$TARGET" && pwd -P)"
+  NAME="$(basename "$DIR")"
+  PROJ_REAL="$(cd "$PROJECTS_DIR" 2>/dev/null && pwd -P || printf '%s' "$PROJECTS_DIR")"
+  case "$DIR" in
+    "$PROJ_REAL"/*|"$PROJECTS_DIR"/*) ;;
+    *) echo "start-project: $DIR is not under $PROJECTS_DIR" >&2; exit 1 ;;
+  esac
+else
+  NAME="$(slugify "$TARGET")"
+  if [ -z "$NAME" ]; then
+    echo "start-project: project name is empty after cleanup" >&2
+    exit 1
+  fi
+  DIR="$PROJECTS_DIR/$NAME"
+fi
+
+for r in $RESERVED; do
+  if [ "$NAME" = "$r" ]; then
+    echo "start-project: \"$NAME\" is reserved" >&2
+    exit 1
+  fi
+done
+
+CREATED_DIR=0
+if [ ! -d "$DIR" ]; then
+  mkdir -p "$DIR"
+  CREATED_DIR=1
+fi
+mkdir -p "$DIR/.cc"
+
+# PROJECT.md brief (same template as the control center's src/data/projects.ts).
+TODAY="$(date +%Y-%m-%d)"
+CREATED_BRIEF=0
+if [ ! -f "$DIR/PROJECT.md" ]; then
+  GOAL_LINE="${GOAL:-_What this project is for, in one paragraph._}"
+  cat > "$DIR/PROJECT.md" <<EOF
+# $NAME
+
+**Status:** active
+**Updated:** $TODAY
+
+## Goal
+
+$GOAL_LINE
+
+## Current state
+
+_Where things are right now. Keep this current — it is what the control center shows._
+
+## Next steps
+
+- [ ] Define the first concrete step
+
+## Log
+
+- $TODAY: project created
+EOF
+  CREATED_BRIEF=1
+fi
+
+if [ "$MODE" = "auto" ]; then
+  if [ "$CREATED_BRIEF" = "1" ]; then MODE="new"; else MODE="resume"; fi
+fi
+
+SESSION="$(printf '%s' "$NAME" | tr ':.' '--')"
+TMUX_BIN="$(command -v tmux || true)"
+if [ -z "$TMUX_BIN" ]; then
+  for c in /opt/homebrew/bin/tmux /usr/local/bin/tmux; do [ -x "$c" ] && TMUX_BIN="$c" && break; done
+fi
+if [ -z "$TMUX_BIN" ]; then
+  echo "start-project: tmux not found" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# central agent prompt (written to .cc so it can be inspected or tweaked)
+
+if [ "$MODE" = "new" ]; then
+  OPENING="PROJECT.md was just created from the template. Start by asking me what this project is for, then fill in Goal, Current state, and the first Next steps."
+else
+  OPENING="Start by reading PROJECT.md, skimming the directory, and running: tail -n 20 .cc/inbox.jsonl (worker reports that arrived while you were down). Then give me a short summary of where things are and propose the next step."
+fi
+
+PROMPT_FILE="$DIR/.cc/central-prompt.txt"
+cat > "$PROMPT_FILE" <<EOF
+You are the central agent for the project "$NAME" in $DIR. This tmux window ("central") is yours; you own PROJECT.md.
+
+PROJECT.md is the project's source of truth: Goal, Current state, Next steps (checkbox list), and a dated Log. $OPENING
+
+Keep PROJECT.md current as we work: update Current state, tick finished Next steps and add new ones, append a dated Log line per session or milestone, and bump the Updated date.
+
+Delegating: when a piece of work can run on its own (research, a draft, a spike, a review), open a task tab for it with the project-task skill: run: project-task "<short title>" "<what to do, and what done looks like>". One task per tab. Workers read PROJECT.md but do not edit it; they report to you.
+
+Code changes always go in a worktree, never in a repo's main checkout and never in this project directory: project-task --repo <mkpanes alias or path> --ticket <JIRA-KEY> "<task>" when there is a ticket (the worker runs /start-ticket, branch = the key), or project-task --repo <repo> --branch <unique-name> "<title>" "<task>" without one (default branch name: $NAME-<title-slug>). This creates <repo>_<branch> next to the repo exactly like Control Center's worktrees tab, so the work also shows up there. If Daniel names a ticket or a repo, that is a worktree tab.
+
+Incoming reports: worker updates arrive in this chat as lines like "[report HH:MM] (severity) <tab>: <text>" and are also appended to .cc/inbox.jsonl. Treat them as information: fold them into PROJECT.md, reply to the worker with the project-task skill's message step only if it asked something, and pass anything Daniel needs upward.
+
+Reporting upward: you report to Control Center's projects specialist with the cc-report skill. Run now: cc-report projects "$NAME: session started" — then again after real progress, when a worker finishes or is blocked, when a decision is needed, or when Daniel is needed (--severity attention). One line, lead with "$NAME:". Do not report every step.
+EOF
+
+# ---------------------------------------------------------------------------
+# tmux session + panes
+
+STARTED=0
+if ! "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
+  "$TMUX_BIN" new-session -d -s "$SESSION" -n central -c "$DIR"
+  WIN="=$SESSION:central"
+  WIN_ID="$("$TMUX_BIN" display-message -p -t "$WIN" '#{window_id}')"
+
+  # Bottom row 15%, split into 3; top row split 50/50 (same as mkpanes).
+  "$TMUX_BIN" split-window -v -l 15% -t "$WIN_ID" -c "$DIR"
+  "$TMUX_BIN" split-window -h -l 50% -t "$WIN_ID" -c "$DIR"
+  "$TMUX_BIN" split-window -h -l 50% -t "$WIN_ID" -c "$DIR"
+  "$TMUX_BIN" select-pane -t "$WIN_ID.1"
+  "$TMUX_BIN" split-window -h -l 50% -t "$WIN_ID.1" -c "$DIR"
+
+  AGENT_PANE="$("$TMUX_BIN" display-message -p -t "$WIN_ID.2" '#{pane_id}')"
+  # cc-report project:<name> finds the central agent through this option.
+  "$TMUX_BIN" set-option -w -t "$WIN_ID" @agent_pane "$AGENT_PANE"
+  "$TMUX_BIN" set-option -w -t "$WIN_ID" @cc_role central
+
+  # send-keys types into an interactive zsh, so the cursor-cli alias resolves.
+  # AGENT_CMD: config commands.agent, or CC_AGENT_CMD (e.g. claude, or echo for tests).
+  "$TMUX_BIN" send-keys -t "$AGENT_PANE" "$AGENT_CMD \"\$(cat '$PROMPT_FILE')\"" Enter
+  "$TMUX_BIN" send-keys -t "$WIN_ID.1" "$EDITOR_CMD PROJECT.md" Enter
+  "$TMUX_BIN" select-pane -t "$AGENT_PANE"
+  STARTED=1
+fi
+
+# ---------------------------------------------------------------------------
+# show it in its own terminal window
+
+RESULT=""
+if [ "$ATTACH" = "1" ]; then
+  if [ -n "$("$TMUX_BIN" list-clients -t "=$SESSION" 2>/dev/null)" ]; then
+    RESULT="$NAME is already open in its own window"
+  else
+    OPENED=0
+    # commands.terminal: alacritty (IPC into the running instance, else a fresh
+    # one), terminal (macOS Terminal.app), none (just leave the session detached).
+    case "$TERMINAL_APP" in
+      alacritty)
+        if command -v alacritty >/dev/null 2>&1 \
+           && alacritty msg create-window -T "$NAME" -e "$TMUX_BIN" attach-session -t "=$SESSION" >/dev/null 2>&1; then
+          OPENED=1
+        elif open -na Alacritty --args -T "$NAME" -e "$TMUX_BIN" attach-session -t "=$SESSION" >/dev/null 2>&1; then
+          OPENED=1
+        fi
+        ;;
+    esac
+    if [ "$OPENED" = "0" ] && [ "$TERMINAL_APP" != "none" ] \
+       && osascript -e "tell application \"Terminal\" to do script \"'$TMUX_BIN' attach-session -t '=$SESSION'\"" >/dev/null 2>&1; then
+      OPENED=1
+    fi
+    if [ "$TERMINAL_APP" = "none" ]; then
+      RESULT="session $SESSION ready — attach with: tmux attach -t =$SESSION"
+    elif [ "$OPENED" = "1" ]; then
+      if [ "$STARTED" = "1" ]; then
+        RESULT="$([ "$MODE" = "new" ] && echo started || echo resumed) $NAME in a new window"
+      else
+        RESULT="re-opened $NAME in a new window"
+      fi
+    else
+      RESULT="session $SESSION is running but no terminal window could be opened (attach with: tmux attach -t =$SESSION)"
+    fi
+  fi
+else
+  RESULT="session $SESSION ready (not attached)"
+fi
+
+[ "$CREATED_DIR" = "1" ] && RESULT="created $DIR; $RESULT"
+echo "$RESULT"
+exit 0

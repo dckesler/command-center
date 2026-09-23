@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# Report upward in the Control Center hierarchy.
+#
+#   worker tab  ──cc-report project:<name>──▶  project central agent
+#   central agent ──cc-report projects──────▶  Control Center projects specialist
+#   ticket agent  ──cc-report worktrees/qa──▶  Control Center worktrees/qa specialist
+#
+# Usage:
+#   cc-report [target] [--severity info|warn|attention] <summary>
+#
+# Targets:
+#   worktrees | qa | tickets | epics | projects | todos | email | cloud | central
+#       → appended to Control Center's agent feed (~/.config/control-center/agents.jsonl);
+#         the TUI wakes that specialist.
+#   project:<name>
+#       → appended to ~/projects/<name>/.cc/inbox.jsonl and typed into the project's
+#         central agent pane as a "[report] ..." line so it wakes up.
+#
+# Default target when omitted:
+#   - inside a project's tmux session, in a window other than "central" → project:<name>
+#     (by session, so worktree task tabs under ~/code still reach the central agent)
+#   - in a project's "central" window, or cwd under ~/projects          → projects
+#   - cwd contains _qa_                                                → qa
+#   - otherwise                                                        → worktrees
+#
+# Always exits 0 so a logging failure can never block an agent.
+
+set -uo pipefail
+
+TABS="worktrees qa tickets epics projects todos email cloud central"
+# --- control-center config -------------------------------------------------
+# Values come from env, then $CC_CONFIG_DIR/config.json (see config.example.json
+# in the control-center repo), then the defaults here.
+CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/control-center}"
+cc_cfg() { # cc_cfg <jq path> <default>
+  local v=""
+  if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
+    v="$(jq -r "$1 // empty" "$CC_CONFIG_DIR/config.json" 2>/dev/null || true)"
+  fi
+  v="${v:-$2}"
+  case "$v" in "~/"*) v="$HOME/${v#\~/}" ;; '$HOME/'*) v="$HOME/${v#\$HOME/}" ;; esac
+  printf '%s' "$v"
+}
+FEED_DIR="$CC_CONFIG_DIR"
+FEED="$FEED_DIR/agents.jsonl"
+PROJ_DIR="${CC_PROJECTS_DIR:-$(cc_cfg .dirs.projects "$HOME/projects")}"
+TEXT_MAX=160
+
+TARGET=""
+SEVERITY="info"
+SUMMARY=""
+
+usage() {
+  echo "usage: cc-report [target] [--severity info|warn|attention] <summary>" >&2
+  echo "  target: $TABS | project:<name>" >&2
+  echo "  default: project:<name> from a project task tab; projects from a project's central window;" >&2
+  echo "           qa if cwd has _qa_; otherwise worktrees" >&2
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "cc-report: jq is required" >&2
+  exit 0
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --severity)
+      SEVERITY="${2:-}"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    worktrees|qa|tickets|epics|projects|todos|email|cloud|central|project:*)
+      if [ -z "$TARGET" ]; then
+        TARGET="$1"
+      else
+        SUMMARY="${SUMMARY:+$SUMMARY }$1"
+      fi
+      shift
+      ;;
+    *)
+      SUMMARY="${SUMMARY:+$SUMMARY }$1"
+      shift
+      ;;
+  esac
+done
+
+SUMMARY="$(printf '%s' "$SUMMARY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[[:space:]][[:space:]]*/ /g')"
+if [ -z "$SUMMARY" ]; then
+  usage
+  exit 0
+fi
+if [ "${#SUMMARY}" -gt "$TEXT_MAX" ]; then
+  SUMMARY="${SUMMARY:0:$TEXT_MAX}"
+fi
+
+case "$SEVERITY" in
+  info|warn|attention) ;;
+  *) SEVERITY="info" ;;
+esac
+
+DIR="$(pwd -P 2>/dev/null || pwd)"
+# pwd -P resolves symlinks (macOS /var → /private/var); compare both forms.
+PROJ_REAL="$(cd "$PROJ_DIR" 2>/dev/null && pwd -P || printf '%s' "$PROJ_DIR")"
+
+# Project this cwd belongs to (directory name), if any.
+PROJECT_OF_CWD=""
+case "$DIR" in
+  "$PROJ_DIR"/*) PROJECT_OF_CWD="${DIR#"$PROJ_DIR"/}"; PROJECT_OF_CWD="${PROJECT_OF_CWD%%/*}" ;;
+  "$PROJ_REAL"/*) PROJECT_OF_CWD="${DIR#"$PROJ_REAL"/}"; PROJECT_OF_CWD="${PROJECT_OF_CWD%%/*}" ;;
+esac
+
+# tmux session/window of the caller's own pane (empty outside tmux). Target the
+# pane explicitly: without -t, display-message describes the session's active
+# window, which may be a different tab.
+TMUX_SESSION=""
+TMUX_WINDOW=""
+if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
+  TMUX_SESSION="$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)"
+  TMUX_WINDOW="$(tmux display-message -p -t "$TMUX_PANE" '#W' 2>/dev/null || true)"
+fi
+
+session_name() { printf '%s' "$1" | tr ':.' '--'; }
+
+# Project whose tmux session the caller is in (task tabs may run in a repo
+# worktree far from ~/projects, so the session decides, not the cwd).
+PROJECT_OF_SESSION=""
+if [ -n "$TMUX_SESSION" ] && [ -d "$PROJ_DIR/$TMUX_SESSION" ]; then
+  PROJECT_OF_SESSION="$TMUX_SESSION"
+elif [ -n "$TMUX_SESSION" ] && [ -n "$PROJECT_OF_CWD" ] && [ "$TMUX_SESSION" = "$(session_name "$PROJECT_OF_CWD")" ]; then
+  PROJECT_OF_SESSION="$PROJECT_OF_CWD"
+fi
+
+if [ -z "$TARGET" ]; then
+  if [ -n "$PROJECT_OF_SESSION" ] && [ "$TMUX_WINDOW" != "central" ]; then
+    TARGET="project:$PROJECT_OF_SESSION"
+  elif [ -n "$PROJECT_OF_SESSION" ] || [ -n "$PROJECT_OF_CWD" ]; then
+    TARGET="projects"
+  else
+    case "$DIR" in
+      *_qa_*) TARGET="qa" ;;
+      *) TARGET="worktrees" ;;
+    esac
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# project:<name> → project inbox + nudge the central agent pane
+
+if [ "${TARGET#project:}" != "$TARGET" ]; then
+  NAME="${TARGET#project:}"
+  PDIR="$PROJ_DIR/$NAME"
+  if [ ! -d "$PDIR" ]; then
+    echo "cc-report: no project directory $PDIR" >&2
+    exit 0
+  fi
+  FROM="${TMUX_WINDOW:-$(basename "$DIR")}"
+  mkdir -p "$PDIR/.cc" 2>/dev/null || exit 0
+  LINE="$(jq -nc --arg from "$FROM" --arg severity "$SEVERITY" --arg text "$SUMMARY" --arg dir "$DIR" \
+    '{ts: (now | todate), from: $from, severity: $severity, text: $text, dir: $dir}' 2>/dev/null)" || exit 0
+  [ -n "$LINE" ] && printf '%s\n' "$LINE" >> "$PDIR/.cc/inbox.jsonl"
+  if [ -f "$PDIR/.cc/inbox.jsonl" ] && [ "$(wc -l < "$PDIR/.cc/inbox.jsonl" 2>/dev/null || echo 0)" -gt 2000 ]; then
+    tail -n 1000 "$PDIR/.cc/inbox.jsonl" > "$PDIR/.cc/inbox.tmp" 2>/dev/null && mv "$PDIR/.cc/inbox.tmp" "$PDIR/.cc/inbox.jsonl"
+  fi
+
+  NUDGED="no central agent running (saved to .cc/inbox.jsonl)"
+  if command -v tmux >/dev/null 2>&1; then
+    SESSION="$(session_name "$NAME")"
+    PANE="$(tmux show-option -wqv -t "=$SESSION:central" @agent_pane 2>/dev/null || true)"
+    if [ -n "$PANE" ]; then
+      # Only type into the pane while an agent owns it; at a bare shell the
+      # line would run as a command.
+      RUNNING="$(tmux display-message -p -t "$PANE" '#{pane_current_command}' 2>/dev/null || true)"
+      case "$RUNNING" in
+        ""|zsh|bash|sh|fish|-zsh|-bash) ;;
+        *)
+          STAMP="$(date +%H:%M)"
+          if tmux send-keys -t "$PANE" -l "[report $STAMP] ($SEVERITY) $FROM: $SUMMARY" 2>/dev/null \
+             && tmux send-keys -t "$PANE" Enter 2>/dev/null; then
+            NUDGED="central agent nudged"
+          fi
+          ;;
+      esac
+    fi
+  fi
+  echo "reported to project $NAME ($SEVERITY) from $FROM: $SUMMARY — $NUDGED"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Control Center tab → agent feed
+
+mkdir -p "$FEED_DIR" 2>/dev/null || exit 0
+
+LINE="$(jq -nc \
+  --arg source "cc-report" \
+  --arg dir "$DIR" \
+  --arg to "$TARGET" \
+  --arg severity "$SEVERITY" \
+  --arg text "$SUMMARY" \
+  '{
+    ts: (now | todate),
+    source: $source,
+    dir: $dir,
+    session: "",
+    event: "report",
+    to: $to,
+    severity: $severity,
+    text: $text
+  }' 2>/dev/null)" || exit 0
+
+[ -n "$LINE" ] || exit 0
+printf '%s\n' "$LINE" >> "$FEED"
+
+if [ -f "$FEED" ] && [ "$(wc -l < "$FEED" 2>/dev/null || echo 0)" -gt 4000 ]; then
+  tail -n 2000 "$FEED" > "$FEED.tmp" 2>/dev/null && mv "$FEED.tmp" "$FEED"
+fi
+
+echo "reported to $TARGET ($SEVERITY): $SUMMARY"
+exit 0
