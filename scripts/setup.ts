@@ -142,6 +142,6 @@ for (const v of ["JIRA_EMAIL", "JIRA_API_TOKEN"]) (process.env[v] ? ok : warn)(`
 const m365 = which("m365") ? spawnSync("m365", ["status", "--output", "text"], { encoding: "utf8", timeout: 15000 }) : null
 if (m365) {
   m365.stdout.includes("Logged out") || !m365.stdout.trim()
-    ? warn("m365 is logged out — Email tab needs: m365 login --authType deviceCode (requires admin-consented Mail.Read/Mail.Send/Calendars.Read)")
+    ? warn("m365 is logged out — Email tab needs: m365 login --authType deviceCode (requires admin-consented Mail.Read + Calendars.Read)")
     : ok("m365 logged in")
 }

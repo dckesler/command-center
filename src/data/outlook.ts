@@ -1,8 +1,9 @@
 import { run } from "./exec.ts"
 
 /**
- * Outlook mail via the CLI for Microsoft 365 (`m365`). Requires a completed
- * `m365 login` (device code) with Mail.Read / Mail.Send delegated permissions.
+ * Outlook mail via the CLI for Microsoft 365 (`m365`), read-only. Requires a
+ * completed `m365 login` (device code) with the Mail.Read delegated permission.
+ * There is deliberately no send path — the app registration has no Mail.Send.
  */
 
 export interface EmailMessage {
@@ -95,15 +96,4 @@ export async function getMessageBody(id: string): Promise<string | null> {
   } catch {
     return null
   }
-}
-
-export async function sendMail(to: string, subject: string, body: string): Promise<{ ok: boolean; message: string }> {
-  const res = await run(
-    "m365",
-    ["outlook", "mail", "send", "--to", to, "--subject", subject, "--bodyContents", body],
-    { timeoutMs: 60_000 },
-  )
-  return res.ok
-    ? { ok: true, message: `sent to ${to}` }
-    : { ok: false, message: `send failed: ${res.stderr.trim().slice(0, 300)}` }
 }

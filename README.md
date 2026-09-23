@@ -53,12 +53,23 @@ bun start
 
 ### Email / Calendar tabs and Microsoft 365
 
-`src/data/outlook.ts` (mail) and `src/data/calendar.ts` (calendar, read-only) go through
-the CLI for Microsoft 365 (`m365`), which holds a delegated OAuth token obtained with
-`m365 login --authType deviceCode`. The token cache and the app registration it uses live
-in `~/.config/configstore/` (`cli-m365-config.json` holds `clientId` / `tenantId`).
-Required Graph permissions (delegated, admin-consented): `Mail.Read`, `Mail.Send`,
-`Calendars.Read`. Nothing in this repo stores or reads the token directly.
+`src/data/outlook.ts` (mail) and `src/data/calendar.ts` (calendar) go through the CLI
+for Microsoft 365 (`m365`), which holds a delegated OAuth token obtained with
+`m365 login --authType deviceCode`. Both are **read-only**: there is no code path that
+sends mail or writes to the calendar. The token cache and the app registration it uses
+live in `~/.config/configstore/` (`cli-m365-config.json` holds `clientId` / `tenantId`).
+Nothing in this repo stores or reads the token directly.
+
+Delegated Graph permissions the app registration needs (admin-consented):
+
+| Permission | Used by | Graph calls |
+|---|---|---|
+| `User.Read` | sign-in (default permission on every app registration) | — |
+| `Mail.Read` | Email tab: inbox list with `bodyPreview`, full message body on demand | `GET /me/mailFolders/inbox/messages`, `GET /me/messages/{id}` |
+| `Calendars.Read` | Calendar tab: today's events, event detail | `GET /me/calendarView`, `GET /me/events/{id}` |
+
+`Mail.ReadBasic` is not enough (it omits `bodyPreview`/`body`). `Mail.Send`,
+`Calendars.ReadWrite` and any application (app-only) permissions are not needed.
 
 ## Configuration reference (`config.json`)
 

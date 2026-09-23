@@ -13,7 +13,7 @@ import {
   type CloudAgent,
 } from "../data/cloud.ts"
 import { run } from "../data/exec.ts"
-import { getMessageBody, sendMail, type EmailMessage } from "../data/outlook.ts"
+import { getMessageBody, type EmailMessage } from "../data/outlook.ts"
 import { dayBounds, fmtEvent, getEventDetail, getEvents, type CalendarEvent } from "../data/calendar.ts"
 import { applyTransition, getEpicChildren, getTicketsByKeys, getTransitions, prepTicket } from "../data/jira.ts"
 import {
@@ -796,9 +796,8 @@ const email: TabAgentSpec = {
   title: "email",
   rolePrompt:
     `You are the email specialist of a development command center. Scope: ${USER}'s Outlook work inbox (recent messages). ` +
-    "You can list the inbox, fetch full message bodies, and send mail. " +
-    `Sending is serious: only use send_mail when ${USER} explicitly asked you to send something, and always show him the ` +
-    "exact to/subject/body in this chat and get his confirmation first. Never send on your own initiative. " +
+    "You can list the inbox and fetch full message bodies. This is read-only: you cannot send, reply, move or delete mail — " +
+    `when ${USER} wants to reply, draft the text in chat for him to paste into Outlook (o opens the message there). ` +
     "Report genuinely important-looking unread mail to central (severity attention only for truly urgent items). " +
     REPLY_STYLE +
     " " +
@@ -825,20 +824,6 @@ const email: TabAgentSpec = {
         description: "Fetch the full plain-text body of one message (id from list_inbox).",
         inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         execute: async (args) => (await getMessageBody(str(args.id))) ?? "could not fetch message",
-      },
-      send_mail: {
-        description:
-          `Send an email from ${USER}'s account. Only after ${USER} explicitly approved the exact to/subject/body in chat.`,
-        inputSchema: {
-          type: "object",
-          properties: {
-            to: { type: "string", description: "recipient email address(es), comma separated" },
-            subject: { type: "string" },
-            body: { type: "string", description: "plain-text body" },
-          },
-          required: ["to", "subject", "body"],
-        },
-        execute: async (args) => (await sendMail(str(args.to), str(args.subject), str(args.body))).message,
       },
     }
   },
