@@ -1,5 +1,11 @@
 # Ticket Description Templates
 
+Human-facing sections come first (Branch Id through Test Cases). Implementation Details is last and is written for agents.
+
+**Test Plan** is required at ticket creation. It must show the work is testable: prerequisites, the flow that proves each AC, and what automated tests will be written.
+
+**Test Cases** are the steps a QA engineer runs once the MR is ready to verify. This is the same section as "QA Testing Steps" / "QA Steps" — always use the heading `## Test Cases`. Do not add a second QA section.
+
 ## Standard Ticket (Feature / Refactor / Chore / Maintenance)
 
 ```
@@ -11,7 +17,31 @@
 
 {Clear, concise statement of the intended outcome in paragraph form}
 
-## Technical Details
+## Acceptance Criteria:
+
+{Clear description of what must be true for this ticket to be considered done. Paragraph form or bulleted list.}
+
+- {Criterion 1}
+- {Criterion 2}
+
+## Test Plan
+
+**Prerequisites:** {What is needed before testing can begin — hardware (e.g. specific device, sensor, peripheral), other software, environment state, test data, or accounts. "None" if not applicable.}
+
+**How to verify:** {The testing flow that proves each acceptance criterion can be tested — navigate to X, perform Y, confirm Z. One flow per AC if they differ. Written at ticket creation, before coding.}
+
+**Automated tests:** {Unit or integration tests to be written — or "None"}
+
+## Test Cases
+
+{Steps a QA engineer runs once the MR is ready. Concrete navigation and checks, including at least one regression check when a nearby flow could break. Not a restatement of the ACs.}
+
+- {Navigate to ...}
+- {Perform the action that exercises the change}
+- {Confirm the expected result}
+- {Regression: related flow still works — or write "None"}
+
+## Implementation Details
 
 **Repo:** {repository_name}
 
@@ -29,25 +59,15 @@
 - {Bullet point if applicable}
 - {Or write "None"}
 
-## Acceptance Criteria:
+**Agent implementation instructions:**
 
-{Clear description of what must be true for this ticket to be considered done. Paragraph form or bulleted list.}
-
-- {Criterion 1}
-- {Criterion 2}
-
-## Test Plan
-
-**Prerequisites:** {What is needed before testing can begin — hardware (e.g. specific device, sensor, peripheral), other software, environment state, test data, or accounts. "None" if not applicable.}
-
-**How to verify:** {The testing flow that proves each acceptance criterion is met — navigate to X, perform Y, confirm Z. One flow per AC if they differ.}
-
-**Automated tests:** {Unit or integration tests to be written — or "None"}
+- {Concrete approach, files, constraints, or "do not" notes for an agent implementing this ticket}
+- {Or write "None"}
 ```
 
 ## Bug Ticket
 
-Same as standard but includes a QA Testing Steps section before Acceptance Criteria:
+Same section order as standard. Put environment, observed result, and expected result in Summary. There is no separate QA Testing Steps section — use Test Cases.
 
 ```
 ## Branch Id:
@@ -58,7 +78,34 @@ Same as standard but includes a QA Testing Steps section before Acceptance Crite
 
 {Clear description of the bug and its impact}
 
-## Technical Details
+**Environment:** {Dev/Staging/Production}
+
+**Observed Result:** {What actually happens}
+
+**Expected Result:** {What should happen}
+
+## Acceptance Criteria:
+
+{What must be true for the bug to be considered fixed}
+
+- {Criterion 1}
+- {Criterion 2}
+
+## Test Plan
+
+**Prerequisites:** {What is needed before testing can begin — hardware, software, environment state, test data, or accounts. "None" if not applicable.}
+
+**How to verify:** {The testing flow that confirms the fix can be verified — perform the repro path, confirm the error is gone, check adjacent flows for regressions. Written at ticket creation.}
+
+**Automated tests:** {Unit or integration tests to be written to prevent regression — or "None"}
+
+## Test Cases
+
+- {Perform the original repro path}
+- {Confirm the expected result — the bug no longer occurs}
+- {Check adjacent flows for regressions}
+
+## Implementation Details
 
 **Repo:** {repository_name}
 
@@ -76,44 +123,23 @@ Same as standard but includes a QA Testing Steps section before Acceptance Crite
 - {Any assumptions}
 - {Or write "None"}
 
-## QA Testing Steps
+**Agent implementation instructions:**
 
-**Environment:** {Dev/Staging/Production}
-
-**Steps:**
-
-- {Step 1 to reproduce}
-- {Step 2 to reproduce}
-
-**Observed Result:** {What actually happens}
-
-**Expected Result:** {What should happen}
-
-## Acceptance Criteria:
-
-{What must be true for the bug to be considered fixed}
-
-- {Criterion 1}
-- {Criterion 2}
-
-## Test Plan
-
-**Prerequisites:** {What is needed before testing can begin — hardware, software, environment state, test data, or accounts. "None" if not applicable.}
-
-**How to verify:** {The testing flow that confirms the fix — perform repro steps, confirm the error is gone, check adjacent flows for regressions.}
-
-**Automated tests:** {Unit or integration tests to be written to prevent regression — or "None"}
+- {Concrete approach, files, constraints, or "do not" notes for an agent implementing this ticket}
+- {Or write "None"}
 ```
 
 ## Formatting Rules
 
 - Use `##` (H2) for all main section headers
-- Business Context sub-items: bold question with answer on same line
-- Technical Details sub-items: bold label with colon, answer on same line
+- Human sections stay above Implementation Details: Branch Id, Merge Request, Summary, Acceptance Criteria, Test Plan, Test Cases
+- Implementation Details is agent-facing. Sub-items: bold label with colon, answer on the same line
+- When writing ADF (acli), emit Implementation Details as a collapsed `expand` node titled `Implementation Details`. When writing markdown (MCP), use `## Implementation Details` — MCP markdown does not reliably produce expand nodes
 - Acceptance Criteria: paragraph or bulleted list (no checkboxes)
 - Leave "Merge Request" empty during creation
 - Keep "Branch Id:" empty in the preview template, then auto-update it to the Jira issue key immediately after creation
-- For maintenance tickets, Business Context can note: "This is a maintenance/technical debt item"
+- Do not create a Business Context or Technical Details section. Fold any existing "why" into Summary; map old Technical Details into Implementation Details
+- Always use `## Test Cases` (never "QA Steps", "QA Testing Steps", or "Repro Steps")
 
 ## Platform Detection
 
@@ -150,17 +176,31 @@ Same as standard but includes a QA Testing Steps section before Acceptance Crite
 
 Implement a new GraphQL mutation and type resolvers to allow content group admins to configure email digest reports for Follow Up Action List Templates. This enables automated email notifications for FUA reports (site, auditor, and summary types) at configurable frequencies.
 
-## Business Context
+## Acceptance Criteria:
 
-**Why are we doing this?** Content group admins need the ability to set up automated email digests for follow-up action reports, which currently requires manual intervention.
+- Content group admins can create report email digest configurations via the createFollowUpActionReportEmailDigest mutation
+- Each configuration links a FUALT to a role, report type (FUA_SITE, FUA_AUDITOR, FUA_SUMMARY), and frequency schedule
+- Duplicate configurations for the same list template and report type are rejected
+- Non-admin users receive a permission error
+- The reportEmailDigests field on ListTemplate returns all configured digests with nested frequencies
 
-**Who is affected?** Content group admins managing audit and follow-up action workflows.
+## Test Plan
 
-**What happens if we don't fix/build this?** Admins cannot configure automated report delivery, increasing manual overhead for report distribution.
+**Prerequisites:** A content group with an audit template linked to a follow-up action template, plus an admin and a non-admin account.
 
-**Link to design docs:** N/A
+**How to verify:** Create a digest via the mutation and confirm it appears on the template; retry a duplicate and confirm rejection; call the same mutation as a non-admin and confirm a permission error.
 
-## Technical Details
+**Automated tests:** Unit/integration tests for createFollowUpActionReportEmailDigest (happy path, duplicate, permission) and for reportEmailDigests on ListTemplate.
+
+## Test Cases
+
+- Log in as a content group admin and open an audit template linked to a follow-up action template
+- Configure a report email digest for a FUA report type with a frequency, save, and confirm it appears with the correct frequency
+- Attempt a duplicate digest for the same report type and confirm it is rejected
+- Log in as a non-admin and confirm digest configuration is unavailable / returns a permission error
+- Confirm unrelated audit template settings still load and save
+
+## Implementation Details
 
 **Repo:** api
 
@@ -178,11 +218,9 @@ Implement a new GraphQL mutation and type resolvers to allow content group admin
 - Content group mode only (not location mode)
 - Requires existing audit template linked to a follow-up action template
 
-## Acceptance Criteria:
+**Agent implementation instructions:**
 
-- Content group admins can create report email digest configurations via the createFollowUpActionReportEmailDigest mutation
-- Each configuration links a FUALT to a role, report type (FUA_SITE, FUA_AUDITOR, FUA_SUMMARY), and frequency schedule
-- Duplicate configurations for the same list template and report type are rejected
-- Non-admin users receive a permission error
-- The reportEmailDigests field on ListTemplate returns all configured digests with nested frequencies
+- Add createFollowUpActionReportEmailDigest and the ListTemplate.reportEmailDigests field using existing digest connectors
+- Reject duplicate list-template + report-type pairs; enforce content-group admin permission
+- Do not add a new migration
 ```

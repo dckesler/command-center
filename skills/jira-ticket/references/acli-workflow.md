@@ -82,51 +82,6 @@ Create a temporary JSON file in a scratch/working directory (e.g. `.acli-tmp/wor
       {
         "type": "heading",
         "attrs": { "level": 2 },
-        "content": [{ "type": "text", "text": "Business Context" }]
-      },
-      {
-        "type": "paragraph",
-        "content": [
-          { "type": "text", "text": "Why are we doing this? ", "marks": [{ "type": "strong" }] },
-          { "type": "text", "text": "Explanation here." }
-        ]
-      },
-      {
-        "type": "paragraph",
-        "content": [
-          { "type": "text", "text": "Who is affected? ", "marks": [{ "type": "strong" }] },
-          { "type": "text", "text": "Affected parties here." }
-        ]
-      },
-      {
-        "type": "paragraph",
-        "content": [
-          { "type": "text", "text": "What happens if we don't fix/build this? ", "marks": [{ "type": "strong" }] },
-          { "type": "text", "text": "Consequences here." }
-        ]
-      },
-      {
-        "type": "paragraph",
-        "content": [
-          { "type": "text", "text": "Link to design docs: ", "marks": [{ "type": "strong" }] },
-          { "type": "text", "text": "N/A" }
-        ]
-      },
-      {
-        "type": "heading",
-        "attrs": { "level": 2 },
-        "content": [{ "type": "text", "text": "Technical Details" }]
-      },
-      {
-        "type": "paragraph",
-        "content": [
-          { "type": "text", "text": "Repo: ", "marks": [{ "type": "strong" }] },
-          { "type": "text", "text": "api" }
-        ]
-      },
-      {
-        "type": "heading",
-        "attrs": { "level": 2 },
         "content": [{ "type": "text", "text": "Acceptance Criteria:" }]
       },
       {
@@ -136,6 +91,96 @@ Create a temporary JSON file in a scratch/working directory (e.g. `.acli-tmp/wor
             "type": "listItem",
             "content": [
               { "type": "paragraph", "content": [{ "type": "text", "text": "Criterion 1" }] }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": { "level": 2 },
+        "content": [{ "type": "text", "text": "Test Plan" }]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          { "type": "text", "text": "Prerequisites: ", "marks": [{ "type": "strong" }] },
+          { "type": "text", "text": "None" }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          { "type": "text", "text": "How to verify: ", "marks": [{ "type": "strong" }] },
+          { "type": "text", "text": "The flow that proves each AC can be tested." }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          { "type": "text", "text": "Automated tests: ", "marks": [{ "type": "strong" }] },
+          { "type": "text", "text": "None" }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": { "level": 2 },
+        "content": [{ "type": "text", "text": "Test Cases" }]
+      },
+      {
+        "type": "bulletList",
+        "content": [
+          {
+            "type": "listItem",
+            "content": [
+              { "type": "paragraph", "content": [{ "type": "text", "text": "Navigate, act, and confirm the expected result." }] }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "expand",
+        "attrs": { "title": "Implementation Details" },
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              { "type": "text", "text": "Repo: ", "marks": [{ "type": "strong" }] },
+              { "type": "text", "text": "api" }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              { "type": "text", "text": "Data models or schema changes: ", "marks": [{ "type": "strong" }] },
+              { "type": "text", "text": "None" }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              { "type": "text", "text": "Feature flags: ", "marks": [{ "type": "strong" }] },
+              { "type": "text", "text": "None" }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              { "type": "text", "text": "Performance/security considerations: ", "marks": [{ "type": "strong" }] },
+              { "type": "text", "text": "None" }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              { "type": "text", "text": "Assumptions or constraints: ", "marks": [{ "type": "strong" }] },
+              { "type": "text", "text": "None" }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              { "type": "text", "text": "Agent implementation instructions: ", "marks": [{ "type": "strong" }] },
+              { "type": "text", "text": "None" }
             ]
           }
         ]
@@ -198,6 +243,7 @@ Use this to discover custom field IDs for sprint, story points, etc.
 | Section | ADF Node Type |
 |---------|--------------|
 | `## Heading` | `{ "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "..." }] }` |
+| Collapsed Implementation Details | `{ "type": "expand", "attrs": { "title": "Implementation Details" }, "content": [ ... ] }` |
 | Paragraph | `{ "type": "paragraph", "content": [{ "type": "text", "text": "..." }] }` |
 | **Bold text** | `{ "type": "text", "text": "...", "marks": [{ "type": "strong" }] }` |
 | Bullet list | `{ "type": "bulletList", "content": [ { "type": "listItem", ... } ] }` |

@@ -8,7 +8,7 @@ description: Prepare a Jira ticket to begin work on it in the SmartSense Atlassi
 Prepare a Jira ticket so Daniel can start working on it, then plan and execute the work. Given a ticket key or a branch name that contains one, make sure the ticket is:
 
 1. **Formatted to our standard** (per the `jira-ticket` skill)
-2. **QA steps enriched** with any Universal Test Plan Agent test-plan comment
+2. **Test Cases enriched** with any Universal Test Plan Agent test-plan comment
 3. **Assigned to Daniel**
 4. **In Progress**
 5. **In the current sprint**
@@ -64,8 +64,8 @@ If the ticket already matches, skip to Step 3.
 
 If it doesn't match:
 
-1. Rebuild the title and description into the correct template, **reusing the existing ticket content** — map whatever is already there into the right sections (e.g. an existing repro into QA Testing Steps, an existing goal into Summary). Auto-detect platform/type from the content. Keep `## Branch Id:` set to the ticket key and leave `## Merge Request` empty.
-2. For any **required** section that the existing ticket doesn't provide, **ask Daniel** for it. Use "None" / "N/A" for genuinely inapplicable fields rather than asking. Do not invent acceptance criteria, repro steps, or business context.
+1. Rebuild the title and description into the correct template, **reusing the existing ticket content** — map whatever is already there into the right sections (e.g. an existing goal into Summary; existing repro / QA Steps / QA Testing Steps into Test Cases; old Technical Details into Implementation Details; any "why" from Business Context into Summary). Auto-detect platform/type from the content. Keep `## Branch Id:` set to the ticket key and leave `## Merge Request` empty.
+2. For any **required** section that the existing ticket doesn't provide, **ask Daniel** for it. Use "None" / "N/A" for genuinely inapplicable fields rather than asking. Do not invent acceptance criteria, repro steps, or agent implementation instructions.
 3. Show a short preview of the reformatted title + description and ask Daniel to confirm before editing.
 4. On confirmation, apply with `editJiraIssue` (`summary` + `description`).
 
@@ -79,12 +79,12 @@ If one exists, parse it for:
 - The **ACCEPTANCE-CRITERIA–DRIVEN TESTS** section (positive / negative / edge cases per AC)
 - Ignore the RCA metadata header, COVERAGE SUMMARY table, AUTOMATION SUGGESTIONS, and run-summary footer — those aren't useful inside the ticket body.
 
-Compare against the ticket's current **QA Testing Steps** section (post Step 2, if that ran):
+Compare against the ticket's current **Test Cases** section (post Step 2, if that ran):
 
-- **If QA Testing Steps is missing or thin** (just restates the AC, no edge/negative cases): draft additional bullets from the agent's edge/negative cases to merge in. Reuse its wording; don't invent beyond what it suggests.
-- **If QA Testing Steps already covers this ground**: no change needed.
+- **If Test Cases is missing or thin** (just restates the AC, no edge/negative cases): draft additional bullets from the agent's edge/negative cases to merge in. Reuse its wording; don't invent beyond what it suggests.
+- **If Test Cases already covers this ground**: no change needed.
 
-Never overwrite existing QA steps — only append what's missing. Show Daniel a short preview of any proposed additions and get confirmation before applying (can be combined with the Step 2 preview/confirmation if both are happening in the same run). Apply via `editJiraIssue` on `description`.
+Never overwrite existing Test Cases — only append what's missing. Show Daniel a short preview of any proposed additions and get confirmation before applying (can be combined with the Step 2 preview/confirmation if both are happening in the same run). Apply via `editJiraIssue` on `description`.
 
 If the comment's domain routing looks wrong for this ticket (e.g. labeled `MOBILE` for a web-only change), mention it to Daniel and suggest adding the `wrong_domain_universal` label — but don't add it automatically.
 
@@ -114,9 +114,9 @@ Print a short summary of the ticket and what changed, e.g.:
 
 ```
 LW-17095 — [BE] (fix) - allow NA setting can't be removed
-• Format:    reformatted to Bug template (asked for QA steps)   [or: skipped (--no-format)]
-• Test plan: found Universal Test Plan Agent comment — merged 2 edge cases into QA steps
-             [or: found, QA steps already cover it — no change / or: none found]
+• Format:    reformatted to Bug template (asked for Test Cases)   [or: skipped (--no-format)]
+• Test Cases: found Universal Test Plan Agent comment — merged 2 edge cases into Test Cases
+             [or: found, Test Cases already cover it — no change / or: none found]
 • Assignee:  already Daniel ✓
 • Sprint:    moved into current sprint (id 1234)
 • Status:    To Do → In Progress
@@ -131,7 +131,7 @@ Goal: be **very sure** the work can be executed before proposing (and especially
 
 Do **not** edit application code in this step. Ticket edits from Steps 2–4 are already done.
 
-1. **Read the ticket as the spec.** Use the post-update title + description (Summary, Acceptance Criteria, QA Testing Steps, repro / current vs expected if a bug). Comments only if they change the work (QA bounce, design decision).
+1. **Read the ticket as the spec.** Use the post-update title + description (Summary, Acceptance Criteria, Test Plan, Test Cases, Implementation Details; repro / current vs expected if a bug). Comments only if they change the work (QA bounce, design decision).
 2. **Orient in the repo.** Read the local `AGENTS.md` (and a workspace-level one if this is a monorepo). Identify which package/area the ticket belongs to.
 3. **Find the real code.** Search for the feature, component, API, or bug site. Open the files that would change. Note neighboring tests and existing patterns to follow.
 4. **Stop and ask whenever confidence is not high.** Ask Daniel before presenting a plan if any of these are true:

@@ -50,7 +50,8 @@ Ask only for missing required fields. Do NOT ask for platform, assignee, parent 
 - Repository (default: detect from current workspace)
 - Data model or schema changes
 - Acceptance criteria
-- Test plan — written before coding begins: what prerequisites are needed to test (hardware, software, data), the flow that proves each AC is met, and what automated tests will be written. Goal is to confirm the work is provably testable before starting.
+- Test plan — written at ticket creation, before coding: what prerequisites are needed to test (hardware, software, data), the flow that proves each AC *can* be tested, and what automated tests will be written. Goal is to confirm the work is provably testable before starting.
+- Test cases — the steps a QA engineer runs once the MR is ready to verify (same thing as "QA Testing Steps"). Infer from the summary and ACs when possible. Do not restate the ACs.
 
 **Optional (ask only if needed):**
 
@@ -70,6 +71,7 @@ Ask only for missing required fields. Do NOT ask for platform, assignee, parent 
 - Parent: infer from context if an epic or parent ticket is referenced anywhere in the conversation (e.g. "part of LW-XXXX", "child of", "builds on", a ticket key mentioned alongside words like "epic", "parent", "umbrella"); if explicitly provided, use it; if neither, skip it. Always show the inferred parent in the preview so the user can correct it.
 - Branch ID: auto-set to created Jira issue key after ticket creation
 - Sprint target: `backlog` unless the user explicitly asks for `current sprint` or a specific sprint
+- Implementation Details (repo, schema, flags, perf/security, assumptions, agent implementation instructions): fill from context or "None" / "N/A". Do not interview the human for this section.
 
 ### Step 2: Format the Ticket
 
@@ -77,7 +79,7 @@ Use the appropriate template from [references/templates.md](references/templates
 
 ### Step 3: Show Preview and Confirm
 
-ALWAYS present a preview showing: Workspace, Project, Issue Type, Title, Description (including Test Plan), Assignee, Sprint Target, Priority, Parent (if any). Ask: "Should I proceed with creating this ticket?" and WAIT for explicit approval.
+ALWAYS present a preview showing: Workspace, Project, Issue Type, Title, Description (including Test Plan and Test Cases), Assignee, Sprint Target, Priority, Parent (if any). Ask: "Should I proceed with creating this ticket?" and WAIT for explicit approval.
 
 ### Step 4: Detect Available Tool
 
@@ -105,7 +107,7 @@ If the chosen tool fails mid-creation, attempt the other tool as fallback before
 - ALWAYS default assignee to current user
 - ALWAYS target the SmartSense Atlassian workspace only
 - NEVER silently target another Atlassian workspace
-- For bugs, use "QA Testing Steps" (not "Repro Steps")
+- For bugs, put environment / observed / expected in Summary and use "Test Cases" for post-MR QA steps (never "Repro Steps" or "QA Testing Steps")
 - ALWAYS update "Branch Id:" to the created Jira issue key immediately after creation
 - Use "None" or "N/A" for inapplicable fields
 - Keep conversation focused -- ask only essential questions

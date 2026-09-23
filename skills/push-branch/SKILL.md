@@ -193,4 +193,4 @@ Now that the MR URL is captured, record it on the Jira ticket so the MR is linke
 
 ## Step 6: Hand Off to babysit-branch
 
-Invoke the `babysit-branch` skill. It picks up from CI polling through review-comment triage and final link output. Pass along the MR IID, MR URL, and repo slug captured above so it doesn't need to re-derive them.
+Invoke the `babysit-branch` skill at **Step 1** (CI polling for the SHA just pushed). This includes the first push that opens the MR **and** every later push after review-comment fixes — never skip CI polling because comments were already triaged once. Pass along the MR IID, MR URL, and repo slug captured above so it doesn't need to re-derive them.

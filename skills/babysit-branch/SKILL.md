@@ -17,8 +17,11 @@ This skill is re-entered on every `ScheduleWakeup` fire. **Determine which phase
 - CI pipeline reached a terminal state (non-failed), review comments not yet listed → **Step 2** (review-comment polling).
 - CI pipeline failed, user chose "continue" → **Step 2** (review-comment polling).
 - Review comments already listed → you are waiting on the user's triage decisions; act on **Step 3 / Step 4** when they reply. Do not schedule wakeups while waiting on the user.
+- Review fixes were committed and pushed (this conversation or a `/push-branch` handoff after triage) → **Step 1**. Reset review-comment polling (`REVIEW_POLLS` back to 0). Match CI against the **new** `HEAD` SHA.
 
 Always reuse the MR IID, MR URL, and repo slug captured earlier in the conversation rather than re-deriving them.
+
+**Loop:** CI → review comments → triage → (fix + push) → back to CI. Do not print Step 5 links until that loop has nothing left to do.
 
 ## Step 0: Derive MR Info (standalone entry only)
 
@@ -211,7 +214,7 @@ Then ask the user, plainly:
 
 For each suggestion the user picks:
 
-- **Fix** — make the code change in the working tree per the suggestion. After applying fixes, follow normal practice: run the relevant `snyk_code_scan` on modified first-party code if applicable, then let the user review. Do not auto-commit or auto-push unless the user asks — confirm before committing the fixes onto the branch. (Optionally reply on the thread noting the fix, then resolve it.)
+- **Fix** — make the code change in the working tree per the suggestion. After applying fixes, follow normal practice: run the relevant `snyk_code_scan` on modified first-party code if applicable, then let the user review. Confirm before committing. When the user wants the fixes on the MR, commit and push (or run `/push-branch` on the existing MR — do not open a second MR), reply on the threads, resolve the ones you addressed, then **return to Step 1** and poll CI for the new `HEAD`. Do not skip to Step 5 after a push.
 - **Close** — resolve the discussion thread, optionally posting a short reply with the reason first:
 
 ```bash
@@ -223,11 +226,15 @@ glab api -X POST "projects/:id/merge_requests/<MR_IID>/discussions/<DISCUSSION_I
 glab api -X PUT "projects/:id/merge_requests/<MR_IID>/discussions/<DISCUSSION_ID>?resolved=true"
 ```
 
-Process all of the user's choices, then briefly summarize what was fixed vs. resolved. If the user asks to revisit the list, return to Step 3.
+Process all of the user's choices, then briefly summarize what was fixed vs. resolved.
+
+- If **any fix was pushed**, immediately return to **Step 1** (new pipeline on the new SHA). Reset `REVIEW_POLLS` to 0.
+- If the user asks to revisit the list, return to Step 3.
+- If every chosen item was closed (no push) and nothing remains open, continue to Step 5.
 
 ## Step 5: Final Output — MR URL and Jira Ticket URL
 
-Once CI is terminal and the review comments have been triaged (or there were none), print:
+Once CI is terminal **and** review comments have been triaged **and** no review-fix commit is waiting on a new pipeline, print:
 
 - **MR URL** — the GitLab merge request URL captured in Step 0 or handed from `/push-branch`
 - **Jira ticket URL** — derive the ticket key from the branch name using the pattern `[A-Z]+-[0-9]+` (e.g., `LW-17033`) and format the URL as:
