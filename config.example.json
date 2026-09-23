@@ -1,5 +1,5 @@
 {
-  "$comment": "Copy to ~/.config/control-center/config.json (or $CC_CONFIG_DIR/config.json). Every key is optional; missing keys use the defaults shown here. `~` and `$HOME` are expanded. Secrets do NOT go here — see .env.example.",
+  "$comment": "Copy to ~/.config/command-center/config.json (or $CC_CONFIG_DIR/config.json). Every key is optional; missing keys use the defaults shown here. `~` and `$HOME` are expanded. Secrets do NOT go here — see .env.example.",
 
   "user": {
     "$comment": "How the agents refer to you, and your Atlassian identity for skills that assign tickets.",
@@ -10,7 +10,7 @@
 
   "dirs": {
     "$comment": "config = state dir (agents.jsonl, inbox.jsonl, todos.json, tui.log). projects = where project directories live. skills = roots scanned for /skill-name completion in chats.",
-    "config": "~/.config/control-center",
+    "config": "~/.config/command-center",
     "projects": "~/projects",
     "skills": ["~/.cursor/skills", "~/.cursor/skills-cursor", "~/.claude/skills", "~/.agents/skills"]
   },
@@ -35,7 +35,7 @@
 
   "projects": {
     "$comment": "Directory names under dirs.projects that are not projects.",
-    "exclude": ["control-center", "command-center", "node_modules"]
+    "exclude": ["command-center", "node_modules"]
   },
 
   "repos": {

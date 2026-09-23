@@ -4,7 +4,7 @@ description: >-
   For a project's central agent: open a task tab (tmux window) inside the
   project's own tmux session running a worker cursor-cli agent that reports
   back to the central agent via cc-report project:<name>. Code work goes in a
-  git worktree (--repo, --ticket/--branch) created like Control Center's
+  git worktree (--repo, --ticket/--branch) created like Command Center's
   worktrees; other work runs in the project dir. Also message a task tab or
   list them. Use when delegating a self-contained piece of project work, when
   the user says "open a tab for X", "spin off a task", "start ticket LW-#### for
@@ -25,11 +25,11 @@ You are (or are acting for) the **central agent** of a `~/projects/<name>` proje
 
 **Rule: code changes always happen in a worktree.** Never point a worker at a repo's main checkout, never clone into the project directory. If Daniel names a ticket or a repo, it is a worktree tab. If a plain tab discovers it needs repo changes, it reports back and you reopen it with `--repo`.
 
-`<repo>` is a mkpanes alias (`lists`, `api`, `smartsense-one-skeleton`, … — the `case "$ARG"` block in `~/.local/bin/mkpanes` is the list) or a path to a git repo. Only aliased repos appear on Control Center's worktrees tab; if a repo you need is missing, tell Daniel to add the alias to mkpanes.
+`<repo>` is a mkpanes alias (`lists`, `api`, `smartsense-one-skeleton`, … — the `case "$ARG"` block in `~/.local/bin/mkpanes` is the list) or a path to a git repo. Only aliased repos appear on Command Center's worktrees tab; if a repo you need is missing, tell Daniel to add the alias to mkpanes.
 
 ## What a worktree tab does
 
-Delegates to `mkpanes <repo> -w <branch> -s <project-session> --prompt-file …`, so it behaves exactly like Control Center's worktrees:
+Delegates to `mkpanes <repo> -w <branch> -s <project-session> --prompt-file …`, so it behaves exactly like Command Center's worktrees:
 
 - worktree `<repo>_<branch>` next to the repo; branch fetched from origin, reused if it exists, otherwise created from the default branch (`--from <base>` to override)
 - vim / agent / shell panes; `nvm use && <install>` in a bottom pane when there is a `package.json`

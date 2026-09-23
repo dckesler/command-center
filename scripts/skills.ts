@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Skill management for the control center.
+ * Skill management for the command center.
  *
  * The repo is the source of truth for two kinds of skills:
  *   skills/          first-party skills (committed files, edited here)

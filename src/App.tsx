@@ -1056,7 +1056,7 @@ export function App() {
     <box flexDirection="column" height={height}>
       <box paddingLeft={1} paddingRight={1} flexDirection="row" justifyContent="space-between">
         <text>
-          <span fg="#93c5fd">CONTROL CENTER</span>
+          <span fg="#93c5fd">COMMAND CENTER</span>
           <span fg={view === "central" ? "#ffffff" : "#6b7280"}>  [1] central</span>
           {agentDot("central")}
           <span fg={view === "worktrees" ? "#ffffff" : "#6b7280"}>  [2] {workRows.length} worktrees</span>

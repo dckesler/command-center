@@ -1,12 +1,12 @@
 ---
 name: cc-report
 description: >-
-  Report status upward in Daniel's Control Center hierarchy by running the
+  Report status upward in Daniel's Command Center hierarchy by running the
   cc-report CLI: ticket agents and project central agents report to Control
   Center specialists (worktrees, qa, projects, ...); project task-tab workers
   report to their project's central agent (project:<name>). Use when the user
   says "report to the worktree agent", "report to the projects agent", "report
-  to the central agent", "start reporting to control center", "cc-report", or
+  to the central agent", "start reporting to command center", "cc-report", or
   when a prompt told this agent to keep something informed.
 ---
 
@@ -14,7 +14,7 @@ description: >-
 
 Nothing above you can see this chat. Send one-line status reports with `cc-report`; they are durable and wake the recipient.
 
-If you already have a `report_to_central` tool, you are a Control Center hub specialist — use that tool instead. Do not run this CLI.
+If you already have a `report_to_central` tool, you are a Command Center hub specialist — use that tool instead. Do not run this CLI.
 
 ## Command
 
@@ -26,9 +26,9 @@ Resolve the binary in this order: `cc-report` on `PATH`, then `~/.local/bin/cc-r
 
 - **target** — who you report to:
   - `project:<name>` — the central agent of `~/projects/<name>`. Use this if you are a **task-tab worker** inside a project session — including worktree tabs whose cwd is a repo under `~/code`; the session decides, not the directory.
-  - `projects` — Control Center's projects specialist. Use this if you are a **project central agent** (the `central` window of a project session).
-  - `worktrees` / `qa` — Control Center's worktrees or QA specialist. Use this if you are a **ticket agent** in a worktree.
-  - `tickets` | `epics` | `todos` | `email` | `cloud` | `central` — other Control Center tabs; only when Daniel asked.
+  - `projects` — Command Center's projects specialist. Use this if you are a **project central agent** (the `central` window of a project session).
+  - `worktrees` / `qa` — Command Center's worktrees or QA specialist. Use this if you are a **ticket agent** in a worktree.
+  - `tickets` | `epics` | `todos` | `email` | `cloud` | `central` — other Command Center tabs; only when Daniel asked.
   - Omitted: the default follows the rules above from your cwd and tmux window, so from the right place plain `cc-report "<summary>"` is correct.
 - **severity**: `info` (FYI), `warn` (degrading), `attention` (Daniel needed now)
 - **summary**: one line, max 160 characters. Lead with the ticket key, project name, or task title. No quotes of your last chat message. No markdown.
@@ -45,7 +45,7 @@ cc-report project:web-observability --severity attention "logging-plan: blocked,
 
 ## Standing instruction
 
-When Daniel or your launch prompt says to report (to the worktree agent, the projects agent, the central agent, Control Center), treat it as a standing rule for the session:
+When Daniel or your launch prompt says to report (to the worktree agent, the projects agent, the central agent, Command Center), treat it as a standing rule for the session:
 
 1. Send one `cc-report` now (who you are + current state).
 2. Report again after real progress, when done, when blocked, when an MR/CI/ticket status changes, or when Daniel is needed (`--severity attention`).

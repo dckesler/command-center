@@ -31,9 +31,9 @@ Prints one summary line; that line is the result to show the user.
 
 ## When invoked by an agent
 
-- From Control Center (hub specialists): the TUI's `n`/`s` keys and the projects specialist's `open_project` / `create_project` tools already run this. Do not also run it manually.
+- From Command Center (hub specialists): the TUI's `n`/`s` keys and the projects specialist's `open_project` / `create_project` tools already run this. Do not also run it manually.
 - From any other agent: run it with the name the user gave. If they described the project, pass `--goal`. Do not create `PROJECT.md` yourself; let the script do it.
-- Do not start a project for `control-center` — it is reserved.
+- Do not start a project for `command-center` — it is reserved.
 
 ## After
 

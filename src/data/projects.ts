@@ -7,7 +7,7 @@ import { listTmuxWindows, projectSessionName } from "./tmux.ts"
 /**
  * Projects are plain directories under ~/projects. Each one is tracked by a
  * PROJECT.md brief (goal, current state, next steps, log) that the project's
- * tmux agent keeps current. The control center itself is excluded.
+ * tmux agent keeps current. The command center itself is excluded.
  */
 
 export const PROJECTS_DIR = config().dirs.projects
@@ -118,7 +118,7 @@ export function briefTemplate(name: string, goal = ""): string {
     "",
     "## Current state",
     "",
-    "_Where things are right now. Keep this current — it is what the control center shows._",
+    "_Where things are right now. Keep this current — it is what the command center shows._",
     "",
     "## Next steps",
     "",

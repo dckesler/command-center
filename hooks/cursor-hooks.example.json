@@ -2,12 +2,12 @@
   "$comment": "Merge into ~/.cursor/hooks.json. Every entry pipes the hook payload into agent-event.sh, which appends a normalised line to $CC_CONFIG_DIR/agents.jsonl. Replace ~ with your home directory (Cursor does not expand it).",
   "version": 1,
   "hooks": {
-    "sessionStart": [{ "command": "bash ~/.config/control-center/agent-event.sh cursor start" }],
-    "beforeSubmitPrompt": [{ "command": "bash ~/.config/control-center/agent-event.sh cursor working" }],
-    "stop": [{ "command": "bash ~/.config/control-center/agent-event.sh cursor idle" }],
-    "afterAgentResponse": [{ "command": "bash ~/.config/control-center/agent-event.sh cursor response" }],
-    "afterFileEdit": [{ "command": "bash ~/.config/control-center/agent-event.sh cursor edit" }],
-    "afterShellExecution": [{ "command": "bash ~/.config/control-center/agent-event.sh cursor shell" }],
-    "sessionEnd": [{ "command": "bash ~/.config/control-center/agent-event.sh cursor ended" }]
+    "sessionStart": [{ "command": "bash ~/.config/command-center/agent-event.sh cursor start" }],
+    "beforeSubmitPrompt": [{ "command": "bash ~/.config/command-center/agent-event.sh cursor working" }],
+    "stop": [{ "command": "bash ~/.config/command-center/agent-event.sh cursor idle" }],
+    "afterAgentResponse": [{ "command": "bash ~/.config/command-center/agent-event.sh cursor response" }],
+    "afterFileEdit": [{ "command": "bash ~/.config/command-center/agent-event.sh cursor edit" }],
+    "afterShellExecution": [{ "command": "bash ~/.config/command-center/agent-event.sh cursor shell" }],
+    "sessionEnd": [{ "command": "bash ~/.config/command-center/agent-event.sh cursor ended" }]
   }
 }

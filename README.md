@@ -1,4 +1,4 @@
-# Control Center
+# Command Center
 
 Keyboard-first TUI dashboard for all in-progress work: git worktrees, agents in tmux,
 GitLab MRs, Jira tickets and epics, local projects, todos, Outlook mail, and Cursor
@@ -8,14 +8,14 @@ they report to. See `PLAN.md` for the roadmap and verified feasibility notes.
 ## Install on a new machine
 
 ```bash
-git clone <this repo> ~/projects/control-center   # any path works
-cd control-center
+git clone <this repo> ~/projects/command-center   # any path works
+cd command-center
 brew install oven-sh/bun/bun tmux jq              # required tools (macOS)
 bun install
 bun run setup                                     # config, hooks, skills, health check
 ```
 
-`bun run setup` creates `~/.config/control-center/config.json` from
+`bun run setup` creates `~/.config/command-center/config.json` from
 `config.example.json` and `.env` from `.env.example`, links `hooks/agent-event.sh` into
 the config dir, symlinks `skills/*` into `~/.agents/skills` and the skill CLIs
 (`cc-report`, `start-project`, `project-task`) into `~/.local/bin`, then runs the same
@@ -25,7 +25,7 @@ if you use Claude Code) yourself so agents in tmux report their status into the 
 
 Then edit the two files it created:
 
-- **`~/.config/control-center/config.json`** — everything machine/user-specific and
+- **`~/.config/command-center/config.json`** — everything machine/user-specific and
   non-secret. All keys optional; see the reference below and `config.example.json`.
 - **`.env`** (git-ignored, loaded by Bun) — secrets: `CURSOR_API_KEY` (hub specialists
   and Cloud agents), `JIRA_EMAIL` + `JIRA_API_TOKEN` (ticket transitions via the Jira
@@ -68,7 +68,7 @@ Resolution order: environment variable → `config.json` → default.
 |---|---|---|---|
 | `user.name` | | `"the user"` | how agent prompts address you |
 | `user.email`, `user.jiraAccountId` | | `""` | your Atlassian identity (used by ticket skills) |
-| `dirs.config` | `CC_CONFIG_DIR` | `~/.config/control-center` | state: `agents.jsonl`, `inbox.jsonl`, `todos.json`, `tui.log` |
+| `dirs.config` | `CC_CONFIG_DIR` | `~/.config/command-center` | state: `agents.jsonl`, `inbox.jsonl`, `todos.json`, `tui.log` |
 | `dirs.projects` | `CC_PROJECTS_DIR` | `~/projects` | Projects tab root |
 | `dirs.skills` | | cursor/claude/agents skill dirs | roots scanned for `/skill` completion |
 | `commands.agent` | `CC_AGENT_CMD` | `cursor-cli` | command typed into tmux panes to start an agent (alias OK) |
@@ -79,7 +79,7 @@ Resolution order: environment variable → `config.json` → default.
 | `jira.baseUrl` | `JIRA_BASE_URL` | `""` | Jira site; empty disables links and transitions |
 | `jira.cloudId`, `jira.sprintField` | | `""`, `customfield_10007` | Atlassian MCP cloud id; sprint custom field |
 | `model` | `CC_MODEL` | `composer-2.5` | Cursor SDK model for specialists and Cloud agents |
-| `projects.exclude` | | `control-center, command-center, node_modules` | dirs under `dirs.projects` that are not projects |
+| `projects.exclude` | | `command-center, node_modules` | dirs under `dirs.projects` that are not projects |
 | `repos` | | `{}` | alias → path; overrides the mkpanes registry when non-empty |
 
 The shell skills (`cc-report`, `start-project`, `project-task`) and
@@ -184,7 +184,7 @@ scripts/        setup.ts (setup/doctor), skills.ts (skill manager)
 config.example.json, .env.example
 ```
 
-State written at runtime lives only in `dirs.config` (default `~/.config/control-center`):
+State written at runtime lives only in `dirs.config` (default `~/.config/command-center`):
 `agents.jsonl` (hook feed), `inbox.jsonl` + `cursors.json` (durable specialist inbox),
 `todos.json`, `tui.log`. Nothing is written inside the repo.
 

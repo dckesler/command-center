@@ -1,15 +1,15 @@
 {
   "$comment": "Merge the `hooks` object into ~/.claude/settings.json (Claude Code). Same feed as the Cursor hooks; only needed if you also run Claude Code agents in worktrees.",
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/control-center/agent-event.sh\" claude start" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/control-center/agent-event.sh\" claude working" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/control-center/agent-event.sh\" claude idle" }] }],
-    "Notification": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/control-center/agent-event.sh\" claude attention" }] }],
-    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/control-center/agent-event.sh\" claude attention" }] }],
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/command-center/agent-event.sh\" claude start" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/command-center/agent-event.sh\" claude working" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/command-center/agent-event.sh\" claude idle" }] }],
+    "Notification": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/command-center/agent-event.sh\" claude attention" }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/command-center/agent-event.sh\" claude attention" }] }],
     "PostToolUse": [
-      { "matcher": "Write|Edit", "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/control-center/agent-event.sh\" claude edit" }] },
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/control-center/agent-event.sh\" claude shell" }] }
+      { "matcher": "Write|Edit", "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/command-center/agent-event.sh\" claude edit" }] },
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/command-center/agent-event.sh\" claude shell" }] }
     ],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/control-center/agent-event.sh\" claude ended" }] }]
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "bash \"$HOME/.config/command-center/agent-event.sh\" claude ended" }] }]
   }
 }

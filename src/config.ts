@@ -10,7 +10,7 @@ import { isAbsolute, join, resolve } from "node:path"
  *
  * Resolution order (first wins):
  *   1. environment variables (CC_CONFIG_DIR, CC_PROJECTS_DIR, CC_AGENT_CMD, CC_MODEL, …)
- *   2. $CC_CONFIG_DIR/config.json  (default ~/.config/control-center/config.json)
+ *   2. $CC_CONFIG_DIR/config.json  (default ~/.config/command-center/config.json)
  *   3. defaults below
  *
  * `config.example.json` at the repo root documents every key. Secrets
@@ -67,7 +67,7 @@ export interface Config {
 }
 
 const HOME = homedir()
-const DEFAULT_CONFIG_DIR = join(HOME, ".config", "control-center")
+const DEFAULT_CONFIG_DIR = join(HOME, ".config", "command-center")
 
 export const DEFAULTS: Config = {
   user: { name: "the user", email: "", jiraAccountId: "" },
@@ -91,7 +91,7 @@ export const DEFAULTS: Config = {
   // No Jira site by default: browse links and REST transitions are disabled until set.
   jira: { baseUrl: "", cloudId: "", sprintField: "customfield_10007" },
   model: "composer-2.5",
-  projects: { exclude: ["control-center", "command-center", "node_modules"] },
+  projects: { exclude: ["command-center", "node_modules"] },
   repos: {},
 }
 
@@ -120,7 +120,7 @@ function readFile(): Partialish {
   try {
     return JSON.parse(readFileSync(path, "utf8")) as Partialish
   } catch (err) {
-    console.warn(`control-center: could not parse ${path}: ${(err as Error).message}`)
+    console.warn(`command-center: could not parse ${path}: ${(err as Error).message}`)
     return {}
   }
 }

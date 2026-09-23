@@ -14,7 +14,7 @@
 #   --project <name>  project directory name; default: the project owning $PWD or the tmux session
 #   --dir <subdir>    (plain tabs) working directory relative to the project root
 #   --repo <r>        code changes go here → the tab runs in a git WORKTREE of this repo
-#                     (mkpanes alias or path), created exactly like control center's worktrees:
+#                     (mkpanes alias or path), created exactly like command center's worktrees:
 #                     <repo>_<branch> next to the repo, via mkpanes.
 #   --ticket <KEY>    Jira key; becomes the branch name (and the title if none given).
 #                     The worker starts with /start-ticket <KEY>.
@@ -28,10 +28,10 @@
 
 set -euo pipefail
 
-# --- control-center config -------------------------------------------------
+# --- command-center config -------------------------------------------------
 # Values come from env, then $CC_CONFIG_DIR/config.json (see config.example.json
-# in the control-center repo), then the defaults here.
-CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/control-center}"
+# in the command-center repo), then the defaults here.
+CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/command-center}"
 cc_cfg() { # cc_cfg <jq path> <default>
   local v=""
   if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
@@ -172,10 +172,10 @@ mkdir -p "$DIR/.cc/tasks"
 SLUG="$(slugify "$TITLE")"
 PROMPT_FILE="$DIR/.cc/tasks/$SLUG.txt"
 
-REPORT_RULE="Reporting upward: your manager is the project's central agent (not Control Center). Use the cc-report skill. Run now: cc-report project:$PROJECT \"$TITLE: started\" — then again after real progress, when blocked or when you need a decision (--severity attention), and when done. One line, lead with \"$TITLE:\". Do not report every step. Replies from the central agent or Daniel arrive in this chat as normal messages."
+REPORT_RULE="Reporting upward: your manager is the project's central agent (not Command Center). Use the cc-report skill. Run now: cc-report project:$PROJECT \"$TITLE: started\" — then again after real progress, when blocked or when you need a decision (--severity attention), and when done. One line, lead with \"$TITLE:\". Do not report every step. Replies from the central agent or Daniel arrive in this chat as normal messages."
 
 # ---------------------------------------------------------------------------
-# worktree tab (code changes) — delegated to mkpanes so it matches control center
+# worktree tab (code changes) — delegated to mkpanes so it matches command center
 
 if [ -n "$REPO" ]; then
   [ -x "$MKPANES" ] || { echo "project-task: mkpanes not found at $MKPANES" >&2; exit 1; }

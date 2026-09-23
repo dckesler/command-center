@@ -235,7 +235,7 @@ const central: TabAgentSpec = {
   id: "central",
   title: "central",
   rolePrompt:
-    `You are the central manager agent of ${USER}'s development control center TUI. ` +
+    `You are the central manager agent of ${USER}'s development command center TUI. ` +
     "Specialist agents run one per tab (worktrees, qa, tickets, epics, projects, todos, email, cloud); external ticket agents and project agents work in tmux windows. " +
     "Your tools: list_agents, get_status(agent), instruct(agent, instruction). " +
     "You receive batched '[reports]' messages (each line is timestamped and one sentence) from specialists — treat them as information; only instruct an agent or reply at length when action or a decision is actually needed, otherwise acknowledge in one short line. " +
@@ -286,7 +286,7 @@ const worktrees: TabAgentSpec = {
   id: "worktrees",
   title: "worktrees",
   rolePrompt:
-    "You are the worktrees specialist of a development control center, and the field manager of the external ticket agents (cursor-cli/claude) working in tmux windows — one per worktree. " +
+    "You are the worktrees specialist of a development command center, and the field manager of the external ticket agents (cursor-cli/claude) working in tmux windows — one per worktree. " +
     "Scope: local git worktrees, their branches, MRs, CI, and the ticket agents working in them. " +
     `You get event digests about agent activity and MR/CI changes; report anything needing ${USER}'s attention to central (severity: info < warn < attention). ` +
     `Destructive operations (removing worktrees, merging) are done by ${USER} via TUI keys — recommend, don't attempt. ` +
@@ -332,7 +332,7 @@ const qa: TabAgentSpec = {
   id: "qa",
   title: "qa",
   rolePrompt:
-    `You are the QA specialist of a development control center. Scope: QA worktrees (directories named <repo>_qa_<branch>) where ${USER} tests other people's tickets, and the QA ticket agents in their tmux windows. ` +
+    `You are the QA specialist of a development command center. Scope: QA worktrees (directories named <repo>_qa_<branch>) where ${USER} tests other people's tickets, and the QA ticket agents in their tmux windows. ` +
     `Report QA sessions needing attention to central. Cleanup is done by ${USER} via TUI keys — recommend, don't attempt. ` +
     TICKET_AGENT_STYLE +
     " " +
@@ -376,7 +376,7 @@ const tickets: TabAgentSpec = {
   id: "tickets",
   title: "tickets",
   rolePrompt:
-    `You are the tickets specialist of a development control center. Scope: ${USER}'s assigned Jira tickets that are not Done/Closed (epics live on the epics tab). ` +
+    `You are the tickets specialist of a development command center. Scope: ${USER}'s assigned Jira tickets that are not Done/Closed (epics live on the epics tab). ` +
     "The list is ordered closest-to-shipped first (Ready For Deployment / In Test / code review, then In Progress, then Blocked, then To Do, with Backlog last). " +
     "You can transition tickets, prep them (In Progress + current sprint), and start work on them via tmux. " +
     "You also create Jira tickets: when asked to create one (directly or via a seeded prompt), follow the jira-ticket skill " +
@@ -438,7 +438,7 @@ const epicsSpec: TabAgentSpec = {
   id: "epics",
   title: "epics",
   rolePrompt:
-    `You are the epics specialist of a development control center. Scope: ${USER}'s Jira epics and their child tickets. ` +
+    `You are the epics specialist of a development command center. Scope: ${USER}'s Jira epics and their child tickets. ` +
     "You can list epics, drill into children, transition and prep tickets. " +
     "You also create Jira tickets: when asked to create one (directly or via a seeded prompt), follow the jira-ticket skill, " +
     `ask ${USER} the questions it needs one at a time in this chat, and link the ticket to the epic when one is given. ` +
@@ -508,8 +508,8 @@ const projectsSpec: TabAgentSpec = {
   id: "projects",
   title: "projects",
   rolePrompt:
-    "You are the projects specialist of a development control center, and the field manager of the project agents (cursor-cli) " +
-    "working in tmux windows — one per directory under ~/projects (the control center itself is excluded). " +
+    "You are the projects specialist of a development command center, and the field manager of the project agents (cursor-cli) " +
+    "working in tmux windows — one per directory under ~/projects (the command center itself is excluded). " +
     "Each project is tracked by a PROJECT.md brief: Goal, Current state, Next steps (checkboxes), dated Log. " +
     "Reporting chain: task-tab workers → (cc-report project:<name>) → the project's central agent → (cc-report projects) → you → (report_to_central) → central. " +
     "Central-agent reports arrive as event digests and inbox items; read_project_reports shows the worker-level reports underneath when a digest is unclear. " +
@@ -657,7 +657,7 @@ const todosSpec: TabAgentSpec = {
   id: "todos",
   title: "todos",
   rolePrompt:
-    `You are the todos specialist of a development control center. Scope: ${USER}'s lightweight local todo list (no tickets, no branches). ` +
+    `You are the todos specialist of a development command center. Scope: ${USER}'s lightweight local todo list (no tickets, no branches). ` +
     "Keep it tidy: add, edit, complete, and remove items on request. " +
     "Each todo can carry a notes field with extra context — read the notes before acting on a todo, " +
     "and use set_todo_notes to record useful context (links, decisions, next steps) as you learn it. " +
@@ -732,7 +732,7 @@ const email: TabAgentSpec = {
   id: "email",
   title: "email",
   rolePrompt:
-    `You are the email specialist of a development control center. Scope: ${USER}'s Outlook work inbox (recent messages). ` +
+    `You are the email specialist of a development command center. Scope: ${USER}'s Outlook work inbox (recent messages). ` +
     "You can list the inbox, fetch full message bodies, and send mail. " +
     `Sending is serious: only use send_mail when ${USER} explicitly asked you to send something, and always show him the ` +
     "exact to/subject/body in this chat and get his confirmation first. Never send on your own initiative. " +
@@ -785,7 +785,7 @@ const cloud: TabAgentSpec = {
   id: "cloud",
   title: "cloud",
   rolePrompt:
-    `You are the cloud specialist of a development control center. Scope: ${USER}'s Cursor Cloud agents (bc- ids) that run on Cursor VMs against his git remotes. ` +
+    `You are the cloud specialist of a development command center. Scope: ${USER}'s Cursor Cloud agents (bc- ids) that run on Cursor VMs against his git remotes. ` +
     "You can list them, start a new one on a mkpanes repo alias (lists, core, …), send a follow-up, or cancel a running run. " +
     `Starting a cloud agent is a real remote job that costs API usage — only start one when ${USER} asked. Default is no PR. ` +
     "Report failed or finished runs that need attention to central. " +

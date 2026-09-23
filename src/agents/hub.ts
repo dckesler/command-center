@@ -273,7 +273,7 @@ async function getAgent(entry: Entry): Promise<SdkAgent> {
   if (entry.agent) return entry.agent
   const apiKey = process.env.CURSOR_API_KEY
   if (!apiKey) {
-    throw new Error("CURSOR_API_KEY is not set — export it before launching the control center")
+    throw new Error("CURSOR_API_KEY is not set — export it before launching the command center")
   }
   const tools: Record<string, SDKCustomTool> = { ...entry.spec.makeTools(ctx) }
   if (entry.spec.id !== "central") {
@@ -303,7 +303,7 @@ async function getAgent(entry: Entry): Promise<SdkAgent> {
   }
   entry.agent = await Agent.create({
     apiKey,
-    name: `control-center ${entry.spec.id}`,
+    name: `command-center ${entry.spec.id}`,
     model: { id: MODEL },
     agents: entry.spec.agents,
     local: { cwd: homedir(), settingSources: ["user"], customTools: tools },

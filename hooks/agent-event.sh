@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Normalizes Cursor and Claude Code hook payloads into a single NDJSON feed
-# that the control center TUI reads to show per-worktree agent status and to
+# that the command center TUI reads to show per-worktree agent status and to
 # keep its worktree/qa manager agents aware of what the ticket agents do.
 #
 # Usage (from hooks): bash agent-event.sh <source> <kind>
@@ -24,8 +24,8 @@
 SOURCE="${1:-unknown}"
 KIND="${2:-unknown}"
 
-# --- control-center config -------------------------------------------------
-CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/control-center}"
+# --- command-center config -------------------------------------------------
+CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/command-center}"
 cc_cfg() { # cc_cfg <jq path> <default>
   local v=""
   if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
@@ -39,7 +39,7 @@ FEED_DIR="$CC_CONFIG_DIR"
 FEED="$FEED_DIR/agents.jsonl"
 PROJECTS_DIR="${CC_PROJECTS_DIR:-$(cc_cfg .dirs.projects "$HOME/projects")}"
 # Directory names under PROJECTS_DIR that are not projects (config projects.exclude).
-PROJECTS_EXCLUDE="$(cc_cfg '.projects.exclude | join(" ")' "control-center command-center node_modules")"
+PROJECTS_EXCLUDE="$(cc_cfg '.projects.exclude | join(" ")' "command-center node_modules")"
 TEXT_MAX=600
 
 mkdir -p "$FEED_DIR" 2>/dev/null || exit 0

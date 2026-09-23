@@ -24,7 +24,7 @@ import { currentSnapshot, isAgentLive, sendSystem } from "./hub.ts"
  * Autonomous event sources. Two feeds produce per-tab "[event digest]"
  * messages that run the owning specialist automatically:
  *
- *  1. the agent hook feed (~/.config/control-center/agents.jsonl) written by
+ *  1. the agent hook feed (~/.config/command-center/agents.jsonl) written by
  *     Cursor/Claude hooks in ticket worktrees → worktrees / qa tabs, and in
  *     ~/projects directories → projects tab
  *  2. explicit `cc-report` lines in that same feed (any cwd, addressed `to` a tab)
@@ -112,7 +112,7 @@ function pushEvent(
       ticket: extra?.dir ? ticketKeyFromDir(extra.dir) : undefined,
     }).id
   }
-  // Specialist is down (or Control Center just came back): leave it on disk
+  // Specialist is down (or Command Center just came back): leave it on disk
   // and wake the tab so catch-up actually runs. Without this, events sit in
   // the inbox forever — handles are lazy and nothing else creates them.
   if (!isAgentLive(tab)) {

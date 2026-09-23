@@ -100,7 +100,7 @@ export function createTicketPrompt(parentEpic?: { key: string; summary: string }
     "Create a new Jira ticket using the jira-ticket skill. " +
     parentPart +
     " the platform, type, and remaining details from me before creating anything. " +
-    "When the ticket is created, tell me the ticket key so I can start it from my control center."
+    "When the ticket is created, tell me the ticket key so I can start it from my command center."
   )
 }
 

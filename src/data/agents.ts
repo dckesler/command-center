@@ -17,7 +17,7 @@ export interface AgentStatus {
 }
 
 /**
- * One line of ~/.config/control-center/agents.jsonl, written by
+ * One line of ~/.config/command-center/agents.jsonl, written by
  * agent-event.sh from Cursor/Claude hooks or by the `cc-report` CLI.
  * State events carry `state`; activity events carry `event` instead
  * (response text, file edits, state-changing git/glab commands);

@@ -1,6 +1,6 @@
-# Control Center
+# Command Center
 
-A keyboard-first TUI (OpenTUI React) that acts as the control center for all in-progress
+A keyboard-first TUI (OpenTUI React) that acts as the command center for all in-progress
 work: worktrees, agents in tmux, GitLab MRs, and Jira tickets.
 
 ## The linking key
@@ -31,7 +31,7 @@ Every feature below was verified against the real environment before being commi
 - **Runtime:** Bun 1.4 (`brew install oven-sh/bun/bun`). Node 24 was tried first but
   OpenTUI's native FFI requires `node:ffi`, which Node 24 doesn't ship; Bun is OpenTUI's
   primary runtime. Bun lives in `~/.bun`/Homebrew and doesn't affect nvm-managed Node.
-- **Location:** `~/projects/control-center`.
+- **Location:** `~/projects/command-center`.
 - **mkpanes:** gets an optional `-s <session>` flag in phase 2 (backward compatible).
 - Runs inside tmux as a long-lived window.
 
@@ -88,7 +88,7 @@ as network calls land. `r` re-fetches.
   status, priority, relative update age, and a worktree-exists indicator. `s` opens a
   repo picker and starts the ticket via mkpanes; `c` transitions; `t` opens in browser.
 - **Phase 4: ToDos — DONE (2026-08-20).** Third view (`3`) with a JSON store at
-  `~/.config/control-center/todos.json`. Add via OpenTUI input (submit events carry no
+  `~/.config/command-center/todos.json`. Add via OpenTUI input (submit events carry no
   value, so the draft is tracked via onInput), toggle with space/enter, delete with
   confirm modal. Pending sort above completed.
 
@@ -104,7 +104,7 @@ as network calls land. `r` re-fetches.
   window running cursor-cli prompted to use the jira-ticket skill (asks for parent epic,
   platform, type, details). Note cursor-cli is a zsh alias for `agent`, so it must be
   launched via tmux send-keys into an interactive shell, not execFile. Creation is
-  conversational in that window; the control center is not blocked. Start the new ticket
+  conversational in that window; the command center is not blocked. Start the new ticket
   afterward with `s` (which runs /start-ticket via mkpanes).
 
 - **2026-08-21: wrap-up action.** `w` on a worktree row: merges the MR

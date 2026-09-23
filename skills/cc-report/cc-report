@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Report upward in the Control Center hierarchy.
+# Report upward in the Command Center hierarchy.
 #
 #   worker tab  ──cc-report project:<name>──▶  project central agent
-#   central agent ──cc-report projects──────▶  Control Center projects specialist
-#   ticket agent  ──cc-report worktrees/qa──▶  Control Center worktrees/qa specialist
+#   central agent ──cc-report projects──────▶  Command Center projects specialist
+#   ticket agent  ──cc-report worktrees/qa──▶  Command Center worktrees/qa specialist
 #
 # Usage:
 #   cc-report [target] [--severity info|warn|attention] <summary>
 #
 # Targets:
 #   worktrees | qa | tickets | epics | projects | todos | email | cloud | central
-#       → appended to Control Center's agent feed (~/.config/control-center/agents.jsonl);
+#       → appended to Command Center's agent feed (~/.config/command-center/agents.jsonl);
 #         the TUI wakes that specialist.
 #   project:<name>
 #       → appended to ~/projects/<name>/.cc/inbox.jsonl and typed into the project's
@@ -28,10 +28,10 @@
 set -uo pipefail
 
 TABS="worktrees qa tickets epics projects todos email cloud central"
-# --- control-center config -------------------------------------------------
+# --- command-center config -------------------------------------------------
 # Values come from env, then $CC_CONFIG_DIR/config.json (see config.example.json
-# in the control-center repo), then the defaults here.
-CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/control-center}"
+# in the command-center repo), then the defaults here.
+CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/command-center}"
 cc_cfg() { # cc_cfg <jq path> <default>
   local v=""
   if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
@@ -190,7 +190,7 @@ if [ "${TARGET#project:}" != "$TARGET" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Control Center tab → agent feed
+# Command Center tab → agent feed
 
 mkdir -p "$FEED_DIR" 2>/dev/null || exit 0
 
