@@ -23,6 +23,7 @@ function fit(s: string, w: number): string {
 const COLS = {
   name: 30,
   status: 10,
+  epic: 12,
   next: 7,
   updated: 13,
   tmux: 8,
@@ -105,6 +106,7 @@ export function Projects({
         <span fg={C.header}>
           {fit("PROJECT", COLS.name)}
           {fit("STATUS", COLS.status)}
+          {fit("EPIC", COLS.epic)}
           {fit("NEXT", COLS.next)}
           {fit("UPDATED", COLS.updated)}
           {fit("TMUX", COLS.tmux)}
@@ -122,6 +124,7 @@ export function Projects({
             <text>
               <span fg={isSelected ? "#ffffff" : C.key}>{isSelected ? "▸" : " "}{fit(project.name, COLS.name - 1)}</span>
               <span fg={brief ? STATUS_COLORS[status] : C.red}>{fit(brief ? status : "no brief", COLS.status)}</span>
+              <span fg={brief?.epic ? C.key : C.dim}>{fit(brief?.epic ?? "-", COLS.epic)}</span>
               <span fg={C.value}>{fit(brief ? String(brief.nextSteps.length) : "-", COLS.next)}</span>
               <span fg={C.dim}>{fit(relativeDays(project.modified), COLS.updated)}</span>
               <span fg={project.tmuxWindow ? C.green : C.dim}>{fit(project.tmuxWindow ?? "-", COLS.tmux)}</span>
@@ -134,7 +137,7 @@ export function Projects({
         )
       })}
       {projects.length === 0 && !loading && (
-        <text fg={C.dim}>no projects in ~/projects — press n to create one</text>
+        <text fg={C.dim}>no projects — press n to create one</text>
       )}
       {preview.length > 0 && (
         <box flexDirection="column" marginTop={1}>

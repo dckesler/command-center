@@ -22,7 +22,7 @@ Resolve the binary: `start-project` on `PATH`, then `~/.local/bin/start-project`
 ## What it does
 
 1. `~/projects/<slug>` — created if missing (`--goal` seeds the brief's Goal).
-2. `PROJECT.md` — written from the standard template if missing: `# name`, `**Status:**`, `**Updated:**`, `## Goal`, `## Current state`, `## Next steps` (checkboxes), `## Log`.
+2. `PROJECT.md` — written from the standard template if missing: `# name`, `**Status:**`, `**Updated:**`, `**Epic:** none`, `## Goal`, `## Current state`, `## Next steps` (checkboxes), `## Log`.
 3. tmux session named after the project (window `central`, cwd inside the project, vim / agent / shell panes) — only if it doesn't exist.
 4. `cursor-cli` in the agent pane as the **project central agent**. Its prompt (saved to `.cc/central-prompt.txt`) makes it own `PROJECT.md`, delegate with `project-task`, absorb `[report]` lines from workers, and report upward with `cc-report projects "<name>: …"`.
 5. A new Alacritty window attached to the session. If the session is already showing somewhere, it says so instead of opening a duplicate.

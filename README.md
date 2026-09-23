@@ -88,31 +88,44 @@ and the agents it launches. `bun run doctor` reports what is missing.
 
 ## Views
 
-Tabs are `1`–`9`, `0` (or `tab` to cycle): central, worktrees, qa, tickets, epics,
-projects, todos, email, cloud, calendar.
+Tabs are `1`–`9`, `0` (or `tab` to cycle): central, projects, worktrees, qa, tickets,
+epics, todos, email, cloud, calendar.
 
-- **[2] Worktrees** — one row per git worktree, joining local git state, Jira, GitLab MR,
+- **[3] Worktrees** — one row per git worktree, joining local git state, Jira, GitLab MR,
   and tmux.
-- **[4] Tickets** — tickets assigned to you that aren't Done/Closed (epics stay on
+- **[5] Tickets** — tickets assigned to you that aren't Done/Closed (epics stay on
   Epics). Sorted closest-to-shipped first (In Test / code review above In Progress,
   Blocked below it, Backlog last). The WT column marks tickets that already have a local
   worktree. `s` starts a ticket: pick a repo and it launches
   `mkpanes <repo> -w <KEY> -s <session>`. `n` creates a ticket in the tab's agent drawer.
-- **[5] Epics** — your open Jira epics. `enter` opens an epic's child tickets (the open
+- **[6] Epics** — your open Jira epics. `enter` opens an epic's child tickets (the open
   epic stays put while you switch tabs; `esc` closes it). `n` creates a ticket under the
   epic, `f` runs finalize-epic in a tmux window.
-- **[6] Projects** — every directory in `dirs.projects` (default `~/projects`, minus
+- **[2] Projects** — every directory in `dirs.projects` (default `~/projects`, minus
   `projects.exclude` and linked git worktrees). Each project is
   tracked by a `PROJECT.md` brief — `# Title`, `**Status:** active|paused|done`,
-  `**Updated:** YYYY-MM-DD`, then `## Goal`, `## Current state`, `## Next steps`
-  (checkbox list) and a dated `## Log`. The table shows status, open next steps, the
-  project's tmux window, and its agent state. `n` creates `~/projects/<name>` with a
-  template brief; `enter`/`s` runs the `start-project` skill: the project gets its own
-  tmux session (named after the project, window `central`, mkpanes-style panes) shown in
-  a new terminal window (`commands.terminal`) — not a window of the work session — with
-  `commands.agent` running as the
-  project's **central agent**. An existing session is re-attached instead. `o` opens the
-  folder, `t` opens `PROJECT.md`.
+  `**Updated:** YYYY-MM-DD`, an optional `**Epic:** LW-1234` (the Jira epic the project
+  delivers; `none` when there isn't one), then `## Goal`, `## Current state`,
+  `## Next steps` (checkbox list) and a dated `## Log`. The table shows status, epic,
+  open next steps, the project's tmux window, and its agent state. `n` creates
+  `~/projects/<name>` with a template brief; `s` runs the `start-project` skill: the
+  project gets its own tmux session (named after the project, window `central`,
+  mkpanes-style panes) shown in a new terminal window (`commands.terminal`) — not a
+  window of the work session — with `commands.agent` running as the project's
+  **central agent**. An existing session is re-attached instead. `e` links/clears the
+  epic (writes the `**Epic:**` line), `o` opens the folder, `t` opens `PROJECT.md`.
+
+  `enter` expands a project: header (status, updated, session, central agent state,
+  step counts), the epic with its Jira status and `done/total` child tickets, goal and
+  current state, then one row per **sub-agent** — every window of the project's tmux
+  session: `central` plus each `project-task` tab — with where it runs (`repo@branch`
+  for worktree tabs, `project dir` otherwise), the ticket and its Jira status, MR state
+  and CI, the agent's hook state, and the newest `cc-report` from that tab. Below: open
+  next steps and the last worker reports. The view re-reads every 10 s while open.
+  `j/k` + `enter`/`s` select a tab's window in the project session, `e` epic, `t` opens
+  the epic (or the selected tab's ticket), `m` the tab's MR, `b` `PROJECT.md`, `o` the
+  folder, `esc` back. The projects specialist has the same view as `project_detail(name)`
+  and can link epics with `set_project_epic` when asked.
 
   Reporting chain (all via the `cc-report` skill; every layer reports upward):
   `project-task` worker tabs → `cc-report project:<name>` → the project's central agent

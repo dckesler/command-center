@@ -9,6 +9,7 @@ import { DetailPanel } from "./components/DetailPanel.tsx"
 import { EpicDetail } from "./components/EpicDetail.tsx"
 import { Epics } from "./components/Epics.tsx"
 import { Projects } from "./components/Projects.tsx"
+import { ProjectDetail, type EpicSummary } from "./components/ProjectDetail.tsx"
 import { MkpanesPrompt } from "./components/MkpanesPrompt.tsx"
 import { Modal, type ModalState } from "./components/Modal.tsx"
 import { QaTicketPrompt } from "./components/QaTicketPrompt.tsx"
@@ -36,7 +37,16 @@ import {
   ingestTickets,
   startEventWatchers,
 } from "./agents/events.ts"
-import { createProject, listProjects, type Project } from "./data/projects.ts"
+import {
+  createProject,
+  listProjects,
+  listProjectTasks,
+  readProjectReportEntries,
+  setProjectEpic,
+  type Project,
+  type ProjectReport,
+  type ProjectTask,
+} from "./data/projects.ts"
 import {
   cancelCloudRun,
   followUpCloudAgent,
@@ -47,7 +57,15 @@ import {
 import { collect } from "./data/collect.ts"
 import { run } from "./data/exec.ts"
 import { getMrExtras, mergeMr } from "./data/gitlab.ts"
-import { applyTransition, getAssignedTickets, getEpicChildren, getEpics, getTransitions, prepTicket } from "./data/jira.ts"
+import {
+  applyTransition,
+  getAssignedTickets,
+  getEpicChildren,
+  getEpics,
+  getTicketsByKeys,
+  getTransitions,
+  prepTicket,
+} from "./data/jira.ts"
 import { parseRepoMap } from "./data/repos.ts"
 import {
   createTicketPrompt,
@@ -68,11 +86,11 @@ type View = "central" | "worktrees" | "qa" | "tickets" | "epics" | "projects" | 
 
 const VIEW_ORDER: View[] = [
   "central",
+  "projects",
   "worktrees",
   "qa",
   "tickets",
   "epics",
-  "projects",
   "todos",
   "email",
   "cloud",
@@ -81,11 +99,11 @@ const VIEW_ORDER: View[] = [
 
 const VIEW_BY_KEY: Record<string, View> = {
   "1": "central",
-  "2": "worktrees",
-  "3": "qa",
-  "4": "tickets",
-  "5": "epics",
-  "6": "projects",
+  "2": "projects",
+  "3": "worktrees",
+  "4": "qa",
+  "5": "tickets",
+  "6": "epics",
   "7": "todos",
   "8": "email",
   "9": "cloud",
@@ -94,6 +112,8 @@ const VIEW_BY_KEY: Record<string, View> = {
 
 /** How often today's calendar is re-fetched on its own (meetings move). */
 const CALENDAR_REFRESH_MS = 15 * 60_000
+/** How often an open project detail re-reads its task tabs / agents / reports. */
+const DETAIL_REFRESH_MS = 10_000
 
 /** In Progress first, then To Do, then Done — most actionable at the top. */
 const CATEGORY_RANK: Record<string, number> = { "In Progress": 0, "To Do": 1, New: 1, Done: 2 }
@@ -145,6 +165,16 @@ export function App() {
   const [selectedProject, setSelectedProject] = useState(0)
   /** new-project name prompt */
   const [projectPrompt, setProjectPrompt] = useState(false)
+  /** expanded project view (enter on the projects tab) */
+  const [projectDetail, setProjectDetail] = useState<{
+    name: string
+    tasks: ProjectTask[] | null | undefined
+    epic: EpicSummary | null
+    reports: ProjectReport[]
+  } | null>(null)
+  const [selectedTask, setSelectedTask] = useState(0)
+  /** set while asking for an epic key to link to the open project */
+  const [epicPrompt, setEpicPrompt] = useState<Project | null>(null)
   const [todos, setTodos] = useState<Todo[]>(() => sortTodos(loadTodos()))
   const [selectedTodo, setSelectedTodo] = useState(0)
   const [showCompletedTodos, setShowCompletedTodos] = useState(false)
@@ -649,6 +679,86 @@ export function App() {
     [finishAction],
   )
 
+  /** Load (or reload) the task tabs, epic and reports of a project into the detail view. */
+  const loadProjectDetail = useCallback(
+    (project: Project, fresh: boolean) => {
+      const epicKey = project.brief?.epic ?? null
+      setProjectDetail((d) => ({
+        name: project.name,
+        tasks: fresh || !d || d.name !== project.name ? undefined : d.tasks,
+        epic:
+          epicKey === null
+            ? null
+            : !fresh && d?.name === project.name && d.epic?.key === epicKey
+              ? d.epic
+              : { key: epicKey, ticket: null, children: null },
+        reports: readProjectReportEntries(project.path),
+      }))
+      listProjectTasks(project, rows).then((tasks) => {
+        setProjectDetail((d) => (d && d.name === project.name ? { ...d, tasks } : d))
+        setSelectedTask((s) => Math.min(s, Math.max(0, (tasks?.length ?? 1) - 1)))
+      })
+      if (epicKey && (fresh || projectDetail?.epic?.key !== epicKey || projectDetail.name !== project.name)) {
+        getTicketsByKeys([epicKey]).then((found) => {
+          setProjectDetail((d) =>
+            d && d.name === project.name && d.epic?.key === epicKey
+              ? { ...d, epic: { ...d.epic, ticket: found.get(epicKey) ?? undefined } }
+              : d,
+          )
+        })
+        getEpicChildren(epicKey).then((children) => {
+          setProjectDetail((d) =>
+            d && d.name === project.name && d.epic?.key === epicKey
+              ? { ...d, epic: { ...d.epic, children: sortEpicTickets(children ?? []) } }
+              : d,
+          )
+        })
+      }
+    },
+    [rows, projectDetail],
+  )
+
+  const openProjectDetail = useCallback(
+    (project: Project) => {
+      setSelectedTask(0)
+      loadProjectDetail(project, true)
+    },
+    [loadProjectDetail],
+  )
+
+  // Keep the open project detail current: on data refreshes and on a slow tick
+  // (task tabs come and go, agents change state, reports arrive) while it is open.
+  const detailProject = projectDetail ? projects.find((p) => p.name === projectDetail.name) ?? null : null
+  const [detailTick, setDetailTick] = useState(0)
+  useEffect(() => {
+    if (!projectDetail) return
+    const interval = setInterval(() => setDetailTick((t) => t + 1), DETAIL_REFRESH_MS)
+    return () => clearInterval(interval)
+  }, [projectDetail !== null])
+  useEffect(() => {
+    if (detailProject) loadProjectDetail(detailProject, false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, projects, detailTick])
+
+  const submitEpic = useCallback(
+    (value: string) => {
+      const project = epicPrompt
+      setEpicPrompt(null)
+      if (!project) return
+      const cleared = value.trim() === "" || /^(none|-|clear)$/i.test(value.trim())
+      const result = setProjectEpic(project.path, cleared ? null : value)
+      setMessage({ text: result.message, ok: result.ok })
+      if (result.ok) {
+        listProjects().then((fresh) => {
+          setProjects(fresh)
+          const updated = fresh.find((p) => p.name === project.name)
+          if (updated && projectDetail?.name === project.name) loadProjectDetail(updated, true)
+        })
+      }
+    },
+    [epicPrompt, projectDetail, loadProjectDetail],
+  )
+
   const submitNewProject = useCallback(
     (name: string) => {
       setProjectPrompt(false)
@@ -764,19 +874,21 @@ export function App() {
     detailRow !== null ||
     mkpanesPrompt ||
     projectPrompt ||
+    epicPrompt !== null ||
     qaPrompt !== null ||
     cloudPrompt !== null
   const drawerVisible = drawerOpen && view !== "central" && !overlayActive
 
   useKeyboard((key) => {
     // While a text input is focused it owns all keys except escape.
-    if (addingTodo || editingTodo || editingTodoNotes || mkpanesPrompt || projectPrompt || qaPrompt || cloudPrompt) {
+    if (addingTodo || editingTodo || editingTodoNotes || mkpanesPrompt || projectPrompt || epicPrompt || qaPrompt || cloudPrompt) {
       if (key.name === "escape") {
         setAddingTodo(false)
         setEditingTodo(null)
         setEditingTodoNotes(null)
         setMkpanesPrompt(false)
         setProjectPrompt(false)
+        setEpicPrompt(null)
         setQaPrompt(null)
         setCloudPrompt(null)
       }
@@ -1030,6 +1142,37 @@ export function App() {
       return
     }
 
+    if (view === "projects" && projectDetail && detailProject) {
+      const tasks = projectDetail.tasks ?? []
+      const task = tasks[selectedTask]
+      if (key.name === "escape") setProjectDetail(null)
+      if (key.name === "j" || key.name === "down") {
+        setSelectedTask((s) => Math.min(s + 1, Math.max(0, tasks.length - 1)))
+      }
+      if (key.name === "k" || key.name === "up") {
+        setSelectedTask((s) => Math.max(s - 1, 0))
+      }
+      if (key.name === "return" || key.name === "s") {
+        if (task) {
+          jumpToWindow(task.target).then((ok) =>
+            setMessage(ok ? { text: `selected ${task.name} in the ${detailProject.name} session`, ok: true } : { text: `could not select ${task.target}`, ok: false }),
+          )
+        } else if (projectDetail.tasks === null) {
+          openProject(detailProject)
+        }
+      }
+      if (key.name === "e") setEpicPrompt(detailProject)
+      if (key.name === "t") {
+        const url = projectDetail.epic?.ticket?.url
+        if (url) run("open", [url])
+        else if (task?.ticket?.url) run("open", [task.ticket.url])
+      }
+      if (key.name === "m" && task?.mr?.url) run("open", [task.mr.url])
+      if (key.name === "b") run("open", [`${detailProject.path}/PROJECT.md`])
+      if (key.name === "o") run("open", [detailProject.path])
+      return
+    }
+
     if (view === "projects") {
       const project = projects[selectedProject]
       if (key.name === "j" || key.name === "down") {
@@ -1038,7 +1181,9 @@ export function App() {
       if (key.name === "k" || key.name === "up") {
         setSelectedProject((s) => Math.max(s - 1, 0))
       }
-      if ((key.name === "return" || key.name === "s") && project) openProject(project)
+      if (key.name === "return" && project) openProjectDetail(project)
+      if (key.name === "s" && project) openProject(project)
+      if (key.name === "e" && project) setEpicPrompt(project)
       if (key.name === "n") setProjectPrompt(true)
       if (key.name === "o" && project) run("open", [project.path])
       if (key.name === "t" && project) run("open", [`${project.path}/PROJECT.md`])
@@ -1114,16 +1259,16 @@ export function App() {
           <span fg="#93c5fd">COMMAND CENTER</span>
           <span fg={view === "central" ? "#ffffff" : "#6b7280"}>  [1] central</span>
           {agentDot("central")}
-          <span fg={view === "worktrees" ? "#ffffff" : "#6b7280"}>  [2] {workRows.length} worktrees</span>
-          {agentDot("worktrees")}
-          <span fg={view === "qa" ? "#ffffff" : "#6b7280"}>  [3] {qaRows.length} qa</span>
-          {agentDot("qa")}
-          <span fg={view === "tickets" ? "#ffffff" : "#6b7280"}>  [4] {tickets.length} tickets</span>
-          {agentDot("tickets")}
-          <span fg={view === "epics" ? "#ffffff" : "#6b7280"}>  [5] {epics.length} epics</span>
-          {agentDot("epics")}
-          <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [6] {projects.length} projects</span>
+          <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [2] {projects.length} projects</span>
           {agentDot("projects")}
+          <span fg={view === "worktrees" ? "#ffffff" : "#6b7280"}>  [3] {workRows.length} worktrees</span>
+          {agentDot("worktrees")}
+          <span fg={view === "qa" ? "#ffffff" : "#6b7280"}>  [4] {qaRows.length} qa</span>
+          {agentDot("qa")}
+          <span fg={view === "tickets" ? "#ffffff" : "#6b7280"}>  [5] {tickets.length} tickets</span>
+          {agentDot("tickets")}
+          <span fg={view === "epics" ? "#ffffff" : "#6b7280"}>  [6] {epics.length} epics</span>
+          {agentDot("epics")}
           <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [7] {todos.filter((t) => !t.done).length} todos</span>
           {agentDot("todos")}
           <span fg={view === "email" ? "#ffffff" : "#6b7280"}>
@@ -1149,6 +1294,13 @@ export function App() {
             placeholder="project name (enter to create, esc to cancel)"
             hint="creates ~/projects/<name> with a PROJECT.md brief and opens a tmux window running its project agent"
             onSubmit={submitNewProject}
+          />
+        ) : epicPrompt ? (
+          <CloudPrompt
+            title={`Epic for ${epicPrompt.name}`}
+            placeholder={`${epicPrompt.brief?.epic ?? "LW-1234"} (enter to link, empty or "none" to clear, esc to cancel)`}
+            hint="writes the **Epic:** line of PROJECT.md; the detail view shows the epic's status and ticket progress"
+            onSubmit={submitEpic}
           />
         ) : qaPrompt ? (
           <QaTicketPrompt repo={qaPrompt.repo} onSubmit={submitQaTicket} />
@@ -1228,6 +1380,16 @@ export function App() {
             width={width - 2}
             height={contentHeight}
           />
+        ) : view === "projects" && projectDetail && detailProject ? (
+          <ProjectDetail
+            project={detailProject}
+            tasks={projectDetail.tasks}
+            epic={projectDetail.epic}
+            reports={projectDetail.reports}
+            selected={selectedTask}
+            width={width - 2}
+            height={contentHeight}
+          />
         ) : view === "projects" ? (
           <Projects
             projects={projects}
@@ -1304,7 +1466,7 @@ export function App() {
             <span fg="#6b7280">
               {drawerVisible && drawerFocused
                 ? "enter send   esc table keys   ; close agent chat"
-                : mkpanesPrompt || projectPrompt || qaPrompt || cloudPrompt
+                : mkpanesPrompt || projectPrompt || epicPrompt || qaPrompt || cloudPrompt
                 ? "enter run   esc cancel"
                 : modal
                 ? "j/k move   enter select   esc cancel"
@@ -1330,8 +1492,10 @@ export function App() {
                         ? "tab views   j/k move   n create ticket   s start ticket   c status   t open ticket   ; agent   r refresh   ctrl+c quit"
                         : view === "epics"
                           ? "tab views   j/k move   enter open epic   n new ticket   f finalize   c status   t open epic   ; agent   r refresh   ctrl+c quit"
+                        : view === "projects" && projectDetail
+                          ? "esc back   j/k move   enter/s jump to tab   e epic   t open epic/ticket   m open MR   b PROJECT.md   o folder   ; agent   r refresh   ctrl+c quit"
                         : view === "projects"
-                          ? "tab views   j/k move   enter/s open or resume   n new project   o open folder   t open PROJECT.md   ; agent   r refresh   ctrl+c quit"
+                          ? "tab views   j/k move   enter details   s open or resume   e epic   n new project   o open folder   t open PROJECT.md   ; agent   r refresh   ctrl+c quit"
                           : view === "qa"
                             ? "tab views   j/k move   enter details   n new QA   s open/jump   c status   x cleanup   ; agent   r refresh   o/t open   ctrl+c quit"
                             : "tab views   j/k move   enter details   n new   s start/jump   c status   w wrap-up   x cleanup   X mass cleanup   ; agent   r refresh   o/t open   ctrl+c quit"}

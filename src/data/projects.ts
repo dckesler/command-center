@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
 import { config } from "../config.ts"
+import type { MrInfo, Row, TicketInfo } from "../types.ts"
 import { readAgentStatuses, type AgentStatus } from "./agents.ts"
+import { run } from "./exec.ts"
 import { listTmuxWindows, projectSessionName } from "./tmux.ts"
 
 /**
@@ -23,6 +25,8 @@ export interface ProjectBrief {
   status: ProjectStatus
   /** "Updated:" line from the brief, if present (YYYY-MM-DD). */
   updated: string | null
+  /** "Epic:" line — the Jira epic this project delivers, if any (e.g. LW-17444). */
+  epic: string | null
   /** First paragraph under "## Goal". */
   goal: string
   /** First paragraph under "## Current state". */
@@ -70,6 +74,11 @@ function sectionAfter(body: string, heading: RegExp): string {
   return (end === -1 ? rest : rest.slice(0, end)).join("\n")
 }
 
+/** `**Epic:** LW-1234` (key optional — "none"/"-" mean no epic). */
+const EPIC_LINE = /^\**Epic:?\**:?\s*([A-Za-z][A-Za-z0-9]+-\d+)\b/im
+const EPIC_ANY_LINE = /^\**Epic:?\**:?.*$/im
+export const TICKET_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/
+
 export function parseBrief(markdown: string, fallbackTitle: string): ProjectBrief {
   const title = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || fallbackTitle
   const statusRaw = markdown.match(/^\**Status:?\**:?\s*(.+)$/im)?.[1]?.trim().toLowerCase() ?? ""
@@ -81,6 +90,7 @@ export function parseBrief(markdown: string, fallbackTitle: string): ProjectBrie
         ? "done"
         : "unknown"
   const updated = markdown.match(/^\**Updated:?\**:?\s*(\d{4}-\d{2}-\d{2})/im)?.[1] ?? null
+  const epic = markdown.match(EPIC_LINE)?.[1]?.toUpperCase() ?? null
   const steps = sectionAfter(markdown, /^##\s+next steps/i)
   const nextSteps: string[] = []
   let doneSteps = 0
@@ -94,6 +104,7 @@ export function parseBrief(markdown: string, fallbackTitle: string): ProjectBrie
     title,
     status,
     updated,
+    epic,
     goal: firstParagraph(sectionAfter(markdown, /^##\s+goal/i)),
     currentState: firstParagraph(sectionAfter(markdown, /^##\s+current state/i)),
     nextSteps,
@@ -111,6 +122,7 @@ export function briefTemplate(name: string, goal = ""): string {
     "",
     "**Status:** active",
     `**Updated:** ${today()}`,
+    "**Epic:** none",
     "",
     "## Goal",
     "",
@@ -262,10 +274,49 @@ export function createProject(rawName: string, goal = ""): { ok: boolean; messag
 }
 
 /**
- * Worker reports delivered to a project's central agent by
- * `cc-report project:<name>` (appended to <project>/.cc/inbox.jsonl).
+ * Set or clear the `**Epic:**` line of a project's PROJECT.md (creating the
+ * brief if needed). Returns the normalized key, or null when cleared.
  */
-export function readProjectReports(projectPath: string, count = 20): string[] {
+export function setProjectEpic(projectPath: string, epicKey: string | null): { ok: boolean; message: string } {
+  const key = epicKey?.trim().toUpperCase() || null
+  if (key && !/^[A-Z][A-Z0-9]+-\d+$/.test(key)) return { ok: false, message: `"${epicKey}" is not a Jira key (e.g. LW-17444)` }
+  const path = briefPath(projectPath)
+  let markdown = readBriefRaw(projectPath) ?? briefTemplate(basename(projectPath))
+  const line = `**Epic:** ${key ?? "none"}`
+  if (EPIC_ANY_LINE.test(markdown)) {
+    markdown = markdown.replace(EPIC_ANY_LINE, line)
+  } else {
+    // After the Updated/Status header lines, else after the title.
+    const anchor = markdown.match(/^\**Updated:?\**:?.*$/im) ?? markdown.match(/^\**Status:?\**:?.*$/im) ?? markdown.match(/^#\s+.+$/m)
+    markdown = anchor
+      ? markdown.replace(anchor[0], `${anchor[0]}\n${line}`)
+      : `${line}\n${markdown}`
+  }
+  try {
+    writeFileSync(path, markdown)
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+  }
+  return { ok: true, message: key ? `${basename(projectPath)} → epic ${key}` : `${basename(projectPath)}: epic cleared` }
+}
+
+// ---------------------------------------------------------------------------
+// worker reports and task tabs
+
+export interface ProjectReport {
+  ts: string
+  /** tmux window name of the reporter (or its directory basename) */
+  from: string
+  severity: "info" | "warn" | "attention"
+  text: string
+  dir: string
+}
+
+/**
+ * Worker reports delivered to a project's central agent by
+ * `cc-report project:<name>` (appended to <project>/.cc/inbox.jsonl), oldest first.
+ */
+export function readProjectReportEntries(projectPath: string): ProjectReport[] {
   const path = join(projectPath, ".cc", "inbox.jsonl")
   if (!existsSync(path)) return []
   let raw: string
@@ -274,18 +325,121 @@ export function readProjectReports(projectPath: string, count = 20): string[] {
   } catch {
     return []
   }
-  const out: string[] = []
+  const out: ProjectReport[] = []
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue
     try {
-      const r = JSON.parse(line) as { ts?: string; from?: string; severity?: string; text?: string }
-      const clock = r.ts ? new Date(r.ts).toTimeString().slice(0, 5) : "--:--"
-      out.push(`[${clock}] ${r.from ?? "?"} (${r.severity ?? "info"}): ${r.text ?? ""}`)
+      const r = JSON.parse(line) as Partial<ProjectReport>
+      out.push({
+        ts: r.ts ?? "",
+        from: r.from ?? "?",
+        severity: r.severity === "warn" || r.severity === "attention" ? r.severity : "info",
+        text: r.text ?? "",
+        dir: r.dir ?? "",
+      })
     } catch {
       // skip malformed
     }
   }
-  return out.slice(-count)
+  return out
+}
+
+export function fmtReport(r: ProjectReport): string {
+  const clock = r.ts ? new Date(r.ts).toTimeString().slice(0, 5) : "--:--"
+  return `[${clock}] ${r.from} (${r.severity}): ${r.text}`
+}
+
+export function readProjectReports(projectPath: string, count = 20): string[] {
+  return readProjectReportEntries(projectPath).slice(-count).map(fmtReport)
+}
+
+/** One tmux window of a project's session: the central agent or a task tab. */
+export interface ProjectTask {
+  /** tmux `session:index` */
+  target: string
+  name: string
+  role: "central" | "task"
+  path: string
+  /** the tab runs in a git worktree (project-task --repo) */
+  worktree: boolean
+  /** joined from the worktrees tab when the path is a known worktree */
+  repo: string | null
+  branch: string | null
+  ticketKey: string | null
+  ticket: TicketInfo | null
+  mr: MrInfo | null
+  agent: AgentStatus | null
+  /** newest cc-report from this tab, if any */
+  lastReport: ProjectReport | null
+  /** ISO of the window's last activity */
+  activity: string
+}
+
+/**
+ * Task tabs (and the central window) of a project's tmux session, joined with
+ * the worktrees tab rows, the agent hook feed and the project's report inbox.
+ * null when the session is not running.
+ */
+export async function listProjectTasks(project: Project, rows: Row[] = []): Promise<ProjectTask[] | null> {
+  const session = projectSessionName(project.name)
+  const res = await run("tmux", [
+    "list-windows",
+    "-t",
+    `=${session}`,
+    "-F",
+    "#{session_name}:#{window_index}\t#{window_name}\t#{@cc_role}\t#{pane_current_path}\t#{window_activity}",
+  ])
+  if (!res.ok) return null
+  const agents = readAgentStatuses()
+  const reports = readProjectReportEntries(project.path)
+  const byPath = new Map(rows.map((r) => [r.worktreePath, r]))
+  const tasks: ProjectTask[] = []
+  for (const line of res.stdout.split("\n")) {
+    if (!line.includes("\t")) continue
+    const [target, name, role, path, activity] = line.split("\t")
+    const row = byPath.get(path)
+    const worktree = !!row || isLinkedWorktree(path)
+    const ticketKey = row?.ticketKey ?? name.match(TICKET_KEY)?.[0] ?? null
+    // Newest report from this tab: by window name, then by ticket key in the
+    // reporter's name (tabs get renamed), then by directory for worktrees
+    // (project-dir tabs all share the project path, so no dir fallback there).
+    const newest = [...reports].reverse()
+    const lastReport =
+      newest.find((r) => r.from === name) ??
+      (ticketKey ? newest.find((r) => r.from.includes(ticketKey)) : undefined) ??
+      (worktree ? newest.find((r) => r.dir === path) : undefined) ??
+      null
+    tasks.push({
+      target,
+      name,
+      role: role === "central" || name === "central" ? "central" : "task",
+      path,
+      worktree,
+      repo: row?.repo ?? (worktree ? basename(path).split("_")[0] : null),
+      branch: row?.branch ?? null,
+      ticketKey,
+      ticket: row?.ticket ?? null,
+      mr: row?.mr ?? null,
+      agent: agents.get(path) ?? null,
+      lastReport,
+      activity: activity && /^\d+$/.test(activity) ? new Date(Number(activity) * 1000).toISOString() : "",
+    })
+  }
+  // central first, then tasks in window order
+  return tasks.sort((a, b) => Number(b.role === "central") - Number(a.role === "central"))
+}
+
+/** One line per task for agents. */
+export function fmtTask(t: ProjectTask): string {
+  const parts = [
+    `${t.role === "central" ? "[central]" : "[task]"} ${t.name} (${t.target})`,
+    t.worktree ? `worktree ${t.repo ?? basename(t.path)}${t.branch ? `@${t.branch}` : ""}` : "project dir",
+    t.ticketKey ? `${t.ticketKey}${t.ticket ? ` ${t.ticket.status}` : ""}` : null,
+    t.mr ? `MR !${t.mr.iid} ${t.mr.state}${t.mr.pipelineStatus ? ` ci:${t.mr.pipelineStatus}` : ""}` : null,
+    t.agent ? `agent ${t.agent.state}` : "no agent",
+    t.lastReport ? `last: ${fmtReport(t.lastReport)}` : "no reports",
+  ].filter((x): x is string => !!x)
+  return parts.join(" | ")
 }
 
 /** One-line summary used by the specialist and digests. */
@@ -294,6 +448,7 @@ export function fmtProject(p: Project): string {
   const parts = [
     p.name,
     b ? `status ${b.status}` : "no PROJECT.md",
+    b?.epic ? `epic ${b.epic}` : null,
     b && b.nextSteps.length ? `${b.nextSteps.length} next step${b.nextSteps.length === 1 ? "" : "s"}` : null,
     p.tmuxWindow ? `window ${p.tmuxWindow}` : "no window",
     p.agent ? `agent ${p.agent.state} (${p.agent.source})` : "no agent",

@@ -115,6 +115,7 @@ if [ ! -f "$DIR/PROJECT.md" ]; then
 
 **Status:** active
 **Updated:** $TODAY
+**Epic:** none
 
 ## Goal
 
@@ -162,7 +163,7 @@ PROMPT_FILE="$DIR/.cc/central-prompt.txt"
 cat > "$PROMPT_FILE" <<EOF
 You are the central agent for the project "$NAME" in $DIR. This tmux window ("central") is yours; you own PROJECT.md.
 
-PROJECT.md is the project's source of truth: Goal, Current state, Next steps (checkbox list), and a dated Log. $OPENING
+PROJECT.md is the project's source of truth: Goal, Current state, Next steps (checkbox list), and a dated Log. The header line "**Epic:** <KEY|none>" links the Jira epic this project delivers (optional); when the project has one, set it there and prefer epic child tickets for project-task --ticket so the Command Center project view can show progress. $OPENING
 
 Keep PROJECT.md current as we work: update Current state, tick finished Next steps and add new ones, append a dated Log line per session or milestone, and bump the Updated date.
 

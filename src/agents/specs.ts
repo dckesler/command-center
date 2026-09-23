@@ -15,9 +15,18 @@ import {
 import { run } from "../data/exec.ts"
 import { getMessageBody, sendMail, type EmailMessage } from "../data/outlook.ts"
 import { dayBounds, fmtEvent, getEventDetail, getEvents, type CalendarEvent } from "../data/calendar.ts"
-import { applyTransition, getEpicChildren, getTransitions, prepTicket } from "../data/jira.ts"
-import { createProject, fmtProject, readBriefRaw, readProjectReports, type Project } from "../data/projects.ts"
-import { launchWork, openProjectWindow, projectSessionName, runMkpanes, targetSession } from "../data/tmux.ts"
+import { applyTransition, getEpicChildren, getTicketsByKeys, getTransitions, prepTicket } from "../data/jira.ts"
+import {
+  createProject,
+  fmtProject,
+  fmtTask,
+  listProjectTasks,
+  readBriefRaw,
+  readProjectReports,
+  setProjectEpic,
+  type Project,
+} from "../data/projects.ts"
+import { launchWork, openProjectWindow, runMkpanes, targetSession } from "../data/tmux.ts"
 import { addTodo, editTodo, loadTodos, removeTodo, setTodoNotes, sortTodos, toggleTodo } from "../data/todos.ts"
 
 /** Live TUI state pushed into the hub by the App on every change. */
@@ -514,7 +523,8 @@ const projectsSpec: TabAgentSpec = {
   rolePrompt:
     "You are the projects specialist of a development command center, and the field manager of the project agents (cursor-cli) " +
     "working in tmux windows — one per directory under ~/projects (the command center itself is excluded). " +
-    "Each project is tracked by a PROJECT.md brief: Goal, Current state, Next steps (checkboxes), dated Log. " +
+    "Each project is tracked by a PROJECT.md brief: Goal, Current state, Next steps (checkboxes), dated Log, and an optional **Epic:** line linking the Jira epic it delivers. " +
+    "project_detail(name) is the one-call overview (brief, epic progress, every sub-agent tab with worktree/ticket/MR/agent state and last report) — use it before answering questions about a project. " +
     "Reporting chain: task-tab workers → (cc-report project:<name>) → the project's central agent → (cc-report projects) → you → (report_to_central) → central. " +
     "Central-agent reports arrive as event digests and inbox items; read_project_reports shows the worker-level reports underneath when a digest is unclear. " +
     "You can list projects, read a brief, read a central agent's pane or transcript, message it, list its task tabs, and open/resume a project (start-project skill). " +
@@ -627,15 +637,64 @@ const projectsSpec: TabAgentSpec = {
         },
       },
       list_project_tasks: {
-        description: "Task tabs (tmux windows other than central) currently open in a project's session.",
+        description:
+          "Sub-agents of a project: every tmux window in its session (central + task tabs) with worktree/repo@branch, " +
+          "ticket + Jira status, MR state, agent hook state and the newest cc-report from that tab.",
         inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
         execute: async (args) => {
           const project = find(str(args.name))
           if (!project) return `no project named "${str(args.name)}"`
-          const res = await run("tmux", ["list-windows", "-t", `=${projectSessionName(project.name)}`, "-F", "#{window_index} #{window_name}"])
-          if (!res.ok) return `${project.name} has no running session`
-          const tabs = res.stdout.split("\n").filter((l) => l.trim() && !l.endsWith(" central"))
-          return tabs.length ? tabs.join("\n") : `${project.name}: no task tabs open`
+          const tasks = await listProjectTasks(project, ctx.snapshot().rows)
+          if (tasks === null) return `${project.name} has no running session`
+          return tasks.length ? tasks.map(fmtTask).join("\n") : `${project.name}: session has no windows`
+        },
+      },
+      project_detail: {
+        description:
+          "Everything known about one project in one call: brief header (status, epic, goal, current state, open next steps), " +
+          "sub-agents (list_project_tasks), epic ticket progress from Jira when an epic is linked, and the last worker reports.",
+        inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+        execute: async (args) => {
+          const project = find(str(args.name))
+          if (!project) return `no project named "${str(args.name)}"`
+          const b = project.brief
+          const out: string[] = [fmtProject(project)]
+          if (b) {
+            if (b.goal) out.push(`goal: ${b.goal}`)
+            if (b.currentState) out.push(`now: ${b.currentState}`)
+            if (b.nextSteps.length) out.push(`next steps (${b.nextSteps.length} open, ${b.doneSteps} done):\n${b.nextSteps.map((s) => `  - ${s}`).join("\n")}`)
+          }
+          if (b?.epic) {
+            const [found, children] = await Promise.all([getTicketsByKeys([b.epic]), getEpicChildren(b.epic)])
+            const epic = found.get(b.epic)
+            if (!epic) out.push(`epic ${b.epic}: not found in Jira`)
+            else {
+              const done = (children ?? []).filter((c) => c.statusCategory === "Done").length
+              out.push(`epic ${epic.key} ${epic.summary} [${epic.status}] — ${done}/${children?.length ?? 0} tickets done`)
+              if (children?.length) out.push(children.map((c) => `  ${c.key} [${c.status}] ${c.assignee ?? "-"}: ${c.summary}`).join("\n"))
+            }
+          }
+          const tasks = await listProjectTasks(project, ctx.snapshot().rows)
+          out.push(tasks === null ? "session: not running" : tasks.length ? `sub-agents:\n${tasks.map((t) => `  ${fmtTask(t)}`).join("\n")}` : "session running, no windows")
+          const reports = readProjectReports(project.path, 8)
+          if (reports.length) out.push(`recent reports:\n${reports.map((r) => `  ${r}`).join("\n")}`)
+          return out.join("\n")
+        },
+      },
+      set_project_epic: {
+        description: `Link a Jira epic to a project (writes the **Epic:** line of PROJECT.md) or clear it with key "none". Only when ${USER} asked.`,
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" }, key: { type: "string", description: "epic key, e.g. LW-17444, or none" } },
+          required: ["name", "key"],
+        },
+        execute: (args) => {
+          const project = find(str(args.name))
+          if (!project) return `no project named "${str(args.name)}"`
+          const key = str(args.key)
+          const result = setProjectEpic(project.path, /^(none|-|clear)$/i.test(key) ? null : key)
+          if (result.ok) ctx.appChanged("refresh")
+          return result.message
         },
       },
       create_project: {
