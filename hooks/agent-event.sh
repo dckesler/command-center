@@ -7,6 +7,7 @@
 #   source: cursor | claude
 #   kind:   state events   start | working | idle | attention | ended
 #           activity events response | edit | shell
+#           mail delivery   tool (Cursor postToolUse)
 #
 # State events:    {ts, source, state, dir, session, summary?, transcript?}
 # Activity events: {ts, source, event, dir, session, text|file|command}
@@ -15,6 +16,12 @@
 # Reads the hook's JSON payload on stdin. Cursor provides workspace_roots and
 # conversation_id; Claude Code provides cwd, session_id and transcript_path.
 # Always exits 0 so a logging failure can never block an agent.
+#
+# Inter-agent mail (Cursor only): messages other agents sent to this agent's
+# directory wait in a cc-mail mailbox. `tool` (postToolUse) hands them over as
+# additional_context while the agent is working; `idle` (stop) hands them over
+# as followup_message so a finishing agent picks them up as its next turn.
+# Nothing else may write to stdout — Cursor parses it as the hook's JSON reply.
 
 #
 # Install: `bun run setup` symlinks this file to $CC_CONFIG_DIR/agent-event.sh
@@ -42,11 +49,41 @@ PROJECTS_DIR="${CC_PROJECTS_DIR:-$(cc_cfg .dirs.projects "$HOME/projects")}"
 PROJECTS_EXCLUDE="$(cc_cfg '.projects.exclude | join(" ")' "command-center node_modules")"
 TEXT_MAX=600
 
+# cc-mail CLI: PATH, ~/.local/bin, or the repo copy next to this script's real location.
+cc_mail() {
+  local bin
+  bin="$(command -v cc-mail 2>/dev/null || true)"
+  [ -n "$bin" ] || { [ -x "$HOME/.local/bin/cc-mail" ] && bin="$HOME/.local/bin/cc-mail"; }
+  if [ -z "$bin" ]; then
+    local here
+    here="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")" && pwd)"
+    [ -x "$here/../skills/cc-mail/cc-mail" ] && bin="$here/../skills/cc-mail/cc-mail"
+  fi
+  [ -n "$bin" ] || return 0
+  "$bin" "$@"
+}
+
+# Undelivered cc-mail for this agent's directory as one text block ("" if none).
+# Cheap when the mailbox is empty: cc-mail only formats when there are lines.
+pending_mail() {
+  [ "$SOURCE" = "cursor" ] && [ -n "$DIR" ] || return 0
+  [ -d "$FEED_DIR/mail" ] || return 0
+  cc_mail drain --dir "$DIR" 2>/dev/null
+}
+
 mkdir -p "$FEED_DIR" 2>/dev/null || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
 INPUT="$(cat)"
 DIR="$(printf '%s' "$INPUT" | jq -r '((.workspace_roots // [])[0] // .cwd // "")' 2>/dev/null)"
+
+# postToolUse: deliver waiting mail mid-turn and stop — this fires on every
+# tool call, so it must do nothing else.
+if [ "$KIND" = "tool" ]; then
+  MAIL="$(pending_mail)"
+  [ -n "$MAIL" ] && jq -nc --arg m "$MAIL" '{additional_context: $m}'
+  exit 0
+fi
 
 # jq programs (single-quoted: $vars are jq --arg variables, not shell ones).
 BASE='{ts: (now | todate), source: $source, dir: ((.workspace_roots // [])[0] // .cwd // ""), session: (.conversation_id // .session_id // "")}'
@@ -123,6 +160,13 @@ case "$KIND" in
       emit_response "$(last_claude_text "$TP")"
     fi
     append "$(printf '%s' "$INPUT" | jq -c --arg source "$SOURCE" --arg state "$KIND" "$STATE_FILTER" 2>/dev/null)"
+    # stop: a finishing Cursor agent takes waiting mail as its next turn. Only
+    # when the turn completed — an aborted/errored stop may not run follow-ups,
+    # and the mail must stay queued for the wake path instead.
+    if [ "$KIND" = "idle" ] && [ "$(printf '%s' "$INPUT" | jq -r '.status // "completed"' 2>/dev/null)" = "completed" ]; then
+      MAIL="$(pending_mail)"
+      [ -n "$MAIL" ] && jq -nc --arg m "$MAIL" '{followup_message: $m}'
+    fi
     ;;
 
   *)

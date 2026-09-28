@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# cc-mail — the inter-agent mailbox behind Command Center messaging.
+#
+# Messages between agents used to be typed straight into the recipient's
+# cursor-cli pane with `tmux send-keys`, which collided with whatever the human
+# was typing there. Every message is now appended to a per-directory mailbox
+# and delivered by one of three paths, none of which touch a busy input box:
+#
+#   1. postToolUse hook → additional_context  (agent is working: after its next tool call)
+#   2. stop hook        → followup_message    (agent just finished a turn)
+#   3. cc-mail send     → tmux send-keys      (agent is idle AND nobody has typed in its
+#      tmux session for mail.quietSeconds AND its input box is empty; otherwise
+#      the message waits for 1/2 or for the next send)
+#
+# Mailboxes live in $CC_CONFIG_DIR/mail/<dir with / → %>.jsonl with a .read
+# offset file beside them, so nothing lands inside a repo or project directory.
+#
+# Usage:
+#   cc-mail send (--dir <dir> | --pane <pane-id> | --window <tmux target>)
+#                [--from <who>] [--severity info|warn|attention] [--no-wake] <text>
+#   cc-mail drain --dir <dir> [--json]   print undelivered messages (hook text) and mark them delivered
+#   cc-mail peek  --dir <dir>            print undelivered messages without marking them
+#   cc-mail pending --dir <dir>          number of undelivered messages
+#   cc-mail path  --dir <dir>            mailbox path
+#
+# Always exits 0 so a messaging failure can never block an agent (usage errors exit 1).
+
+set -uo pipefail
+
+# --- command-center config -------------------------------------------------
+CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/command-center}"
+cc_cfg() { # cc_cfg <jq path> <default>
+  local v=""
+  if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
+    v="$(jq -r "$1 // empty" "$CC_CONFIG_DIR/config.json" 2>/dev/null || true)"
+  fi
+  v="${v:-$2}"
+  case "$v" in "~/"*) v="$HOME/${v#\~/}" ;; '$HOME/'*) v="$HOME/${v#\$HOME/}" ;; esac
+  printf '%s' "$v"
+}
+FEED="$CC_CONFIG_DIR/agents.jsonl"
+MAIL_DIR="$CC_CONFIG_DIR/mail"
+TEXT_MAX=400
+# pane_current_command values that mean "an agent owns this pane"
+AGENT_CMDS='^(node|cursor-agent|agent|claude|bun)$'
+SHELL_CMDS='^(zsh|bash|sh|fish|-zsh|-bash|login)$'
+# cursor-cli input-box placeholders: the line reads "→ <placeholder>" when the box is empty
+EMPTY_INPUT='^(Add a follow-up|Plan, search, build anything)$'
+
+usage() {
+  cat >&2 <<'EOF'
+usage:
+  cc-mail send (--dir <dir> | --pane <pane-id> | --window <tmux target>)
+               [--from <who>] [--severity info|warn|attention] [--no-wake] <text>
+  cc-mail drain --dir <dir> [--json]   print undelivered messages (hook text) and mark them delivered
+  cc-mail peek  --dir <dir>            print undelivered messages without marking them
+  cc-mail pending --dir <dir>          number of undelivered messages
+  cc-mail path  --dir <dir>            mailbox path
+EOF
+  exit 1
+}
+
+command -v jq >/dev/null 2>&1 || { echo "cc-mail: jq is required" >&2; exit 0; }
+
+# canonical directory (pwd -P resolves symlinks; falls back to the raw string)
+canon() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+box_for() { printf '%s/%s.jsonl' "$MAIL_DIR" "$(printf '%s' "$1" | sed 's#/#%#g')"; }
+
+# --- lock (mkdir is atomic on every filesystem; no flock on macOS) ----------
+lock() {
+  local dir="$1.lock" i=0 age now mtime
+  while ! mkdir "$dir" 2>/dev/null; do
+    i=$((i + 1))
+    if [ "$i" -ge 20 ]; then
+      now="$(date +%s)"
+      mtime="$(stat -f %m "$dir" 2>/dev/null || stat -c %Y "$dir" 2>/dev/null || echo "$now")"
+      age=$((now - mtime))
+      if [ "$age" -ge 5 ]; then rmdir "$dir" 2>/dev/null || rm -rf "$dir" 2>/dev/null; continue; fi
+      return 1
+    fi
+    sleep 0.05
+  done
+  return 0
+}
+unlock() { rmdir "$1.lock" 2>/dev/null || true; }
+
+# --- mailbox primitives ----------------------------------------------------
+count_lines() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
+read_offset() { [ -f "$1.read" ] && tr -dc '0-9' < "$1.read" || echo 0; }
+pending_count() { # pending_count <box>
+  local total offset
+  total="$(count_lines "$1")"; offset="$(read_offset "$1")"; offset="${offset:-0}"
+  [ "$total" -gt "$offset" ] && echo $((total - offset)) || echo 0
+}
+
+# undelivered lines (raw JSON), one per line
+undelivered() { # undelivered <box>
+  local total offset
+  total="$(count_lines "$1")"; offset="$(read_offset "$1")"; offset="${offset:-0}"
+  [ "$total" -gt "$offset" ] || return 0
+  sed -n "$((offset + 1)),${total}p" "$1"
+}
+
+# take undelivered lines and advance the offset atomically; prints the lines
+take() { # take <box>
+  local box="$1" total lines
+  lock "$box" || return 0
+  lines="$(undelivered "$box")"
+  if [ -n "$lines" ]; then
+    total="$(count_lines "$box")"
+    printf '%s' "$total" > "$box.read.tmp" && mv "$box.read.tmp" "$box.read"
+  fi
+  # compact a fully-read mailbox that has grown large
+  if [ -f "$box" ] && [ "$(count_lines "$box")" -gt 4000 ] && [ "$(pending_count "$box")" -eq 0 ]; then
+    : > "$box"; printf '0' > "$box.read"
+  fi
+  unlock "$box"
+  printf '%s' "$lines"
+}
+
+# multi-line text for hook delivery
+fmt_hook() { # stdin: JSON lines
+  jq -rs '
+    if length == 0 then "" else
+    (if length == 1 then "1 message" else "\(length) messages" end) as $n |
+    "[cc mail] \($n) from other agents. Act on them (fold into PROJECT.md, delegate, report upward as your prompt says); no conversational reply is needed.\n"
+    + ([.[] | "- \(.ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | strflocaltime("%H:%M")) (\(.severity)) \(.from): \(.text)"] | join("\n"))
+    end'
+}
+
+# single line for typing into an idle pane (a newline would submit early)
+fmt_line() { # stdin: JSON lines
+  jq -rs '
+    if length == 0 then "" else
+    (now | strflocaltime("%H:%M")) as $t |
+    ([.[] | "(\(.severity)) \(.from): \(.text)"]) as $m |
+    if length == 1 then "[cc mail \($t)] message from another agent — act on it, no reply needed: \($m[0])"
+    else "[cc mail \($t)] \(length) messages from other agents — act on them, no reply needed: " + ($m | join(" ‖ ")) end
+    end'
+}
+
+# --- args -------------------------------------------------------------------
+[ $# -ge 1 ] || usage
+CMD="$1"; shift
+DIR=""; PANE=""; WINDOW=""; FROM=""; SEVERITY="info"; TEXT=""; JSON=0; WAKE=1
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dir) DIR="${2:-}"; shift 2 ;;
+    --pane) PANE="${2:-}"; shift 2 ;;
+    --window) WINDOW="${2:-}"; shift 2 ;;
+    --from) FROM="${2:-}"; shift 2 ;;
+    --severity) SEVERITY="${2:-}"; shift 2 ;;
+    --json) JSON=1; shift ;;
+    --no-wake) WAKE=0; shift ;;
+    -h|--help) usage ;;
+    *) TEXT="${TEXT:+$TEXT }$1"; shift ;;
+  esac
+done
+case "$SEVERITY" in info|warn|attention) ;; *) SEVERITY="info" ;; esac
+
+# --window → agent pane (window option set by mkpanes/start-project/project-task) or active pane
+if [ -z "$PANE" ] && [ -n "$WINDOW" ]; then
+  PANE="$(tmux show-option -wqv -t "$WINDOW" @agent_pane 2>/dev/null || true)"
+  [ -n "$PANE" ] || PANE="$(tmux display-message -p -t "$WINDOW" '#{pane_id}' 2>/dev/null || true)"
+  [ -n "$PANE" ] || { echo "cc-mail: no tmux window \"$WINDOW\"" >&2; exit 0; }
+fi
+# --pane → its directory
+if [ -z "$DIR" ] && [ -n "$PANE" ]; then
+  DIR="$(tmux display-message -p -t "$PANE" '#{pane_current_path}' 2>/dev/null || true)"
+  [ -n "$DIR" ] || { echo "cc-mail: no tmux pane \"$PANE\"" >&2; exit 0; }
+fi
+[ -n "$DIR" ] || usage
+RAW_DIR="$DIR"
+DIR="$(canon "$DIR")"
+BOX="$(box_for "$DIR")"
+
+case "$CMD" in
+  path) echo "$BOX"; exit 0 ;;
+  pending) pending_count "$BOX"; exit 0 ;;
+  peek)
+    [ "$(pending_count "$BOX")" -gt 0 ] || exit 0
+    if [ "$JSON" = 1 ]; then undelivered "$BOX"; else undelivered "$BOX" | fmt_hook; fi
+    exit 0 ;;
+  drain)
+    [ "$(pending_count "$BOX")" -gt 0 ] || exit 0
+    if [ "$JSON" = 1 ]; then take "$BOX"; else take "$BOX" | fmt_hook; fi
+    exit 0 ;;
+  send) ;;
+  *) usage ;;
+esac
+
+# ---------------------------------------------------------------------------
+# send
+
+TEXT="$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '\n\r' '  ' | sed 's/[[:space:]][[:space:]]*/ /g')"
+[ -n "$TEXT" ] || usage
+[ "${#TEXT}" -gt "$TEXT_MAX" ] && TEXT="${TEXT:0:$TEXT_MAX}"
+
+SENDER_DIR="$(canon "$(pwd)")"
+if [ -z "$FROM" ]; then
+  if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then FROM="$(tmux display-message -p -t "$TMUX_PANE" '#W' 2>/dev/null || true)"; fi
+  FROM="${FROM:-$(basename "$SENDER_DIR")}"
+fi
+if [ "$DIR" = "$SENDER_DIR" ] && [ -z "$PANE" ]; then
+  echo "cc-mail: refusing to mail my own directory ($DIR)" >&2
+  exit 0
+fi
+
+mkdir -p "$MAIL_DIR" 2>/dev/null || exit 0
+LINE="$(jq -nc --arg from "$FROM" --arg severity "$SEVERITY" --arg text "$TEXT" --arg dir "$SENDER_DIR" \
+  '{ts: (now | todate), from: $from, severity: $severity, text: $text, dir: $dir}')" || exit 0
+if lock "$BOX"; then
+  printf '%s\n' "$LINE" >> "$BOX"
+  unlock "$BOX"
+else
+  printf '%s\n' "$LINE" >> "$BOX"
+fi
+
+queued() { echo "queued for $(basename "$DIR") ($SEVERITY) from $FROM: $TEXT — $1"; exit 0; }
+
+[ "$WAKE" = 1 ] || queued "not waking (--no-wake); delivered on the agent's next tool call or turn end"
+command -v tmux >/dev/null 2>&1 || queued "no tmux; delivered on the agent's next tool call or turn end"
+
+# --- find the agent pane for this directory ---------------------------------
+if [ -z "$PANE" ]; then
+  FALLBACK=""
+  while IFS=$'\t' read -r pid wid pcmd ppath; do
+    [ "$(canon "$ppath")" = "$DIR" ] || continue
+    if [ "$(tmux show-option -wqv -t "$wid" @agent_pane 2>/dev/null)" = "$pid" ]; then PANE="$pid"; break; fi
+    if [ -z "$FALLBACK" ] && printf '%s' "$pcmd" | grep -Eq "$AGENT_CMDS"; then FALLBACK="$pid"; fi
+  done < <(tmux list-panes -a -F $'#{pane_id}\t#{window_id}\t#{pane_current_command}\t#{pane_current_path}' 2>/dev/null)
+  PANE="${PANE:-$FALLBACK}"
+fi
+[ -n "$PANE" ] || queued "no agent pane open for it; delivered when one starts a turn"
+
+PCMD="$(tmux display-message -p -t "$PANE" '#{pane_current_command}' 2>/dev/null || true)"
+if [ -z "$PCMD" ] || printf '%s' "$PCMD" | grep -Eq "$SHELL_CMDS"; then queued "pane $PANE is at a shell; delivered when an agent starts there"; fi
+
+# --- agent must be idle per the hook feed -----------------------------------
+STATE_JSON=""
+if [ -f "$FEED" ]; then
+  # -R + fromjson? so one corrupt line cannot hide every state after it
+  STATE_JSON="$(tail -n 4000 "$FEED" 2>/dev/null | jq -Rc --arg d "$DIR" --arg r "$RAW_DIR" \
+    'fromjson? | select(.state != null and (.dir == $d or .dir == $r))' 2>/dev/null | tail -n 1)"
+fi
+[ -n "$STATE_JSON" ] || queued "agent state unknown (no hook events for $DIR); delivered on its next tool call or turn end"
+STATE="$(printf '%s' "$STATE_JSON" | jq -r '.state')"
+SOURCE="$(printf '%s' "$STATE_JSON" | jq -r '.source // "cursor"')"
+AGE=$(( $(date +%s) - $(printf '%s' "$STATE_JSON" | jq -r '.ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601' 2>/dev/null || echo 0) ))
+[ "$STATE" = "idle" ] || queued "agent is $STATE; delivered on its next tool call or turn end"
+[ "$AGE" -lt 86400 ] || queued "agent state is stale; delivered on its next tool call or turn end"
+
+# --- the human must not be using that tmux session ---------------------------
+QUIET_SECONDS="$(cc_cfg .mail.quietSeconds 30)"
+ACTIVITY="$(tmux display-message -p -t "$PANE" '#{session_activity}' 2>/dev/null || echo 0)"
+QUIET=$(( $(date +%s) - ${ACTIVITY:-0} ))
+[ "$QUIET" -ge "$QUIET_SECONDS" ] || queued "someone typed in that tmux session ${QUIET}s ago; waiting for quiet (${QUIET_SECONDS}s)"
+
+# --- and the input box must be empty (cursor-cli shows a placeholder) -------
+if [ "$SOURCE" = "cursor" ]; then
+  INPUT_LINE="$(tmux capture-pane -p -t "$PANE" 2>/dev/null | sed 's/[[:space:]]*$//' | grep -E '^[[:space:]]*→ ' | tail -n 1 | sed -E 's/^[[:space:]]*→ //')"
+  [ -n "$INPUT_LINE" ] || queued "cannot see the agent's input box (menu open?); delivered on its next turn"
+  printf '%s' "$INPUT_LINE" | grep -Eq "$EMPTY_INPUT" || queued "a draft is sitting in the agent's input box; delivered on its next turn"
+fi
+
+# --- deliver everything pending by typing one line ---------------------------
+PENDING="$(take "$BOX")"
+[ -n "$PENDING" ] || queued "already delivered by a hook"
+N="$(printf '%s\n' "$PENDING" | grep -c .)"
+NUDGE="$(printf '%s\n' "$PENDING" | fmt_line)"
+# cursor-cli needs a beat between a burst of typed text and Enter: with an
+# immediate Enter it submits the text but also leaves a copy in the input box.
+if tmux send-keys -t "$PANE" -l "$NUDGE" 2>/dev/null && sleep 0.5 && tmux send-keys -t "$PANE" Enter 2>/dev/null; then
+  echo "delivered to $(basename "$DIR") ($SEVERITY) from $FROM: $TEXT — idle agent in $PANE nudged ($N message(s))"
+else
+  # typing failed: put the lines back so a hook can deliver them
+  if lock "$BOX"; then
+    printf '%s\n' "$PENDING" >> "$BOX"
+    unlock "$BOX"
+  fi
+  echo "queued for $(basename "$DIR") ($SEVERITY) from $FROM: $TEXT — tmux send-keys failed; delivered on the agent's next turn"
+fi
+exit 0

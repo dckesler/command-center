@@ -59,6 +59,10 @@ export interface Config {
     /** directory names under dirs.projects that are not projects */
     exclude: string[]
   }
+  mail: {
+    /** seconds without keyboard activity in an agent's tmux session before cc-mail may type into an idle agent's pane */
+    quietSeconds: number
+  }
   /**
    * Repo alias → path. When empty, the alias list is parsed from the mkpanes
    * script's `case` block (the original source of truth).
@@ -92,6 +96,7 @@ export const DEFAULTS: Config = {
   jira: { baseUrl: "", cloudId: "", sprintField: "customfield_10007" },
   model: "composer-2.5",
   projects: { exclude: ["command-center", "node_modules"] },
+  mail: { quietSeconds: 30 },
   repos: {},
 }
 
@@ -152,6 +157,7 @@ export function config(): Config {
     },
     model: env.CC_MODEL || file.model || DEFAULTS.model,
     projects: { exclude: file.projects?.exclude ?? DEFAULTS.projects.exclude },
+    mail: { quietSeconds: Number(file.mail?.quietSeconds) || DEFAULTS.mail.quietSeconds },
     repos: Object.fromEntries(
       Object.entries(file.repos ?? {})
         .filter(([k, v]) => !k.startsWith("$") && typeof v === "string")

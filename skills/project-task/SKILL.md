@@ -57,7 +57,7 @@ They arrive in your chat as `[report HH:MM] (severity) <title>: <text>` and are 
 
 ```bash
 project-task --list                          # task tabs in this project, with their directories
-project-task --message "<title>" "<text>"    # type into a task tab's agent
+project-task --message "<title>" "<text>"    # message a task tab's agent (delivered by hook while it works, typed only when it is idle and nobody is typing there)
 ```
 
 ## Rules

@@ -20,7 +20,7 @@ import { config, configPath } from "../src/config.ts"
 const REPO = resolve(import.meta.dir, "..")
 const HOME = homedir()
 const LOCAL_BIN = join(HOME, ".local", "bin")
-const SKILL_BINS = ["cc-report", "start-project", "project-task"]
+const SKILL_BINS = ["cc-report", "cc-mail", "start-project", "project-task"]
 const checksOnly = process.argv.includes("doctor") || process.argv.includes("--check")
 
 const ok = (msg: string) => console.log(`  ✓ ${msg}`)
@@ -135,6 +135,15 @@ const cursorText = existsSync(cursorHooks) ? readFileSync(cursorHooks, "utf8") :
 cursorText.includes("agent-event.sh")
   ? ok("~/.cursor/hooks.json calls agent-event.sh")
   : warn("~/.cursor/hooks.json does not call agent-event.sh — merge hooks/cursor-hooks.example.json (agent status will not show)")
+if (cursorText.includes("agent-event.sh")) {
+  cursorText.includes("cursor tool")
+    ? ok("~/.cursor/hooks.json delivers cc-mail on postToolUse")
+    : warn("~/.cursor/hooks.json has no postToolUse → 'agent-event.sh cursor tool' entry — busy agents only get mail when a turn ends")
+  const unlimited = /"loop_limit"\s*:\s*null/.test(cursorText)
+  unlimited
+    ? ok("stop hook has loop_limit null")
+    : warn('stop hook entry lacks "loop_limit": null — Cursor stops delivering mail as follow-ups after 5 per conversation')
+}
 
 for (const v of ["CURSOR_API_KEY"]) (process.env[v] ? ok : bad)(`${v}${process.env[v] ? "" : " missing — hub specialists will not start (.env)"}`)
 for (const v of ["JIRA_EMAIL", "JIRA_API_TOKEN"]) (process.env[v] ? ok : warn)(`${v}${process.env[v] ? "" : " missing — Jira status changes disabled (.env)"}`)

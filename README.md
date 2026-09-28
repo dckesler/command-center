@@ -18,10 +18,14 @@ bun run setup                                     # config, hooks, skills, healt
 `bun run setup` creates `~/.config/command-center/config.json` from
 `config.example.json` and `.env` from `.env.example`, links `hooks/agent-event.sh` into
 the config dir, symlinks `skills/*` into `~/.agents/skills` and the skill CLIs
-(`cc-report`, `start-project`, `project-task`) into `~/.local/bin`, then runs the same
-checks as `bun run doctor`. It never edits `~/.cursor/hooks.json` or
+(`cc-report`, `cc-mail`, `start-project`, `project-task`) into `~/.local/bin`, then runs the
+same checks as `bun run doctor`. It never edits `~/.cursor/hooks.json` or
 `~/.claude/settings.json`; merge `hooks/cursor-hooks.example.json` (and the Claude one
 if you use Claude Code) yourself so agents in tmux report their status into the feed.
+The Cursor example also wires inter-agent mail: `postToolUse` and `stop` call
+`agent-event.sh cursor tool|idle`, and the `stop` entry carries `"loop_limit": null`
+(without it Cursor stops accepting mail follow-ups after 5 per conversation). Running
+agent sessions read `hooks.json` at start, so restart them after changing it.
 
 Then edit the two files it created:
 
@@ -79,7 +83,7 @@ Resolution order: environment variable → `config.json` → default.
 |---|---|---|---|
 | `user.name` | | `"the user"` | how agent prompts address you |
 | `user.email`, `user.jiraAccountId` | | `""` | your Atlassian identity (used by ticket skills) |
-| `dirs.config` | `CC_CONFIG_DIR` | `~/.config/command-center` | state: `agents.jsonl`, `inbox.jsonl`, `todos.json`, `tui.log` |
+| `dirs.config` | `CC_CONFIG_DIR` | `~/.config/command-center` | state: `agents.jsonl`, `inbox.jsonl`, `mail/`, `todos.json`, `tui.log` |
 | `dirs.projects` | `CC_PROJECTS_DIR` | `~/projects` | Projects tab root |
 | `dirs.skills` | | cursor/claude/agents skill dirs | roots scanned for `/skill` completion |
 | `commands.agent` | `CC_AGENT_CMD` | `cursor-cli` | command typed into tmux panes to start an agent (alias OK) |
@@ -91,9 +95,10 @@ Resolution order: environment variable → `config.json` → default.
 | `jira.cloudId`, `jira.sprintField` | | `""`, `customfield_10007` | Atlassian MCP cloud id; sprint custom field |
 | `model` | `CC_MODEL` | `composer-2.5` | Cursor SDK model for specialists and Cloud agents |
 | `projects.exclude` | | `command-center, node_modules` | dirs under `dirs.projects` that are not projects |
+| `mail.quietSeconds` | | `30` | keyboard-quiet time in an agent's tmux session before `cc-mail` may type into an idle agent's pane |
 | `repos` | | `{}` | alias → path; overrides the mkpanes registry when non-empty |
 
-The shell skills (`cc-report`, `start-project`, `project-task`) and
+The shell skills (`cc-report`, `cc-mail`, `start-project`, `project-task`) and
 `hooks/agent-event.sh` read the same file with `jq`, so one config drives both the TUI
 and the agents it launches. `bun run doctor` reports what is missing.
 
@@ -143,7 +148,7 @@ epics, todos, email, cloud, calendar.
 
   Reporting chain (all via the `cc-report` skill; every layer reports upward):
   `project-task` worker tabs → `cc-report project:<name>` → the project's central agent
-  (typed into its pane + `.cc/inbox.jsonl`) → `cc-report projects` → the projects
+  (via `cc-mail` + logged to `.cc/inbox.jsonl`) → `cc-report projects` → the projects
   specialist → `report_to_central` → central. The central agent owns `PROJECT.md` and
   delegates self-contained work with `project-task "<title>" "<task>"`, which opens a
   tab in the project session running a worker agent. Code changes always go through
@@ -154,7 +159,23 @@ epics, todos, email, cloud, calendar.
   central agent.
 
   Skills in `skills/` (synced to `~/.agents/skills`, binaries linked into
-  `~/.local/bin`): `start-project`, `project-task`, `cc-report`.
+  `~/.local/bin`): `start-project`, `project-task`, `cc-report`, `cc-mail`.
+
+  **Inter-agent mail.** Nothing is typed into a pane that a human may be using. Every
+  agent-to-agent message (`cc-report project:<name>`, `project-task --message`, the
+  specialists' `message_ticket_agent` / `message_project_agent`) goes through `cc-mail`
+  into a per-directory mailbox (`<dirs.config>/mail/<dir with / → %>.jsonl` + `.read`
+  offset — never inside a repo) and is delivered by whichever happens first: the
+  recipient's next tool call (Cursor `postToolUse` → `additional_context`), the end of
+  its current turn (`stop` → `followup_message`), or — only when the hook feed says
+  the agent is idle, nobody has typed in that tmux session for `mail.quietSeconds`
+  (tmux `session_activity`, which `send-keys` does not bump) and its input box shows
+  the placeholder rather than a draft — one `[cc mail …]` line typed into its pane.
+  Anything else waits; the sender's result line says why. Pending mail shows as
+  `✉N` next to the agent state on the projects tab and in the project detail view.
+  `type_into_ticket_pane` remains for literally answering a prompt a ticket agent is
+  waiting on; it is the only path that still types. Claude Code agents have no
+  hook delivery yet — mail reaches them through the idle-pane path only.
 - **[9] Cloud** — Cursor Cloud agents started from here. `n` picks a mkpanes repo and a
   prompt (clones that repo's git remote on a Cursor VM, no PR). `s` sends a follow-up,
   `x` cancels the latest run, `o` opens the agent in the browser.
@@ -224,7 +245,7 @@ config.example.json, .env.example
 
 State written at runtime lives only in `dirs.config` (default `~/.config/command-center`):
 `agents.jsonl` (hook feed), `inbox.jsonl` + `cursors.json` (durable specialist inbox),
-`todos.json`, `tui.log`. Nothing is written inside the repo.
+`mail/` (inter-agent mailboxes), `todos.json`, `tui.log`. Nothing is written inside the repo.
 
 Personal constants baked into some skill docs (`skills/*/SKILL.md` "Known constants":
 Atlassian account ids, cloud id, GitLab group) are still the author's; adjust them when

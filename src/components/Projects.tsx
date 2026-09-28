@@ -30,6 +30,8 @@ const COLS = {
   agent: 11,
 }
 const FIXED_WIDTH = Object.values(COLS).reduce((a, b) => a + b, 0)
+/** "✉2 " — undelivered cc-mail waiting for the agent; fills the tail of the AGENT column. */
+const mailTag = (n: number) => `✉${n} `
 
 function relativeDays(iso: string): string {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
@@ -129,8 +131,9 @@ export function Projects({
               <span fg={C.dim}>{fit(relativeDays(project.modified), COLS.updated)}</span>
               <span fg={project.tmuxWindow ? C.green : C.dim}>{fit(project.tmuxWindow ?? "-", COLS.tmux)}</span>
               <span fg={project.agent ? AGENT_COLORS[project.agent.state] ?? C.gray : C.dim}>
-                {fit(project.agent?.state ?? "-", COLS.agent)}
+                {fit(project.agent?.state ?? "-", project.mail ? COLS.agent - mailTag(project.mail).length : COLS.agent)}
               </span>
+              {project.mail > 0 && <span fg={C.yellow}>{mailTag(project.mail)}</span>}
               <span fg={C.gray}>{fit(brief?.goal || (brief ? "" : "press s to create PROJECT.md and start"), summaryWidth)}</span>
             </text>
           </box>

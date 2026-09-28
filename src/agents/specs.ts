@@ -13,6 +13,7 @@ import {
   type CloudAgent,
 } from "../data/cloud.ts"
 import { run } from "../data/exec.ts"
+import { sendMail } from "../data/mail.ts"
 import { getMessageBody, type EmailMessage } from "../data/outlook.ts"
 import { dayBounds, fmtEvent, getEventDetail, getEvents, type CalendarEvent } from "../data/calendar.ts"
 import { applyTransition, getEpicChildren, getTicketsByKeys, getTransitions, prepTicket } from "../data/jira.ts"
@@ -213,8 +214,32 @@ function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCusto
     },
     message_ticket_agent: {
       description:
-        "Type a message into a ticket window's active pane (where the cursor/claude agent runs) and press enter. " +
-        "Use to nudge or answer a waiting ticket agent.",
+        "Send a message to a ticket window's agent through the cc-mail mailbox. A busy agent gets it after its next tool call, " +
+        "a finishing agent gets it as its next turn, an idle agent is nudged only when nobody is typing in that tmux session and its " +
+        "input box is empty; otherwise it waits (the result says which). Use to steer or inform a ticket agent. " +
+        "It cannot answer a permission prompt or a menu — use type_into_ticket_pane for that.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          window: { type: "string" },
+          text: { type: "string" },
+          severity: { type: "string", description: "info (default) | warn | attention" },
+        },
+        required: ["window", "text"],
+      },
+      execute: async (args) => {
+        const window = str(args.window)
+        if (!findWindow(window)) return `no ${qa ? "QA" : "dev"} worktree row has tmux window "${window}"`
+        const severity = (["info", "warn", "attention"] as const).find((s) => s === str(args.severity)) ?? "info"
+        const res = await sendMail({ window }, str(args.text), { from: `command center ${qa ? "qa" : "worktrees"}`, severity })
+        return res.message
+      },
+    },
+    type_into_ticket_pane: {
+      description:
+        "Type raw text into a ticket window's agent pane and press enter — this lands in whatever is focused there, so only use it " +
+        "when read_ticket_pane shows the agent waiting on a prompt, question or menu that needs a literal answer (e.g. 'y', a number, " +
+        "an option). For messages use message_ticket_agent.",
       inputSchema: {
         type: "object",
         properties: { window: { type: "string" }, text: { type: "string" } },
@@ -226,8 +251,10 @@ function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCusto
         if (!findWindow(window)) return `no ${qa ? "QA" : "dev"} worktree row has tmux window "${window}"`
         const typed = await run("tmux", ["send-keys", "-t", window, "-l", text])
         if (!typed.ok) return `send failed: ${typed.stderr.trim()}`
+        // cursor-cli needs a beat between a burst of typed text and Enter, or it keeps a copy in the input box
+        await new Promise((r) => setTimeout(r, 500))
         await run("tmux", ["send-keys", "-t", window, "Enter"])
-        return `sent to ${window}: ${text}`
+        return `typed into ${window}: ${text}`
       },
     },
   }
@@ -236,7 +263,8 @@ function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCusto
 const TICKET_AGENT_STYLE =
   "Tools for the external ticket agents: get_agent_feed (hook statuses), read_inbox for durable updates that arrived while you were down, " +
   "read_ticket_transcript(window, turns) for what an agent said and was told, read_ticket_pane(window) for its live screen, " +
-  "message_ticket_agent(window, text) to nudge or answer one. Event digests already include last reply, files edited, git commands, " +
+  "message_ticket_agent(window, text) to steer or inform one (mailbox: never typed over the user's draft), type_into_ticket_pane(window, text) " +
+  "only to answer a literal prompt it is waiting on. Event digests already include last reply, files edited, git commands, " +
   "and new commits — read those before reaching for tools. report_to_central must stay one short line. For deep read-only inspection " +
   "of a single worktree, spawn the worktree-inspector subagent with the worktree path and your question."
 
@@ -591,21 +619,26 @@ const projectsSpec: TabAgentSpec = {
         },
       },
       message_project_agent: {
-        description: "Type a message into a project window's active pane and press enter.",
+        description:
+          "Send a message to a project's central agent through the cc-mail mailbox. A busy agent gets it after its next tool call, " +
+          "a finishing agent gets it as its next turn, an idle agent is nudged only when nobody is typing in that tmux session and " +
+          "its input box is empty; otherwise it waits and the result says why. Never types over the user's draft.",
         inputSchema: {
           type: "object",
-          properties: { name: { type: "string" }, text: { type: "string" } },
+          properties: {
+            name: { type: "string" },
+            text: { type: "string" },
+            severity: { type: "string", description: "info (default) | warn | attention" },
+          },
           required: ["name", "text"],
         },
         execute: async (args) => {
           const project = find(str(args.name))
           if (!project) return `no project named "${str(args.name)}"`
-          if (!project.tmuxWindow) return `${project.name} has no tmux window — open_project first`
-          const text = str(args.text)
-          const typed = await run("tmux", ["send-keys", "-t", project.tmuxWindow, "-l", text])
-          if (!typed.ok) return `send failed: ${typed.stderr.trim()}`
-          await run("tmux", ["send-keys", "-t", project.tmuxWindow, "Enter"])
-          return `sent to ${project.name}: ${text}`
+          const severity = (["info", "warn", "attention"] as const).find((s) => s === str(args.severity)) ?? "info"
+          const target = project.tmuxWindow ? { window: project.tmuxWindow } : { dir: project.path }
+          const res = await sendMail(target, str(args.text), { from: "command center projects", severity })
+          return res.message
         },
       },
       open_project: {

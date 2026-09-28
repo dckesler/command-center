@@ -3,6 +3,7 @@ import { basename, join } from "node:path"
 import { config } from "../config.ts"
 import type { MrInfo, Row, TicketInfo } from "../types.ts"
 import { readAgentStatuses, type AgentStatus } from "./agents.ts"
+import { pendingMailFor, readPendingMail } from "./mail.ts"
 import { run } from "./exec.ts"
 import { listTmuxWindows, projectSessionName } from "./tmux.ts"
 
@@ -47,6 +48,8 @@ export interface Project {
   tmuxWindow: string | null
   /** Latest hook state of an agent running in this directory. */
   agent: AgentStatus | null
+  /** cc-mail messages waiting for the agent in this directory. */
+  mail: number
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +231,7 @@ export function sortProjects(projects: Project[]): Project[] {
 export async function listProjects(): Promise<Project[]> {
   const names = listProjectDirs()
   const [windows, agents] = await Promise.all([listTmuxWindows(), Promise.resolve(readAgentStatuses())])
+  const mail = readPendingMail()
   const projects = names.map((name): Project => {
     const path = join(PROJECTS_DIR, name)
     const brief = readBrief(path)
@@ -250,6 +254,7 @@ export async function listProjects(): Promise<Project[]> {
       modified,
       tmuxWindow: window?.target ?? null,
       agent: agents.get(path) ?? null,
+      mail: pendingMailFor(mail, path),
     }
   })
   return sortProjects(projects)
@@ -384,6 +389,8 @@ export interface ProjectTask {
   ticket: TicketInfo | null
   mr: MrInfo | null
   agent: AgentStatus | null
+  /** cc-mail messages waiting for this tab's agent */
+  mail: number
   /** newest cc-report from this tab, if any */
   lastReport: ProjectReport | null
   /** ISO of the window's last activity */
@@ -406,6 +413,7 @@ export async function listProjectTasks(project: Project, rows: Row[] = []): Prom
   ])
   if (!res.ok) return null
   const agents = readAgentStatuses()
+  const mail = readPendingMail()
   const reports = readProjectReportEntries(project.path)
   const byPath = new Map(rows.map((r) => [r.worktreePath, r]))
   const tasks: ProjectTask[] = []
@@ -436,6 +444,7 @@ export async function listProjectTasks(project: Project, rows: Row[] = []): Prom
       ticket: row?.ticket ?? null,
       mr: row?.mr ?? null,
       agent: agents.get(path) ?? null,
+      mail: pendingMailFor(mail, path),
       lastReport,
       activity: activity && /^\d+$/.test(activity) ? new Date(Number(activity) * 1000).toISOString() : "",
     })
@@ -452,6 +461,7 @@ export function fmtTask(t: ProjectTask): string {
     t.ticketKey ? `${t.ticketKey}${t.ticket ? ` ${t.ticket.status}` : ""}` : null,
     t.mr ? `MR !${t.mr.iid} ${t.mr.state}${t.mr.pipelineStatus ? ` ci:${t.mr.pipelineStatus}` : ""}` : null,
     t.agent ? `agent ${t.agent.state}` : "no agent",
+    t.mail ? `${t.mail} unread mail` : null,
     t.lastReport ? `last: ${fmtReport(t.lastReport)}` : "no reports",
   ].filter((x): x is string => !!x)
   return parts.join(" | ")
@@ -467,6 +477,7 @@ export function fmtProject(p: Project): string {
     b && b.nextSteps.length ? `${b.nextSteps.length} next step${b.nextSteps.length === 1 ? "" : "s"}` : null,
     p.tmuxWindow ? `window ${p.tmuxWindow}` : "no window",
     p.agent ? `agent ${p.agent.state} (${p.agent.source})` : "no agent",
+    p.mail ? `${p.mail} unread mail` : null,
   ].filter((x): x is string => !!x)
   return parts.join(" | ")
 }

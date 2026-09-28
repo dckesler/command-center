@@ -7,7 +7,7 @@
 #   project-task --repo <alias|path> --ticket <KEY> ["<task>"]     worktree tab for a Jira ticket
 #   project-task --repo <alias|path> --branch <name> "<title>" "<task>"
 #   project-task --repo <alias|path> "<title>" "<task>"            worktree tab, branch derived
-#   project-task --message "<title>" "<text>"                      type a reply into a task tab's agent
+#   project-task --message "<title>" "<text>"                      message a task tab's agent (via cc-mail)
 #   project-task --list                                            list task tabs of the project
 #
 # Options:
@@ -130,9 +130,19 @@ if [ "$ACTION" = "message" ]; then
   [ -n "$TITLE" ] && [ -n "$TEXT" ] || { echo "usage: project-task --message \"<title>\" \"<text>\"" >&2; exit 1; }
   PANE="$("$TMUX_BIN" show-option -wqv -t "=$SESSION:$TITLE" @agent_pane 2>/dev/null || true)"
   [ -n "$PANE" ] || { echo "project-task: no task tab named \"$TITLE\" in $SESSION (see --list)" >&2; exit 1; }
-  "$TMUX_BIN" send-keys -t "$PANE" -l "$TEXT"
-  "$TMUX_BIN" send-keys -t "$PANE" Enter
-  echo "sent to $TITLE: $TEXT"
+  # Through the mailbox: a hook delivers it while the worker is busy; it is
+  # typed into the pane only when the worker is idle and nobody is typing there.
+  CC_MAIL="$(command -v cc-mail 2>/dev/null || true)"
+  [ -n "$CC_MAIL" ] || { [ -x "$HOME/.local/bin/cc-mail" ] && CC_MAIL="$HOME/.local/bin/cc-mail"; }
+  [ -n "$CC_MAIL" ] || { [ -x "$(dirname "$0")/../cc-mail/cc-mail" ] && CC_MAIL="$(dirname "$0")/../cc-mail/cc-mail"; }
+  if [ -n "$CC_MAIL" ]; then
+    "$CC_MAIL" send --pane "$PANE" --from "central" "$TEXT"
+  else
+    "$TMUX_BIN" send-keys -t "$PANE" -l "$TEXT"
+    sleep 0.5 # cursor-cli keeps a copy in the input box when Enter follows a burst of text immediately
+    "$TMUX_BIN" send-keys -t "$PANE" Enter
+    echo "sent to $TITLE (typed; cc-mail not installed): $TEXT"
+  fi
   exit 0
 fi
 
@@ -172,7 +182,7 @@ mkdir -p "$DIR/.cc/tasks"
 SLUG="$(slugify "$TITLE")"
 PROMPT_FILE="$DIR/.cc/tasks/$SLUG.txt"
 
-REPORT_RULE="Reporting upward: your manager is the project's central agent (not Command Center). Use the cc-report skill. Run now: cc-report project:$PROJECT \"$TITLE: started\" — then again after real progress, when blocked or when you need a decision (--severity attention), and when done. One line, lead with \"$TITLE:\". Do not report every step. Replies from the central agent or Daniel arrive in this chat as normal messages."
+REPORT_RULE="Reporting upward: your manager is the project's central agent (not Command Center). Use the cc-report skill. Run now: cc-report project:$PROJECT \"$TITLE: started\" — then again after real progress, when blocked or when you need a decision (--severity attention), and when done. One line, lead with \"$TITLE:\". Do not report every step. Messages from the central agent or Command Center arrive as a \"[cc mail]\" block — either as a user turn or as extra context after one of your tool calls. Act on them; they are not Daniel speaking and need no conversational reply."
 
 # ---------------------------------------------------------------------------
 # worktree tab (code changes) — delegated to mkpanes so it matches command center

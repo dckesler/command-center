@@ -77,6 +77,8 @@ function relative(iso: string): string {
 
 const COLS = { tab: 26, where: 24, ticket: 22, mr: 14, agent: 11 }
 const FIXED_WIDTH = Object.values(COLS).reduce((a, b) => a + b, 0)
+/** "✉2 " — undelivered cc-mail waiting for the agent; fills the tail of the AGENT column. */
+const mailTag = (n: number) => `✉${n} `
 
 export interface EpicSummary {
   key: string
@@ -125,6 +127,7 @@ export function ProjectDetail({
       <span fg={project.tmuxWindow ? C.green : C.dim}>{project.tmuxWindow ?? "not running"}</span>
       <span fg={C.dim}>{"   central agent "}</span>
       <span fg={project.agent ? AGENT_COLORS[project.agent.state] ?? C.gray : C.dim}>{project.agent?.state ?? "none"}</span>
+      {project.mail > 0 && <span fg={C.yellow}>{` ✉${project.mail} unread mail`}</span>}
       <span fg={C.dim}>
         {brief ? `   ${brief.doneSteps} done / ${brief.nextSteps.length} open steps` : ""}
       </span>
@@ -213,7 +216,10 @@ export function ProjectDetail({
               <span fg={t.worktree ? C.green : C.gray}>{fit(where, COLS.where)}</span>
               <span fg={t.ticket ? ticketColor(t.ticket) : t.ticketKey ? C.value : C.dim}>{fit(ticket, COLS.ticket)}</span>
               <span fg={t.mr ? (t.mr.state === "merged" ? C.green : t.mr.hasConflicts ? C.red : C.value) : C.dim}>{fit(mr, COLS.mr)}</span>
-              <span fg={t.agent ? AGENT_COLORS[t.agent.state] ?? C.gray : C.dim}>{fit(t.agent?.state ?? "-", COLS.agent)}</span>
+              <span fg={t.agent ? AGENT_COLORS[t.agent.state] ?? C.gray : C.dim}>
+                {fit(t.agent?.state ?? "-", t.mail ? COLS.agent - mailTag(t.mail).length : COLS.agent)}
+              </span>
+              {t.mail > 0 && <span fg={C.yellow}>{mailTag(t.mail)}</span>}
               <span fg={t.lastReport ? SEVERITY_COLORS[t.lastReport.severity] : C.dim}>{fit(report, reportWidth)}</span>
             </text>
           </box>

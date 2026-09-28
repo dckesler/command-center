@@ -38,6 +38,11 @@
     "exclude": ["command-center", "node_modules"]
   },
 
+  "mail": {
+    "$comment": "Inter-agent messages (cc-mail). An idle agent is nudged by typing into its pane only after nobody has typed in its tmux session for this many seconds and its input box is empty.",
+    "quietSeconds": 30
+  },
+
   "repos": {
     "$comment": "Repo alias → path for the worktrees tab and mkpanes-style launches. Leave empty to parse the alias list from the mkpanes script instead.",
     "example-repo": "~/code/example-repo"

@@ -12,7 +12,7 @@ description: >-
 
 # Report upward with cc-report
 
-Nothing above you can see this chat. Send one-line status reports with `cc-report`; they are durable and wake the recipient.
+Nothing above you can see this chat. Send one-line status reports with `cc-report`; they are durable and reach the recipient through its mailbox (hook-delivered while it works; typed into its pane only when it is idle and nobody is typing there).
 
 If you already have a `report_to_central` tool, you are a Command Center hub specialist — use that tool instead. Do not run this CLI.
 

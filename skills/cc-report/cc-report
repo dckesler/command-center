@@ -13,8 +13,10 @@
 #       → appended to Command Center's agent feed (~/.config/command-center/agents.jsonl);
 #         the TUI wakes that specialist.
 #   project:<name>
-#       → appended to ~/projects/<name>/.cc/inbox.jsonl and typed into the project's
-#         central agent pane as a "[report] ..." line so it wakes up.
+#       → appended to ~/projects/<name>/.cc/inbox.jsonl (the project's report log) and
+#         handed to the central agent through cc-mail: delivered by hook while it works
+#         or finishes a turn, or typed into its pane only when it is idle, nobody has
+#         touched that tmux session lately, and its input box is empty.
 #
 # Default target when omitted:
 #   - inside a project's tmux session, in a window other than "central" → project:<name>
@@ -146,8 +148,18 @@ if [ -z "$TARGET" ]; then
   fi
 fi
 
+# cc-mail CLI: PATH, ~/.local/bin, or the copy next to this script.
+cc_mail() {
+  local bin
+  bin="$(command -v cc-mail 2>/dev/null || true)"
+  [ -n "$bin" ] || { [ -x "$HOME/.local/bin/cc-mail" ] && bin="$HOME/.local/bin/cc-mail"; }
+  [ -n "$bin" ] || { [ -x "$(dirname "$0")/../cc-mail/cc-mail" ] && bin="$(dirname "$0")/../cc-mail/cc-mail"; }
+  [ -n "$bin" ] || return 1
+  "$bin" "$@"
+}
+
 # ---------------------------------------------------------------------------
-# project:<name> → project inbox + nudge the central agent pane
+# project:<name> → project inbox (log) + cc-mail to the central agent
 
 if [ "${TARGET#project:}" != "$TARGET" ]; then
   NAME="${TARGET#project:}"
@@ -165,27 +177,18 @@ if [ "${TARGET#project:}" != "$TARGET" ]; then
     tail -n 1000 "$PDIR/.cc/inbox.jsonl" > "$PDIR/.cc/inbox.tmp" 2>/dev/null && mv "$PDIR/.cc/inbox.tmp" "$PDIR/.cc/inbox.jsonl"
   fi
 
-  NUDGED="no central agent running (saved to .cc/inbox.jsonl)"
-  if command -v tmux >/dev/null 2>&1; then
-    SESSION="$(session_name "$NAME")"
-    PANE="$(tmux show-option -wqv -t "=$SESSION:central" @agent_pane 2>/dev/null || true)"
-    if [ -n "$PANE" ]; then
-      # Only type into the pane while an agent owns it; at a bare shell the
-      # line would run as a command.
-      RUNNING="$(tmux display-message -p -t "$PANE" '#{pane_current_command}' 2>/dev/null || true)"
-      case "$RUNNING" in
-        ""|zsh|bash|sh|fish|-zsh|-bash) ;;
-        *)
-          STAMP="$(date +%H:%M)"
-          if tmux send-keys -t "$PANE" -l "[report $STAMP] ($SEVERITY) $FROM: $SUMMARY" 2>/dev/null \
-             && tmux send-keys -t "$PANE" Enter 2>/dev/null; then
-            NUDGED="central agent nudged"
-          fi
-          ;;
-      esac
-    fi
+  # Delivery to the central agent goes through the mailbox (never typed over
+  # a human's draft). Prefer the pane recorded by start-project so a central
+  # agent that was started elsewhere is still found.
+  SESSION="$(session_name "$NAME")"
+  PANE="$(tmux show-option -wqv -t "=$SESSION:central" @agent_pane 2>/dev/null || true)"
+  if [ -n "$PANE" ]; then
+    RESULT="$(cc_mail send --pane "$PANE" --from "$FROM" --severity "$SEVERITY" "$SUMMARY" 2>&1)"
+  else
+    RESULT="$(cc_mail send --dir "$PDIR" --from "$FROM" --severity "$SEVERITY" "$SUMMARY" 2>&1)"
   fi
-  echo "reported to project $NAME ($SEVERITY) from $FROM: $SUMMARY — $NUDGED"
+  [ -n "$RESULT" ] || RESULT="saved to .cc/inbox.jsonl only (cc-mail not installed)"
+  echo "reported to project $NAME ($SEVERITY) from $FROM: $SUMMARY — ${RESULT#*— }"
   exit 0
 fi
 
