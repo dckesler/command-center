@@ -116,13 +116,23 @@ function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-export function briefTemplate(name: string, goal = ""): string {
+export interface BriefSeed {
+  /** one-paragraph goal (Goal section) */
+  goal?: string
+  /** background the agent should know (Current state section) */
+  context?: string
+  /** Jira epic key, e.g. LW-17444 */
+  epic?: string | null
+}
+
+export function briefTemplate(name: string, seed: string | BriefSeed = ""): string {
+  const { goal = "", context = "", epic = null } = typeof seed === "string" ? { goal: seed } : seed
   return [
     `# ${name}`,
     "",
     "**Status:** active",
     `**Updated:** ${today()}`,
-    "**Epic:** none",
+    `**Epic:** ${epic ?? "none"}`,
     "",
     "## Goal",
     "",
@@ -130,7 +140,7 @@ export function briefTemplate(name: string, goal = ""): string {
     "",
     "## Current state",
     "",
-    "_Where things are right now. Keep this current — it is what the command center shows._",
+    context || "_Where things are right now. Keep this current — it is what the command center shows._",
     "",
     "## Next steps",
     "",
@@ -258,15 +268,20 @@ export function slugifyProjectName(input: string): string {
     .slice(0, 64)
 }
 
-export function createProject(rawName: string, goal = ""): { ok: boolean; message: string; project?: { name: string; path: string } } {
+export function createProject(
+  rawName: string,
+  seed: string | BriefSeed = "",
+): { ok: boolean; message: string; project?: { name: string; path: string } } {
   const name = slugifyProjectName(rawName)
   if (!name) return { ok: false, message: "project name is empty after cleanup" }
   if (EXCLUDED.has(name)) return { ok: false, message: `"${name}" is reserved` }
   const path = join(PROJECTS_DIR, name)
   if (existsSync(path)) return { ok: false, message: `${path} already exists — resume it instead` }
+  const epic = typeof seed === "string" ? null : seed.epic?.trim().toUpperCase() || null
+  if (epic && !/^[A-Z][A-Z0-9]+-\d+$/.test(epic)) return { ok: false, message: `"${epic}" is not a Jira key (e.g. LW-17444)` }
   try {
     mkdirSync(path, { recursive: true })
-    writeFileSync(briefPath(path), briefTemplate(name, goal))
+    writeFileSync(briefPath(path), briefTemplate(name, typeof seed === "string" ? seed : { ...seed, epic }))
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
   }

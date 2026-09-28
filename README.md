@@ -118,8 +118,11 @@ epics, todos, email, cloud, calendar.
   `**Updated:** YYYY-MM-DD`, an optional `**Epic:** LW-1234` (the Jira epic the project
   delivers; `none` when there isn't one), then `## Goal`, `## Current state`,
   `## Next steps` (checkbox list) and a dated `## Log`. The table shows status, epic,
-  open next steps, the project's tmux window, and its agent state. `n` creates
-  `~/projects/<name>` with a template brief; `s` runs the `start-project` skill: the
+  open next steps, the project's tmux window, and its agent state. `n` runs a short
+  interview — name, summary (becomes `## Goal`), optional context (becomes
+  `## Current state`; empty skips), optional Jira epic (empty skips) — then writes
+  `~/projects/<name>/PROJECT.md` from the answers and starts the project session (same
+  as `s`). `esc` cancels at any step. `s` runs the `start-project` skill: the
   project gets its own tmux session (named after the project, window `central`,
   mkpanes-style panes) shown in a new terminal window (`commands.terminal`) — not a
   window of the work session — with `commands.agent` running as the project's

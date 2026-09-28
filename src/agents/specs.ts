@@ -698,14 +698,21 @@ const projectsSpec: TabAgentSpec = {
         },
       },
       create_project: {
-        description: `Create a new ~/projects directory with a PROJECT.md template and open its agent window. Only when ${USER} asked.`,
+        description:
+          `Create a new project directory with a PROJECT.md brief and open its agent window. Only when ${USER} asked. ` +
+          "Interview first if he did not give them: a one-paragraph goal (required), any context the agent should know, and an optional Jira epic key.",
         inputSchema: {
           type: "object",
-          properties: { name: { type: "string" }, goal: { type: "string", description: "optional one-paragraph goal" } },
-          required: ["name"],
+          properties: {
+            name: { type: "string" },
+            goal: { type: "string", description: "one-paragraph goal — what the project is for and what done looks like" },
+            context: { type: "string", description: "optional background: links, prior art, constraints, people, deadlines" },
+            epic: { type: "string", description: "optional Jira epic key, e.g. LW-17444" },
+          },
+          required: ["name", "goal"],
         },
         execute: async (args) => {
-          const created = createProject(str(args.name), str(args.goal))
+          const created = createProject(str(args.name), { goal: str(args.goal), context: str(args.context), epic: str(args.epic) || null })
           if (!created.ok || !created.project) return created.message
           const result = await openProjectWindow(created.project, "new")
           ctx.appChanged("refresh")

@@ -10,6 +10,7 @@ import { EpicDetail } from "./components/EpicDetail.tsx"
 import { Epics } from "./components/Epics.tsx"
 import { Projects } from "./components/Projects.tsx"
 import { ProjectDetail, type EpicSummary } from "./components/ProjectDetail.tsx"
+import { ProjectInterview, type ProjectAnswers } from "./components/ProjectInterview.tsx"
 import { MkpanesPrompt } from "./components/MkpanesPrompt.tsx"
 import { Modal, type ModalState } from "./components/Modal.tsx"
 import { QaTicketPrompt } from "./components/QaTicketPrompt.tsx"
@@ -760,9 +761,9 @@ export function App() {
   )
 
   const submitNewProject = useCallback(
-    (name: string) => {
+    (answers: ProjectAnswers) => {
       setProjectPrompt(false)
-      const created = createProject(name)
+      const created = createProject(answers.name, { goal: answers.summary, context: answers.context, epic: answers.epic })
       if (!created.ok || !created.project) {
         setMessage({ text: created.message, ok: false })
         return
@@ -1289,12 +1290,7 @@ export function App() {
         {mkpanesPrompt ? (
           <MkpanesPrompt onSubmit={submitMkpanes} />
         ) : projectPrompt ? (
-          <CloudPrompt
-            title="New project"
-            placeholder="project name (enter to create, esc to cancel)"
-            hint="creates ~/projects/<name> with a PROJECT.md brief and opens a tmux window running its project agent"
-            onSubmit={submitNewProject}
-          />
+          <ProjectInterview onSubmit={submitNewProject} />
         ) : epicPrompt ? (
           <CloudPrompt
             title={`Epic for ${epicPrompt.name}`}
@@ -1466,7 +1462,9 @@ export function App() {
             <span fg="#6b7280">
               {drawerVisible && drawerFocused
                 ? "enter send   esc table keys   ; close agent chat"
-                : mkpanesPrompt || projectPrompt || epicPrompt || qaPrompt || cloudPrompt
+                : projectPrompt
+                ? "enter next step (empty skips optional ones)   esc cancel"
+                : mkpanesPrompt || epicPrompt || qaPrompt || cloudPrompt
                 ? "enter run   esc cancel"
                 : modal
                 ? "j/k move   enter select   esc cancel"

@@ -3,7 +3,7 @@
 # Alacritty window, with cursor-cli running as the project's central agent.
 #
 # Usage:
-#   start-project <name | path> [--new | --resume] [--no-attach] [--goal "<text>"]
+#   start-project <name | path> [--new | --resume] [--no-attach] [--goal "<text>"] [--context "<text>"] [--epic KEY]
 #
 #   <name>        directory name under ~/projects (created if missing, slugified)
 #   <path>        an existing directory (must live under ~/projects)
@@ -11,6 +11,8 @@
 #   --resume      force the "summarize where we are" opening prompt
 #   --no-attach   create the session but do not open a terminal window
 #   --goal        one-paragraph goal written into a freshly created PROJECT.md
+#   --context     background for the agent, written into Current state of a fresh PROJECT.md
+#   --epic        Jira epic key for the **Epic:** line of a fresh PROJECT.md
 #
 # Layout of the session's "central" window (mirrors mkpanes):
 #   pane 1 vim (top-left)   pane 2 central agent (top-right)   panes 3-5 shells (bottom)
@@ -44,6 +46,8 @@ RESERVED="command-center node_modules"
 MODE="auto"
 ATTACH=1
 GOAL=""
+CONTEXT=""
+EPIC=""
 TARGET=""
 
 usage() {
@@ -56,6 +60,8 @@ while [ $# -gt 0 ]; do
     --resume) MODE="resume"; shift ;;
     --no-attach) ATTACH=0; shift ;;
     --goal) GOAL="${2:-}"; shift 2 ;;
+    --context) CONTEXT="${2:-}"; shift 2 ;;
+    --epic) EPIC="$(printf '%s' "${2:-}" | tr '[:lower:]' '[:upper:]')"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
       if [ -z "$TARGET" ]; then TARGET="$1"; else TARGET="$TARGET $1"; fi
@@ -110,12 +116,14 @@ TODAY="$(date +%Y-%m-%d)"
 CREATED_BRIEF=0
 if [ ! -f "$DIR/PROJECT.md" ]; then
   GOAL_LINE="${GOAL:-_What this project is for, in one paragraph._}"
+  STATE_LINE="${CONTEXT:-_Where things are right now. Keep this current — it is what the command center shows._}"
+  EPIC_LINE="${EPIC:-none}"
   cat > "$DIR/PROJECT.md" <<EOF
 # $NAME
 
 **Status:** active
 **Updated:** $TODAY
-**Epic:** none
+**Epic:** $EPIC_LINE
 
 ## Goal
 
@@ -123,7 +131,7 @@ $GOAL_LINE
 
 ## Current state
 
-_Where things are right now. Keep this current — it is what the command center shows._
+$STATE_LINE
 
 ## Next steps
 
