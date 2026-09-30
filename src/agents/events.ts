@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readSync, statSync, watch } from "node:fs"
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, watch, writeFileSync } from "node:fs"
 import { basename, relative } from "node:path"
 import { config, statePath } from "../config.ts"
 import type { CloudAgent } from "../data/cloud.ts"
@@ -19,6 +19,17 @@ import { run } from "../data/exec.ts"
 import type { EmailMessage } from "../data/outlook.ts"
 import { fmtEvent, fmtMinutes, fmtRange, isNow, minutesUntil, type CalendarEvent } from "../data/calendar.ts"
 import { isProjectDir, projectRootOf, type Project } from "../data/projects.ts"
+import {
+  FOCUS_CADENCE_MS,
+  fmtMinutes as fmtTodoMinutes,
+  fmtNote,
+  inFocusHours,
+  lastCheckInAt,
+  lastProgressAt,
+  notesToday,
+  stalledMinutes,
+  type Todo,
+} from "../data/todos.ts"
 import { currentSnapshot, isAgentLive, sendSystem } from "./hub.ts"
 
 /**
@@ -482,6 +493,125 @@ function checkReminders(): void {
       "calendar",
       `${e.subject} starts ${minutes <= 0 ? "now" : `in ${minutes}m`}${where ? ` (${where})` : ""}${e.organizer ? ` — ${e.organizer}` : ""}`,
       "attention",
+    )
+  }
+}
+
+// ---------------------------------------------------------------------------
+// focus todos → todos specialist
+//
+// Focus todos are supposed to keep moving all day. Every minute, inside the
+// configured focus hours (weekdays) and never during a meeting, a focus todo
+// whose newest progress note is older than the cadence gets a "focus check"
+// event — once per cadence window (a check-in note from central defers the
+// next one). Start of day lists the focus set; end of day recaps it.
+
+const FOCUS_TICK_MS = 60_000
+let todosNow: Todo[] | null = null
+let focusTimer: ReturnType<typeof setInterval> | null = null
+/** todo id → epoch ms of the last focus-check event we raised for it */
+const focusPinged = new Map<string, number>()
+
+// Start/end-of-day announcements survive TUI restarts via a tiny state file.
+const FOCUS_DAY_PATH = statePath("focus-day.json")
+interface FocusDayState {
+  opened?: string
+  closed?: string
+}
+function readFocusDay(): FocusDayState {
+  try {
+    return existsSync(FOCUS_DAY_PATH) ? (JSON.parse(readFileSync(FOCUS_DAY_PATH, "utf8")) as FocusDayState) : {}
+  } catch {
+    return {}
+  }
+}
+function writeFocusDay(state: FocusDayState): void {
+  try {
+    writeFileSync(FOCUS_DAY_PATH, `${JSON.stringify(state)}\n`)
+  } catch {
+    // announcements are best-effort
+  }
+}
+
+/** A meeting is happening right now (declined/cancelled/all-day excluded). */
+function inMeeting(now: number): boolean {
+  return !!calendarEvents?.some((e) => isCommitment(e) && isNow(e, now))
+}
+
+/** Current todo list from the TUI; starts the focus ticker on first call. */
+export function ingestTodos(todos: Todo[]): void {
+  todosNow = todos
+  if (!focusTimer) {
+    focusTimer = setInterval(checkFocus, FOCUS_TICK_MS)
+    checkFocus()
+  }
+}
+
+function focusList(todos: Todo[], now: number): string {
+  return todos
+    .map((t) => `- ${t.text} (last progress ${fmtTodoMinutes(stalledMinutes(t, now))} ago${t.notes.length ? `; latest: ${fmtNote(t.notes[t.notes.length - 1])}` : ""})`)
+    .join("\n")
+}
+
+function checkFocus(): void {
+  if (!todosNow) return
+  const now = Date.now()
+  const today = new Date(now).toDateString()
+  const focus = todosNow.filter((t) => t.focus && !t.done)
+  const inHours = inFocusHours(new Date(now))
+
+  const day = readFocusDay()
+
+  // Start of day: the first tick inside focus hours. Focus todos that are
+  // already stale are announced as such here and count as pinged, so central
+  // gets one message, not a day-start report followed by a focus check.
+  if (inHours && day.opened !== today) {
+    writeFocusDay({ opened: today })
+    focusPinged.clear()
+    const carried = focus.filter((t) => new Date(t.focusedAt ?? t.createdAt).toDateString() !== today)
+    const stale = focus.filter((t) => now - lastProgressAt(t) >= FOCUS_CADENCE_MS)
+    for (const t of stale) focusPinged.set(t.id, now)
+    pushEvent(
+      "todos",
+      focus.length
+        ? `focus day started — ${focus.length} focus todo${focus.length === 1 ? "" : "s"}${carried.length ? ` (${carried.length} carried over from an earlier day)` : ""}${stale.length ? `; ${stale.length} already past the cadence — treat those as focus checks` : ""}:\n${focusList(focus, now)}`
+        : "focus day started — no focus todos are set; ask central whether Daniel wants to pick today's focus",
+      focus.length ? (stale.length ? "warn" : "info") : "warn",
+      { inboxSummary: focus.length ? `focus day started — ${focus.length} focus todos` : "focus day started — no focus todos set" },
+    )
+    return
+  }
+
+  // End of day: the first tick after focus hours on a day that was opened.
+  if (!inHours && day.opened === today && day.closed !== today) {
+    writeFocusDay({ opened: today, closed: today })
+    if (focus.length) {
+      const recap = focus
+        .map((t) => {
+          const notes = notesToday(t, new Date(now)).filter((n) => n.kind === "progress")
+          return `- ${t.text}: ${notes.length ? `${notes.length} progress note${notes.length === 1 ? "" : "s"} today — ${notes.map((n) => n.text).join("; ")}` : "no progress recorded today"}`
+        })
+        .join("\n")
+      pushEvent("todos", `focus day ended — recap for central:\n${recap}`, "info", {
+        inboxSummary: `focus day ended — recap of ${focus.length} focus todos`,
+      })
+    }
+    return
+  }
+
+  if (!inHours || inMeeting(now)) return
+  for (const t of focus) {
+    const sinceProgress = now - lastProgressAt(t)
+    if (sinceProgress < FOCUS_CADENCE_MS) continue
+    if (now - lastCheckInAt(t) < FOCUS_CADENCE_MS) continue
+    if (now - (focusPinged.get(t.id) ?? 0) < FOCUS_CADENCE_MS) continue
+    focusPinged.set(t.id, now)
+    const last = t.notes[t.notes.length - 1]
+    const windows = Math.floor(sinceProgress / FOCUS_CADENCE_MS)
+    pushEvent(
+      "todos",
+      `focus check: "${t.text}" (id=${t.id}) — no progress for ${fmtTodoMinutes(stalledMinutes(t, now))}${last ? `; last note ${fmtNote(last)}` : "; no notes yet"}`,
+      windows >= 2 ? "attention" : "warn",
     )
   }
 }

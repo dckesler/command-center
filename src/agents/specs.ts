@@ -28,7 +28,22 @@ import {
   type Project,
 } from "../data/projects.ts"
 import { launchWork, openProjectWindow, runMkpanes, targetSession } from "../data/tmux.ts"
-import { addTodo, editTodo, loadTodos, removeTodo, setTodoNotes, sortTodos, toggleTodo } from "../data/todos.ts"
+import {
+  addTodo,
+  addTodoNote,
+  editTodo,
+  FOCUS_CADENCE_MS,
+  FOCUS_MAX,
+  fmtMinutes as fmtTodoMinutes,
+  fmtTodo,
+  loadTodos,
+  removeTodo,
+  removeTodoNote,
+  setFocus,
+  sortTodos,
+  toggleTodo,
+  type NoteAuthor,
+} from "../data/todos.ts"
 
 /** Live TUI state pushed into the hub by the App on every change. */
 export interface Snapshot {
@@ -67,6 +82,8 @@ export interface TabAgentSpec {
 
 /** How prompts address the human (config.user.name). */
 const USER = config().user.name
+
+const FOCUS_CADENCE_LABEL = fmtTodoMinutes(FOCUS_CADENCE_MS / 60_000)
 
 const REPLY_STYLE =
   "Your replies render in a small terminal pane: be brief and plain-text (no markdown tables, no headers). " +
@@ -278,13 +295,24 @@ const central: TabAgentSpec = {
     `You are the central manager agent of ${USER}'s development command center TUI. ` +
     "Specialist agents run one per tab (worktrees, qa, tickets, epics, projects, todos, email, cloud, calendar); external ticket agents and project agents work in tmux windows. " +
     `The calendar specialist tells you about ${USER}'s upcoming meetings — use that context when timing suggestions (don't propose long tasks right before a meeting; ask calendar when you need his availability). ` +
-    "Your tools: list_agents, get_status(agent), instruct(agent, instruction). " +
+    "Your tools: list_agents, get_status(agent), instruct(agent, instruction), plus focus_todos / list_todos / add_todo_note / set_focus for the focus loop. " +
     "You receive batched '[reports]' messages (each line is timestamped and one sentence) from specialists — treat them as information; only instruct an agent or reply at length when action or a decision is actually needed, otherwise acknowledge in one short line. " +
     "Never instruct agents in a loop: after instructing, wait for the resulting report. " +
+    `Focus todos: ${USER} marks a few todos as today's focus; they must keep moving. The todos specialist reports 'focus: <text> — no progress ` +
+    `for <time>' when one has gone ${FOCUS_CADENCE_LABEL} without a progress note. On such a report: first check what you already know — recent ` +
+    "[reports] from worktrees/projects/tickets/qa and this conversation (an MR merged, a ticket moved, a worker finished on the thing the " +
+    "todo is about). If you can attribute real progress, record it with add_todo_note(kind=progress) and say nothing. If you cannot, ask " +
+    `${USER} in one line, e.g. 'Focus check: \"<text>\" — nothing logged since <time>. Any progress? (or say park to unfocus)', and stop. ` +
+    `When ${USER} answers: real progress → add_todo_note(kind=progress) with his words; nothing yet / still on it → add_todo_note(kind=checkin) ` +
+    "so the next check waits another window; park / drop → set_focus(off). Never ask about the same todo twice within a window — if a repeat " +
+    "report arrives while your question is still unanswered, acknowledge in a few words and do not re-ask. Do not consult the calendar " +
+    `specialist for this: focus checks are already suppressed during meetings. 'focus: nothing set for today' → ask ${USER} once which todos ` +
+    `(up to ${FOCUS_MAX}) are today's focus and set them. A 'focus day ended' recap → relay it in two or three lines. ` +
     `You also have your own shell, skills (jira-ticket, start-ticket, …) and Atlassian MCP access for direct requests from ${USER}. ` +
     REPLY_STYLE,
   makeTools(ctx) {
     return {
+      ...todoTools(ctx, "central"),
       list_agents: {
         description: "List the specialist agents (id, title, busy, queued messages).",
         inputSchema: { type: "object", properties: {} },
@@ -756,14 +784,87 @@ const projectsSpec: TabAgentSpec = {
   },
 }
 
+/** Todo tools shared by the todos specialist and (a subset) the central agent. */
+function todoTools(ctx: HubContext, by: NoteAuthor): Record<string, SDKCustomTool> {
+  const mutate = (fn: (todos: Todo[]) => Todo[]): string => {
+    sortTodos(fn(loadTodos()))
+    ctx.appChanged("todos")
+    return "done"
+  }
+  const find = (id: string) => loadTodos().find((t) => t.id === id || t.text.toLowerCase() === id.toLowerCase())
+  return {
+    list_todos: {
+      description: "List todos (focus first, then pending, then completed) with staleness for focus items and their newest notes.",
+      inputSchema: { type: "object", properties: {} },
+      execute: () => {
+        const todos = ctx.snapshot().todos
+        return todos.length ? todos.map((t) => fmtTodo(t)).join("\n") : "no todos"
+      },
+    },
+    focus_todos: {
+      description: `The focus set: todos expected to keep moving today, with minutes since their last progress note (cadence ${FOCUS_CADENCE_LABEL}).`,
+      inputSchema: { type: "object", properties: {} },
+      execute: () => {
+        const focus = ctx.snapshot().todos.filter((t) => t.focus && !t.done)
+        return focus.length ? focus.map((t) => fmtTodo(t, 5)).join("\n") : "no focus todos set"
+      },
+    },
+    add_todo_note: {
+      description:
+        "Append a timestamped note to a todo (id or exact text from list_todos). kind=progress (default) records real movement and resets the " +
+        "focus cadence clock; kind=checkin records that someone asked and there was nothing new — it defers the next focus check without " +
+        "counting as progress. Notes are never rewritten; add another instead.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          text: { type: "string" },
+          kind: { type: "string", enum: ["progress", "checkin"] },
+        },
+        required: ["id", "text"],
+      },
+      execute: (args) => {
+        const todo = find(str(args.id))
+        if (!todo) return `no todo "${str(args.id)}"`
+        const kind = str(args.kind) === "checkin" ? "checkin" : "progress"
+        return mutate((todos) => addTodoNote(todos, todo.id, str(args.text), by, kind))
+      },
+    },
+    set_focus: {
+      description: `Put a todo into (on=true) or take it out of (on=false) the focus set. Soft cap ${FOCUS_MAX}; more dilutes the point — say so when asked to exceed it.`,
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" }, on: { type: "boolean" } },
+        required: ["id", "on"],
+      },
+      execute: (args) => {
+        const todo = find(str(args.id))
+        if (!todo) return `no todo "${str(args.id)}"`
+        if (todo.done) return `"${todo.text}" is completed — reopen it first`
+        const count = loadTodos().filter((t) => t.focus && !t.done && t.id !== todo.id).length
+        mutate((todos) => setFocus(todos, todo.id, args.on !== false))
+        return args.on !== false && count + 1 > FOCUS_MAX ? `done — ${count + 1} focus todos now, above the soft cap of ${FOCUS_MAX}` : "done"
+      },
+    },
+  }
+}
+
 const todosSpec: TabAgentSpec = {
   id: "todos",
   title: "todos",
   rolePrompt:
     `You are the todos specialist of a development command center. Scope: ${USER}'s lightweight local todo list (no tickets, no branches). ` +
-    "Keep it tidy: add, edit, complete, and remove items on request. " +
-    "Each todo can carry a notes field with extra context — read the notes before acting on a todo, " +
-    "and use set_todo_notes to record useful context (links, decisions, next steps) as you learn it. " +
+    "Keep it tidy: add, edit, complete, focus/unfocus, and remove items on request. " +
+    "Every todo carries an append-only, timestamped note log — read the notes before acting on a todo, and use add_todo_note to record " +
+    "useful context (links, decisions, next steps) as you learn it; never try to rewrite an existing note. " +
+    `Focus todos are the ones that must keep moving all day; the system checks them every ${FOCUS_CADENCE_LABEL} inside focus hours. ` +
+    "Event digests you receive: 'focus check: \"<text>\" (id=…) — no progress for …' means a focus todo has gone a full cadence without a " +
+    "progress note — immediately report_to_central one line: 'focus: <text> — no progress for <time>; last: <newest note or none>' " +
+    "(severity as given: warn, or attention once it is two windows behind). Do not add a note yourself for a focus check and do not ask " +
+    `${USER} — central handles that. 'focus day started' → one line to central listing the focus set by name; if the event says some are ` +
+    "already past the cadence, name those as 'stalled: <text> (<time>)' in that same line (or, when empty, " +
+    `'focus: nothing set for today — ask ${USER} to pick up to ${FOCUS_MAX}'). 'focus day ended' → report the recap in one line per todo, ` +
+    "joined with ';'. " +
     REPLY_STYLE,
   makeTools(ctx) {
     const mutate = (fn: (todos: Todo[]) => Todo[]): string => {
@@ -772,41 +873,31 @@ const todosSpec: TabAgentSpec = {
       return "done"
     }
     return {
-      list_todos: {
-        description: "List todos (including completed), with their notes.",
-        inputSchema: { type: "object", properties: {} },
-        execute: () => {
-          const todos = ctx.snapshot().todos
-          return todos.length
-            ? todos
-                .map((t) => `${t.done ? "[x]" : "[ ]"} id=${t.id} ${t.text}${t.notes ? `\n    notes: ${t.notes}` : ""}`)
-                .join("\n")
-            : "no todos"
-        },
-      },
+      ...todoTools(ctx, "todos"),
       add_todo: {
-        description: "Add a todo, optionally with notes for extra context.",
+        description: "Add a todo, optionally with a first note and/or straight into the focus set.",
         inputSchema: {
           type: "object",
-          properties: { text: { type: "string" }, notes: { type: "string" } },
+          properties: { text: { type: "string" }, notes: { type: "string" }, focus: { type: "boolean" } },
           required: ["text"],
         },
         execute: (args) =>
           mutate((todos) => {
-            const next = addTodo(todos, str(args.text))
-            return typeof args.notes === "string" && args.notes.trim()
-              ? setTodoNotes(next, next[0].id, str(args.notes))
-              : next
+            let next = addTodo(todos, str(args.text))
+            const id = next[0].id
+            if (typeof args.notes === "string" && args.notes.trim()) next = addTodoNote(next, id, str(args.notes), "todos")
+            if (args.focus === true) next = setFocus(next, id, true)
+            return next
           }),
       },
-      set_todo_notes: {
-        description: `Set (or clear, with empty text) a todo's notes — extra context shown to ${USER} in the TUI.`,
+      remove_todo_note: {
+        description: "Delete one note from a todo by its ISO timestamp (from list_todos output is not exact — read the todo first).",
         inputSchema: {
           type: "object",
-          properties: { id: { type: "string" }, notes: { type: "string" } },
-          required: ["id", "notes"],
+          properties: { id: { type: "string" }, ts: { type: "string" } },
+          required: ["id", "ts"],
         },
-        execute: (args) => mutate((todos) => setTodoNotes(todos, str(args.id), str(args.notes))),
+        execute: (args) => mutate((todos) => removeTodoNote(todos, str(args.id), str(args.ts))),
       },
       edit_todo: {
         description: "Rewrite a todo's text (id from list_todos).",
@@ -818,7 +909,7 @@ const todosSpec: TabAgentSpec = {
         execute: (args) => mutate((todos) => editTodo(todos, str(args.id), str(args.text))),
       },
       toggle_todo: {
-        description: "Toggle a todo done/undone (id from list_todos).",
+        description: "Toggle a todo done/undone (id from list_todos). Completing a todo removes it from focus.",
         inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         execute: (args) => mutate((todos) => toggleTodo(todos, str(args.id))),
       },

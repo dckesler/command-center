@@ -83,7 +83,7 @@ Resolution order: environment variable → `config.json` → default.
 |---|---|---|---|
 | `user.name` | | `"the user"` | how agent prompts address you |
 | `user.email`, `user.jiraAccountId` | | `""` | your Atlassian identity (used by ticket skills) |
-| `dirs.config` | `CC_CONFIG_DIR` | `~/.config/command-center` | state: `agents.jsonl`, `inbox.jsonl`, `mail/`, `todos.json`, `tui.log` |
+| `dirs.config` | `CC_CONFIG_DIR` | `~/.config/command-center` | state: `agents.jsonl`, `inbox.jsonl`, `mail/`, `todos.json`, `focus-day.json`, `tui.log` |
 | `dirs.projects` | `CC_PROJECTS_DIR` | `~/projects` | Projects tab root |
 | `dirs.skills` | | cursor/claude/agents skill dirs | roots scanned for `/skill` completion |
 | `commands.agent` | `CC_AGENT_CMD` | `cursor-cli` | command typed into tmux panes to start an agent (alias OK) |
@@ -96,6 +96,9 @@ Resolution order: environment variable → `config.json` → default.
 | `model` | `CC_MODEL` | `composer-2.5` | Cursor SDK model for specialists and Cloud agents |
 | `projects.exclude` | | `command-center, node_modules` | dirs under `dirs.projects` that are not projects |
 | `mail.quietSeconds` | | `30` | keyboard-quiet time in an agent's tmux session before `cc-mail` may type into an idle agent's pane |
+| `todos.focusCadenceMinutes` | | `30` | how long a focus todo may go without a progress note before a focus check |
+| `todos.focusMax` | | `3` | soft cap on focus todos; the Todos view warns past it |
+| `todos.focusHours` | | `09:00-17:30` | weekday window for focus checks and the start/end-of-day announcements |
 | `repos` | | `{}` | alias → path; overrides the mkpanes registry when non-empty |
 
 The shell skills (`cc-report`, `cc-mail`, `start-project`, `project-task`) and
@@ -190,9 +193,20 @@ epics, todos, email, cloud, calendar.
   line. Ask it about your schedule (`;` drawer): `today_schedule`, `list_events(start,
   end)` for other days, `event_detail(id)` for attendees and the invite body. It has no
   write tools.
-- **[7] Todos** — simple local list for things without a ticket or branch, stored in
-  `dirs.config/todos.json`. `a` adds, `space`/`enter` toggles done,
-  `x` deletes (with confirm). Pending items sort above completed ones.
+- **[7] Todos** — local list for things without a ticket or branch, stored in
+  `dirs.config/todos.json`. `a` adds, `e` edits, `space`/`enter` toggles done,
+  `x` deletes (with confirm). The top **FOCUS** section holds the todos that must
+  stay in motion today: `f` toggles focus (soft cap `todos.focusMax`, the view warns
+  past it), and each focus row shows *moving / due / stalled* from the time of its
+  last progress note. Notes are timestamped entries, not one editable blob: `n`
+  appends a note, `N` opens every note for the selected todo. During
+  `todos.focusHours` on weekdays the app raises a *focus check* for any focus todo
+  with no progress note for `todos.focusCadenceMinutes`; the todos specialist
+  reports it to central, which logs progress it already knows about (as a
+  `central` note) or asks you in one line — answer with the update, or say *park*
+  to unfocus. Checks are skipped while a calendar commitment is in progress. The
+  first tick inside focus hours announces the day's focus set (or asks central to
+  help you pick one); the first tick after hours sends central a recap.
 
 ## Keys
 
@@ -245,7 +259,7 @@ config.example.json, .env.example
 
 State written at runtime lives only in `dirs.config` (default `~/.config/command-center`):
 `agents.jsonl` (hook feed), `inbox.jsonl` + `cursors.json` (durable specialist inbox),
-`mail/` (inter-agent mailboxes), `todos.json`, `tui.log`. Nothing is written inside the repo.
+`mail/` (inter-agent mailboxes), `todos.json`, `focus-day.json`, `tui.log`. Nothing is written inside the repo.
 
 Personal constants baked into some skill docs (`skills/*/SKILL.md` "Known constants":
 Atlassian account ids, cloud id, GitLab group) are still the author's; adjust them when

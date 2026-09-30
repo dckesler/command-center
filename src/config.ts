@@ -63,6 +63,14 @@ export interface Config {
     /** seconds without keyboard activity in an agent's tmux session before cc-mail may type into an idle agent's pane */
     quietSeconds: number
   }
+  todos: {
+    /** minutes a focus todo may go without a progress note before the todos specialist pings central */
+    focusCadenceMinutes: number
+    /** soft cap on simultaneous focus todos (the TUI warns past it) */
+    focusMax: number
+    /** local time window "HH:MM-HH:MM" in which focus checks run (weekdays only) */
+    focusHours: string
+  }
   /**
    * Repo alias → path. When empty, the alias list is parsed from the mkpanes
    * script's `case` block (the original source of truth).
@@ -97,6 +105,7 @@ export const DEFAULTS: Config = {
   model: "composer-2.5",
   projects: { exclude: ["command-center", "node_modules"] },
   mail: { quietSeconds: 30 },
+  todos: { focusCadenceMinutes: 30, focusMax: 3, focusHours: "09:00-17:30" },
   repos: {},
 }
 
@@ -158,6 +167,13 @@ export function config(): Config {
     model: env.CC_MODEL || file.model || DEFAULTS.model,
     projects: { exclude: file.projects?.exclude ?? DEFAULTS.projects.exclude },
     mail: { quietSeconds: Number(file.mail?.quietSeconds) || DEFAULTS.mail.quietSeconds },
+    todos: {
+      focusCadenceMinutes: Number(file.todos?.focusCadenceMinutes) || DEFAULTS.todos.focusCadenceMinutes,
+      focusMax: Number(file.todos?.focusMax) || DEFAULTS.todos.focusMax,
+      focusHours: /^\d{2}:\d{2}-\d{2}:\d{2}$/.test(String(file.todos?.focusHours ?? ""))
+        ? String(file.todos?.focusHours)
+        : DEFAULTS.todos.focusHours,
+    },
     repos: Object.fromEntries(
       Object.entries(file.repos ?? {})
         .filter(([k, v]) => !k.startsWith("$") && typeof v === "string")

@@ -14,8 +14,20 @@ import { ProjectInterview, type ProjectAnswers } from "./components/ProjectInter
 import { MkpanesPrompt } from "./components/MkpanesPrompt.tsx"
 import { Modal, type ModalState } from "./components/Modal.tsx"
 import { QaTicketPrompt } from "./components/QaTicketPrompt.tsx"
-import { Todos } from "./components/Todos.tsx"
-import { addTodo, editTodo, loadTodos, removeTodo, setTodoNotes, sortTodos, toggleTodo, type Todo } from "./data/todos.ts"
+import { Todos, type TodoInputMode } from "./components/Todos.tsx"
+import {
+  addTodo,
+  addTodoNote,
+  editTodo,
+  fmtNote,
+  FOCUS_MAX,
+  loadTodos,
+  removeTodo,
+  setFocus,
+  sortTodos,
+  toggleTodo,
+  type Todo,
+} from "./data/todos.ts"
 import {
   agentBusy,
   markRead,
@@ -31,6 +43,7 @@ import { getInbox, type EmailMessage } from "./data/outlook.ts"
 import { getTodayEvents, type CalendarEvent } from "./data/calendar.ts"
 import {
   ingestCalendar,
+  ingestTodos,
   ingestCloud,
   ingestEmails,
   ingestProjects,
@@ -179,9 +192,7 @@ export function App() {
   const [todos, setTodos] = useState<Todo[]>(() => sortTodos(loadTodos()))
   const [selectedTodo, setSelectedTodo] = useState(0)
   const [showCompletedTodos, setShowCompletedTodos] = useState(false)
-  const [addingTodo, setAddingTodo] = useState(false)
-  const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
-  const [editingTodoNotes, setEditingTodoNotes] = useState<Todo | null>(null)
+  const [todoInput, setTodoInput] = useState<TodoInputMode | null>(null)
   const [emails, setEmails] = useState<EmailMessage[] | null>(null)
   const [emailsLoading, setEmailsLoading] = useState(true)
   const [selectedEmail, setSelectedEmail] = useState(0)
@@ -314,6 +325,9 @@ export function App() {
   useEffect(() => {
     if (!eventsLoading && events !== null) ingestCalendar(events)
   }, [events, eventsLoading])
+  useEffect(() => {
+    ingestTodos(todos)
+  }, [todos])
   useEffect(() => {
     if (!cloudLoading) ingestCloud(cloudAgents)
   }, [cloudAgents, cloudLoading])
@@ -882,11 +896,9 @@ export function App() {
 
   useKeyboard((key) => {
     // While a text input is focused it owns all keys except escape.
-    if (addingTodo || editingTodo || editingTodoNotes || mkpanesPrompt || projectPrompt || epicPrompt || qaPrompt || cloudPrompt) {
+    if (todoInput || mkpanesPrompt || projectPrompt || epicPrompt || qaPrompt || cloudPrompt) {
       if (key.name === "escape") {
-        setAddingTodo(false)
-        setEditingTodo(null)
-        setEditingTodoNotes(null)
+        setTodoInput(null)
         setMkpanesPrompt(false)
         setProjectPrompt(false)
         setEpicPrompt(null)
@@ -1033,9 +1045,29 @@ export function App() {
         setShowCompletedTodos((show) => !show)
         setSelectedTodo(0)
       }
-      if (key.name === "a") setAddingTodo(true)
-      if (key.name === "e" && todo) setEditingTodo(todo)
-      if (key.name === "n" && todo) setEditingTodoNotes(todo)
+      if (key.name === "a") setTodoInput({ kind: "add" })
+      if (key.name === "e" && todo) setTodoInput({ kind: "edit", todo })
+      if (key.name === "n" && todo && !key.shift) setTodoInput({ kind: "note", todo })
+      if (key.name === "n" && todo && key.shift) {
+        // Full note log, newest first.
+        const lines = [...todo.notes].reverse().map(fmtNote)
+        setModal({
+          title: `Notes — ${todo.text.slice(0, 50)}`,
+          body: lines.length ? lines : ["no notes yet — press n to add one"],
+          options: [{ label: "Close" }],
+          selected: 0,
+          onPick: () => setModal(null),
+        })
+      }
+      if (key.name === "f" && todo && !todo.done) {
+        const focusCount = todos.filter((t) => t.focus && !t.done).length
+        setTodos(sortTodos(setFocus(todos, todo.id, !todo.focus)))
+        if (!todo.focus && focusCount >= FOCUS_MAX) {
+          setBusy(`${focusCount + 1} focus todos — more than ${FOCUS_MAX} dilutes the point`)
+          setTimeout(() => setBusy(null), 4000)
+        }
+        setSelectedTodo(0)
+      }
       if ((key.name === "space" || key.name === "return") && todo) {
         setTodos(sortTodos(toggleTodo(todos, todo.id)))
         // When completed todos are hidden, a just-completed one leaves the list.
@@ -1340,21 +1372,17 @@ export function App() {
             todos={showCompletedTodos ? todos : todos.filter((t) => !t.done)}
             hiddenDoneCount={showCompletedTodos ? 0 : todos.filter((t) => t.done).length}
             selected={selectedTodo}
-            adding={addingTodo}
-            editing={editingTodo}
-            editingNotes={editingTodoNotes}
+            input={todoInput}
             onSubmit={(text) => {
-              if (editingTodoNotes) {
-                setTodos(sortTodos(setTodoNotes(todos, editingTodoNotes.id, text)))
-                setEditingTodoNotes(null)
-              } else if (editingTodo) {
-                setTodos(sortTodos(editTodo(todos, editingTodo.id, text)))
-                setEditingTodo(null)
+              if (todoInput?.kind === "note") {
+                setTodos(sortTodos(addTodoNote(todos, todoInput.todo.id, text, "user", "progress")))
+              } else if (todoInput?.kind === "edit") {
+                setTodos(sortTodos(editTodo(todos, todoInput.todo.id, text)))
               } else {
                 setTodos(sortTodos(addTodo(todos, text)))
-                setAddingTodo(false)
                 setSelectedTodo(0)
               }
+              setTodoInput(null)
             }}
             width={width - 2}
             height={contentHeight}
@@ -1473,9 +1501,9 @@ export function App() {
                   : view === "epics" && epicDetail
                     ? "tab views   esc back   j/k move   n new ticket   s start/jump   p in-progress+sprint   f finalize   c status   t open ticket   ; agent   r refresh   ctrl+c quit"
                     : view === "todos"
-                      ? addingTodo || editingTodo || editingTodoNotes
+                      ? todoInput
                         ? "enter save   esc cancel"
-                        : `tab views   j/k move   a add   e edit   n notes   space/enter toggle   v ${showCompletedTodos ? "hide" : "show"} completed   x delete   ; agent   ctrl+c quit`
+                        : `tab views   j/k move   a add   e edit   f focus   n add note   N all notes   space/enter toggle   v ${showCompletedTodos ? "hide" : "show"} completed   x delete   ; agent   ctrl+c quit`
                       : view === "central"
                         ? chatFocused
                           ? "enter send   esc unfocus input"

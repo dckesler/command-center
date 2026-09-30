@@ -43,6 +43,13 @@
     "quietSeconds": 30
   },
 
+  "todos": {
+    "$comment": "Focus todos: the todos specialist pings central when a focus todo has had no progress note for focusCadenceMinutes, only inside focusHours on weekdays and never during a meeting. focusMax is a soft cap.",
+    "focusCadenceMinutes": 30,
+    "focusMax": 3,
+    "focusHours": "09:00-17:30"
+  },
+
   "repos": {
     "$comment": "Repo alias → path for the worktrees tab and mkpanes-style launches. Leave empty to parse the alias list from the mkpanes script instead.",
     "example-repo": "~/code/example-repo"
