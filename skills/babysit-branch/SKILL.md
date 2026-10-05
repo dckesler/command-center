@@ -1,11 +1,13 @@
 ---
 name: babysit-branch
-description: Poll a GitLab MR's CI/CD pipeline until it reaches a terminal state, then collect unresolved MR review comments (any author, including CodeAnt and humans), list them for triage, and print the final MR and Jira links. Can be invoked standalone on any branch that already has an open MR, or handed off from /push-branch. Use when the user asks to watch CI, babysit a branch, or wait for review comments.
+description: Poll a GitLab MR's CI/CD pipeline until it reaches a terminal state, then collect unresolved MR review comments (any author, including CodeAnt and humans), triage them autonomously — fix the ones worth fixing in the working tree, close the rest with a reason — summarize, and ask whether to run /push-branch. Loops back to CI polling after every push to the MR. Can be invoked standalone on any branch that already has an open MR, or handed off from /push-branch. Use when the user asks to watch CI, babysit a branch, or wait for review comments, and ALWAYS after pushing new commits to a branch that has an open MR.
 ---
 
 # Babysit Branch Skill
 
-Poll the CI/CD pipeline on the current branch's open GitLab MR until it reaches a terminal state. If the pipeline passes, move the Jira ticket to Code Review. Then wait for review comments to settle, list unresolved discussions from **any author** (humans and bots), and let the user triage fixes vs. closes before printing the final MR and Jira links.
+Poll the CI/CD pipeline on the current branch's open GitLab MR until it reaches a terminal state. If the pipeline passes, move the Jira ticket to Code Review. Then wait for review comments to settle, collect unresolved discussions from **any author** (humans and bots), and **triage them yourself**: fix every comment that is worth fixing, close the rest with a reason, summarize what you did, and ask the user whether to run `/push-branch`. The user is consulted at exactly two points — after a CI failure diagnosis, and after the fix summary — never for per-comment decisions.
+
+**Standing rule — any push restarts polling.** Whenever new commits land on a branch with an open MR (via `/push-branch`, a manual `git push`, or a fix you committed yourself), re-enter this skill at **Step 1** for the new `HEAD` SHA. A push means a new pipeline and a fresh round of bot/human review; never treat the MR as babysat because an earlier SHA was.
 
 ## Wake-up entry (read this first)
 
@@ -16,12 +18,13 @@ This skill is re-entered on every `ScheduleWakeup` fire. **Determine which phase
 - CI pipeline failed and failure diagnosis shown, waiting on user decision → act on **Step 1c**'s fix-or-continue prompt when they reply.
 - CI pipeline reached a terminal state (non-failed), review comments not yet listed → **Step 2** (review-comment polling).
 - CI pipeline failed, user chose "continue" → **Step 2** (review-comment polling).
-- Review comments already listed → you are waiting on the user's triage decisions; act on **Step 3 / Step 4** when they reply. Do not schedule wakeups while waiting on the user.
-- Review fixes were committed and pushed (this conversation or a `/push-branch` handoff after triage) → **Step 1**. Reset review-comment polling (`REVIEW_POLLS` back to 0). Match CI against the **new** `HEAD` SHA.
+- Review comments collected, triage not yet done → **Step 3** (collect) then **Step 4** (fix / close autonomously). No wakeups during triage; it runs straight through.
+- Fix summary shown, waiting on the user's "ready for `/push-branch`?" answer → act on **Step 4b** when they reply. Do not schedule wakeups while waiting on the user.
+- New commits were pushed to the MR since the last CI poll (a `/push-branch` handoff after triage, a manual push, or `git rev-parse HEAD` no longer matches the SHA you last polled) → **Step 1** for the **new** `HEAD` SHA. Reset `REVIEW_POLLS` to 0 and record the push time as `SINCE` (see Step 2).
 
 Always reuse the MR IID, MR URL, and repo slug captured earlier in the conversation rather than re-deriving them.
 
-**Loop:** CI → review comments → triage → (fix + push) → back to CI. Do not print Step 5 links until that loop has nothing left to do.
+**Loop:** CI → review comments → autonomous triage → summary + "ready for `/push-branch`?" → push → back to CI. Do not print Step 5 links until that loop has nothing left to do: CI terminal on the current `HEAD`, no unresolved comments, and no fixes sitting unpushed in the working tree.
 
 ## Step 0: Derive MR Info (standalone entry only)
 
@@ -116,7 +119,7 @@ This runs **once**, immediately after a `failed` terminal state is detected. Ski
    - If there are more than 3 failed jobs, note "… and N more failed jobs. See the pipeline in GitLab for the full list." but do not fetch logs for the extras.
 
 5. After presenting the summary, ask the user: "Would you like to fix the issue and push a new commit, or should I continue to review comments?"
-   - **Fix** — wait for the user to make code changes, then when they're ready, return to Step 0 of `/push-branch` (commit the fixes) and loop through the full push cycle again on the same branch, which will trigger a new pipeline.
+   - **Fix** — if the cause is clear from the log (lint, type error, a test you can see is wrong, a missing import), make the fix yourself in the working tree and show the diff; otherwise wait for the user to make the change. Then run `/push-branch` (Step 0 commits the fixes; it pushes to the same branch and MR — no second MR) which hands back to this skill at Step 1 for the new pipeline.
    - **Continue** — proceed to Step 2 without re-pushing.
 
 ## Step 1b: Move the Ticket to Code Review (on pipeline success only)
@@ -141,11 +144,12 @@ CodeAnt signals completion in one of two ways (author username/name contains `co
 1. **Review Status table** — a comment with heading `## 🤖 CodeAnt AI — Review Status` containing a table row with `✅ Reviewed your PR` and a non-empty Finished timestamp.
 2. **Legacy phrase** — a comment body containing `CodeAnt AI finished reviewing your PR.`
 
-On each wakeup, fetch discussions and decide:
+Bots re-review on every push, so an old "finished" comment from a previous SHA must not count. `SINCE` is the epoch time of the commit at the current `HEAD` (the commit you are babysitting); only CodeAnt notes created after it count as activity for this round:
 
 ```bash
+SINCE=$(git log -1 --format=%ct HEAD)
 glab api "projects/:id/merge_requests/<MR_IID>/discussions?per_page=100" --paginate \
-  | jq -r '
+  | jq -r --argjson since "$SINCE" '
       def is_codeant:
         ((.author.username // "" | ascii_downcase | test("codeant"))
          or (.author.name // "" | ascii_downcase | test("codeant")));
@@ -154,10 +158,13 @@ glab api "projects/:id/merge_requests/<MR_IID>/discussions?per_page=100" --pagin
         or (.body | test("✅ Reviewed your PR"; "i"));
       def is_status_noise:
         is_codeant and is_codeant_done;
+      def is_recent:
+        ((.updated_at // .created_at // "1970-01-01T00:00:00Z")
+         | sub("\\.[0-9]+"; "") | fromdateiso8601) >= $since;
       . as $all
       | {
-          codeant_done: ([ $all[].notes[] | select(is_codeant and is_codeant_done) ] | length > 0),
-          codeant_seen: ([ $all[].notes[] | select(is_codeant) ] | length > 0),
+          codeant_done: ([ $all[].notes[] | select(is_codeant and is_codeant_done and is_recent) ] | length > 0),
+          codeant_seen: ([ $all[].notes[] | select(is_codeant and is_recent) ] | length > 0),
           open_threads: ([ $all[]
             | . as $d
             | .notes[0]
@@ -171,14 +178,15 @@ glab api "projects/:id/merge_requests/<MR_IID>/discussions?per_page=100" --pagin
 ```
 
 - `:id` is replaced by glab with the current repo's project ID (the skill runs inside the repo). If that fails, substitute the URL-encoded repo slug, e.g. `projects/group%2Fsub%2Frepo/...`.
-- Track how many Step 2 polls have run since CI went terminal in the conversation (`REVIEW_POLLS`, start at 0, increment each wakeup).
+- CodeAnt's Review Status table is often **edited in place** rather than re-posted; if `codeant_seen` stays `false` but a CodeAnt status comment exists whose `updated_at` is after `SINCE` and shows `✅ Reviewed your PR`, treat `codeant_done` as `true`.
+- Track how many Step 2 polls have run since CI went terminal **for the current SHA** in the conversation (`REVIEW_POLLS`, start at 0, increment each wakeup, reset to 0 after every push).
 - **Proceed to Step 3** when any of these is true:
   - `codeant_done` is `true` (CodeAnt finished), or
   - `codeant_seen` is `false` and `REVIEW_POLLS >= 2` (no CodeAnt activity after ~1 minute — don't hang waiting for a bot that isn't running), or
   - `REVIEW_POLLS >= 10` (~5 minutes) — list whatever comments exist and stop waiting.
 - Otherwise: tell the user "Waiting on review comments…" (mention CodeAnt specifically only when `codeant_seen` is true and `codeant_done` is false) and schedule the next wakeup in 30 seconds with reason `"polling review comments for <branch>"`.
 
-## Step 3: List Unresolved Review Comments
+## Step 3: Collect Unresolved Review Comments
 
 Fetch the discussions again and extract every unresolved non-system discussion root **from any author**, excluding CodeAnt completion-summary comments. Capture discussion ID, author, resolved state, and inline file/line when present:
 
@@ -192,49 +200,87 @@ glab api "projects/:id/merge_requests/<MR_IID>/discussions?per_page=100" --pagin
           and ((.body | test("CodeAnt AI finished reviewing your PR."; "i"))
             or (.body | test("✅ Reviewed your PR"; "i")))
           | not)
+      | select(.resolved | not)
       | { discussion_id: $d.id,
-          resolved: .resolved,
           author: (.author.name // .author.username // "unknown"),
           file: (.position.new_path // .position.old_path // null),
           line: (.position.new_line // .position.old_line // null),
           body: .body }'
 ```
 
-Present the open (unresolved) suggestions to the user as a numbered list. For each, show **author**, file:line (when inline), and a concise rendering of the comment body. Keep the `discussion_id` for each item — you need it to resolve threads in Step 4. Skip any already-resolved threads (note their count in one line).
+Keep the `discussion_id` for each item — you need it to reply and resolve in Step 4. Note the count of already-resolved threads in one line if non-zero.
 
 If there are **no** unresolved comments, say so in one line and skip straight to Step 5.
 
-Then ask the user, plainly:
+Otherwise **do not list them for the user to pick from and do not ask anything** — go straight to Step 4.
 
-> "Which would you like to fix, and which should I close out? (e.g. 'fix 1 and 3, close 2')"
+## Step 4: Triage and Fix Autonomously
 
-**Do not schedule a wakeup here.** Stop and wait for the user's reply — this is a human decision point.
+Decide for every open comment whether it is worth fixing, then act. Read the referenced code before deciding; do not judge from the comment text alone.
 
-## Step 4: Act on the User's Decisions
+**Fix** a comment when it points at a real defect or a clear improvement that is in scope for this MR: correctness bugs, missing error handling or null checks the code path actually hits, security findings, a test the change should have had, misleading names or comments, dead code the MR introduced, style that violates the repo's own conventions. A human reviewer's request counts as worth fixing unless it is factually wrong — bias toward doing what a teammate asked.
 
-For each suggestion the user picks:
+**Close** a comment (resolve with a short reply) when it is: already addressed by the current code, factually mistaken about what the code does, out of scope for this MR (pre-existing code the MR did not touch, a refactor that belongs in its own ticket), a bot nit that contradicts the repo's conventions, a duplicate of another thread, or purely informational. Never close a human's comment as "out of scope" or "disagree" without saying why in the reply.
 
-- **Fix** — make the code change in the working tree per the suggestion. After applying fixes, follow normal practice: run the relevant `snyk_code_scan` on modified first-party code if applicable, then let the user review. Confirm before committing. When the user wants the fixes on the MR, commit and push (or run `/push-branch` on the existing MR — do not open a second MR), reply on the threads, resolve the ones you addressed, then **return to Step 1** and poll CI for the new `HEAD`. Do not skip to Step 5 after a push.
-- **Close** — resolve the discussion thread, optionally posting a short reply with the reason first:
+**Escalate** (neither fix nor close — leave open and list it in the summary) only when the right answer depends on product intent or information you do not have, e.g. "should this be configurable?" or a reviewer asking a question only the author can answer.
+
+For each **fix**: make the change in the working tree; run the repo's relevant checks on what you touched (typecheck / lint / the affected tests — whatever `AGENTS.md` or `package.json` says); run `snyk_code_scan` on modified first-party code if applicable. Then reply on the thread and resolve it:
 
 ```bash
-# Optional reply explaining the decision
 glab api -X POST "projects/:id/merge_requests/<MR_IID>/discussions/<DISCUSSION_ID>/notes" \
-  -f body="Closing: <brief reason>"
-
-# Resolve the thread
+  -f body="Fixed: <one line — what changed>"
 glab api -X PUT "projects/:id/merge_requests/<MR_IID>/discussions/<DISCUSSION_ID>?resolved=true"
 ```
 
-Process all of the user's choices, then briefly summarize what was fixed vs. resolved.
+For each **close**:
 
-- If **any fix was pushed**, immediately return to **Step 1** (new pipeline on the new SHA). Reset `REVIEW_POLLS` to 0.
-- If the user asks to revisit the list, return to Step 3.
-- If every chosen item was closed (no push) and nothing remains open, continue to Step 5.
+```bash
+glab api -X POST "projects/:id/merge_requests/<MR_IID>/discussions/<DISCUSSION_ID>/notes" \
+  -f body="Closing: <brief reason>"
+glab api -X PUT "projects/:id/merge_requests/<MR_IID>/discussions/<DISCUSSION_ID>?resolved=true"
+```
+
+Resolve fixed threads now (before the push) so the user's summary and GitLab agree; the fix itself reaches the MR on the next push.
+
+**Do not commit and do not push here.** Leave the fixes in the working tree — `/push-branch` Step 0 will show the commit message for confirmation and push.
+
+### Step 4a: Summarize and Ask
+
+Print one summary with three groups (omit empty groups):
+
+```
+Review triage for `<branch>` — N fixed, M closed, K left open
+
+Fixed
+1. <author> — <file:line> — <what the comment asked> → <what you changed>
+…
+
+Closed
+2. <author> — <file:line> — <what the comment asked> → <why closed>
+…
+
+Left open (needs you)
+3. <author> — <file:line> — <the question, verbatim or near>
+```
+
+Then, if anything was fixed, ask plainly:
+
+> "Fixes are in the working tree (uncommitted). Ready to go back to `/push-branch`?"
+
+If nothing was fixed (all closed), skip the question; continue to Step 5 if nothing is left open, or stop and ask the user about the left-open items if there are any.
+
+**Do not schedule a wakeup here.** Wait for the user's reply.
+
+### Step 4b: Act on the Reply
+
+- **Yes / go / push** → run `/push-branch`. It commits (with confirmation of the message), pushes to the same branch and MR (never a second MR), and hands back to this skill at **Step 1** for the new `HEAD`. Reset `REVIEW_POLLS` to 0.
+- **Changes requested** (the user disagrees with a fix or a close) → apply what they asked: revert or adjust the fix, or un-resolve and re-open a thread with `glab api -X PUT "...?resolved=false"` and a reply. Re-print the summary and ask again.
+- **Answers to left-open items** → fold them in as fixes or closes per their answer, update the summary, and ask again if a push is now needed.
+- **Not now** → stop. Say the fixes remain uncommitted in the working tree and that running `/push-branch` later will resume the loop.
 
 ## Step 5: Final Output — MR URL and Jira Ticket URL
 
-Once CI is terminal **and** review comments have been triaged **and** no review-fix commit is waiting on a new pipeline, print:
+Once CI is terminal for the current `HEAD` **and** no review comments remain unresolved **and** nothing from triage is sitting unpushed in the working tree, print:
 
 - **MR URL** — the GitLab merge request URL captured in Step 0 or handed from `/push-branch`
 - **Jira ticket URL** — derive the ticket key from the branch name using the pattern `[A-Z]+-[0-9]+` (e.g., `LW-17033`) and format the URL as:
@@ -242,7 +288,7 @@ Once CI is terminal **and** review comments have been triaged **and** no review-
 
 Example output:
 ```
-✅ Pipeline passed for `LW-17033`. Review comments triaged (2 fixed, 1 resolved).
+✅ Pipeline passed for `LW-17033`. Review comments triaged (2 fixed, 1 closed).
 
 🔗 MR: https://gitlab.com/smartsense4/lists/-/merge_requests/3577
 🎟  Jira: https://smartsensebydigi.atlassian.net/browse/LW-17033

@@ -1,11 +1,13 @@
 ---
 name: push-branch
-description: Push the current branch to origin and create a GitLab merge request using glab. Commits any outstanding changes first, syncs AGENTS.md, runs pre/post-push hooks, creates the MR, and links it to the Jira ticket. Then hands off to /babysit-branch to handle CI polling and review-comment triage. Use when the user asks to push a branch, create an MR, or open a merge request.
+description: Push the current branch to origin and create a GitLab merge request using glab (or push follow-up commits to the branch's existing MR). Commits any outstanding changes first, syncs AGENTS.md, runs pre/post-push hooks, creates the MR if none exists, and links it to the Jira ticket. Always hands off to /babysit-branch afterwards to poll CI and triage review comments. Use when the user asks to push a branch, create an MR, open a merge request, or push fixes to an MR.
 ---
 
 # Push Branch Skill
 
-Commit any outstanding changes, push the current branch to origin, create a GitLab MR with an auto-derived title, link the MR to the Jira ticket, then hand off to `/babysit-branch` to poll CI and triage review comments.
+Commit any outstanding changes, push the current branch to origin, create a GitLab MR with an auto-derived title (or reuse the branch's existing open MR), link the MR to the Jira ticket, then hand off to `/babysit-branch` to poll CI and triage review comments.
+
+**Every push ends in `/babysit-branch`.** This holds for the first push that opens the MR and for every follow-up push (review fixes, CI fixes, "one more thing" commits). A new SHA means a new pipeline and a new round of review — the branch is not babysat until that round is done too.
 
 
 ## Wake-up entry (read this first)
@@ -16,6 +18,7 @@ This skill does **not** use `ScheduleWakeup` — it runs straight through to MR 
 - Working tree clean, branch not yet pushed / MR not yet created → **Step 1**.
 - MR already created, Jira not yet linked → **Step 5b**.
 - MR created and Jira linked → invoke `/babysit-branch` (Step 6 handoff).
+- Pushing follow-up commits to a branch whose MR already exists (e.g. after `/babysit-branch` triage) → Step 0 (commit) → Step 3b → Step 4 (push) → Step 5 detects the existing MR and skips creation → Step 6 handoff. Never open a second MR for the same branch.
 
 Always reuse the MR IID, MR URL, and repo slug captured earlier in the conversation rather than re-deriving them.
 
@@ -150,9 +153,17 @@ Before pushing, check for and run the pre-push hook explicitly. This surfaces ho
 git push -u origin <branch>
 ```
 
-## Step 5: Create the Merge Request
+## Step 5: Create the Merge Request (or reuse the existing one)
 
-First, detect the default branch:
+First, check whether the branch already has an open MR:
+
+```bash
+glab mr view --output json 2>/dev/null | jq -r '"\(.iid)\n\(.web_url)"'
+```
+
+If this prints an IID and URL, **reuse them** — print "Pushed to existing MR !<IID>." and skip to Step 6 (Step 5b has already run for this MR). Only create an MR when there is none.
+
+Otherwise, detect the default branch:
 
 ```bash
 git symbolic-ref refs/remotes/origin/HEAD | sed 's|refs/remotes/origin/||'
