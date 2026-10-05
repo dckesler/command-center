@@ -1,6 +1,6 @@
 ---
 name: babysit-branch
-description: Poll a GitLab MR's CI/CD pipeline until it reaches a terminal state, then collect unresolved MR review comments (any author, including CodeAnt and humans), triage them autonomously — fix the ones worth fixing in the working tree, close the rest with a reason — summarize, and ask whether to run /push-branch. Loops back to CI polling after every push to the MR. Can be invoked standalone on any branch that already has an open MR, or handed off from /push-branch. Use when the user asks to watch CI, babysit a branch, or wait for review comments, and ALWAYS after pushing new commits to a branch that has an open MR.
+description: Get a GitLab MR merge-ready — resolve conflicts with the target branch, poll the CI/CD pipeline until it reaches a terminal state (updating from the target branch when a failure looks unrelated), then collect unresolved MR review comments (any author, including CodeAnt and humans), triage them autonomously — fix the ones worth fixing in the working tree, close the rest with a reason — summarize, and ask whether to run /push-branch. Loops back to CI polling after every push to the MR and ends only when the MR is mergeable. Can be invoked standalone on any branch that already has an open MR, or handed off from /push-branch. Use when the user asks to watch CI, babysit a branch, or wait for review comments, and ALWAYS after pushing new commits to a branch that has an open MR.
 ---
 
 # Babysit Branch Skill
@@ -20,11 +20,12 @@ This skill is re-entered on every `ScheduleWakeup` fire. **Determine which phase
 - CI pipeline failed, user chose "continue" → **Step 2** (review-comment polling).
 - Review comments collected, triage not yet done → **Step 3** (collect) then **Step 4** (fix / close autonomously). No wakeups during triage; it runs straight through.
 - Fix summary shown, waiting on the user's "ready for `/push-branch`?" answer → act on **Step 4b** when they reply. Do not schedule wakeups while waiting on the user.
+- MR has conflicts with its target branch (Step 1a found `has_conflicts: true`) and they are not yet resolved → **Step 1a**. If you already asked the user how to resolve a genuine intent conflict, wait for their answer.
 - New commits were pushed to the MR since the last CI poll (a `/push-branch` handoff after triage, a manual push, or `git rev-parse HEAD` no longer matches the SHA you last polled) → **Step 1** for the **new** `HEAD` SHA. Reset `REVIEW_POLLS` to 0 and record the push time as `SINCE` (see Step 2).
 
 Always reuse the MR IID, MR URL, and repo slug captured earlier in the conversation rather than re-deriving them.
 
-**Loop:** CI → review comments → autonomous triage → summary + "ready for `/push-branch`?" → push → back to CI. Do not print Step 5 links until that loop has nothing left to do: CI terminal on the current `HEAD`, no unresolved comments, and no fixes sitting unpushed in the working tree.
+**Loop:** CI → review comments → autonomous triage → summary + "ready for `/push-branch`?" → push → back to CI. Do not print Step 5 links until that loop has nothing left to do: CI terminal on the current `HEAD`, no conflicts with the target branch, no unresolved comments, and no fixes sitting unpushed in the working tree.
 
 ## Step 0: Derive MR Info (standalone entry only)
 
@@ -42,6 +43,22 @@ git branch --show-current && git remote get-url origin && glab mr view --output 
 - If `glab mr view` fails or returns no open MR, tell the user: "No open MR found for this branch. Push one first with `/push-branch`, or open an MR manually in GitLab." Then stop.
 
 Once captured, proceed to Step 1.
+
+## Step 1a: Check Mergeability (conflicts)
+
+Run this once per SHA, before the first CI poll for that SHA — a conflicted MR can go green and still be unmergeable.
+
+```bash
+glab mr view <MR_IID> -R <repo-slug> --output json \
+  | jq -r '"\(.target_branch)\t\(.has_conflicts)\t\(.detailed_merge_status)"'
+```
+
+- `has_conflicts` is `false` → continue to Step 1. (`detailed_merge_status` values like `ci_still_running`, `discussions_not_resolved` or `not_approved` are expected mid-loop; only `conflict` needs action here.)
+- `has_conflicts` is `true` → resolve them now, before CI runs on a commit that cannot merge:
+  1. `git fetch origin <target_branch>` and `git merge origin/<target_branch>` (match the repo's habit — use `git rebase origin/<target_branch>` only if the repo's MRs are normally rebased and the branch is not shared).
+  2. For each conflicted file, read both sides and the surrounding code. Keep the intent of **both** the branch and the target: a target-side rename or signature change applies to the branch's new code too; a branch-side fix is not dropped because the target touched the same lines.
+  3. If the two sides want incompatible things (both changed the same behaviour on purpose), `git merge --abort`, show the conflicting hunks with one line on what each side intends, and ask the user which wins. **Do not schedule a wakeup** — wait for the answer.
+  4. After resolving, run the repo's checks on the touched files, then continue to `/push-branch` — this is a push, so it hands back here at Step 1 for the new `HEAD`.
 
 ## Step 1: Poll CI/CD Pipeline Status
 
@@ -118,9 +135,18 @@ This runs **once**, immediately after a `failed` terminal state is detected. Ski
    - Under each job, show the last ~20 meaningful lines of its log (strip ANSI escape codes with `sed 's/\x1b\[[0-9;]*m//g'` if they appear). Truncate long lines at 200 chars. Focus on error lines — lines containing `error`, `Error`, `ERROR`, `FAILED`, `fatal`, `exit code`, or `npm ERR!` are most useful; include the surrounding 3 lines of context.
    - If there are more than 3 failed jobs, note "… and N more failed jobs. See the pipeline in GitLab for the full list." but do not fetch logs for the extras.
 
-5. After presenting the summary, ask the user: "Would you like to fix the issue and push a new commit, or should I continue to review comments?"
+5. **Decide whether the failure is this MR's.** A failure is in scope when the failing job exercises files this MR changed, or the error names a symbol, test or path the MR touched. When it looks unrelated (a job this MR did not affect, a flaky integration test, an infrastructure error), check whether the branch is behind its target — another MR may already have fixed it:
+   ```bash
+   git fetch -q origin <target_branch> && git rev-list --count HEAD..origin/<target_branch>
+   ```
+   A non-zero count means the branch is behind. Say so in the summary and offer to merge the latest target branch and re-run (the **Update** option below) instead of guessing at a fix.
+
+6. After presenting the summary, ask the user: "Would you like to fix the issue and push a new commit, update from `<target_branch>` and re-run, or should I continue to review comments?"
    - **Fix** — if the cause is clear from the log (lint, type error, a test you can see is wrong, a missing import), make the fix yourself in the working tree and show the diff; otherwise wait for the user to make the change. Then run `/push-branch` (Step 0 commits the fixes; it pushes to the same branch and MR — no second MR) which hands back to this skill at Step 1 for the new pipeline.
+   - **Update** — `git merge origin/<target_branch>` (resolve conflicts per Step 1a), then `/push-branch`. The new pipeline tells you whether the failure was really unrelated.
    - **Continue** — proceed to Step 2 without re-pushing.
+
+   **Scope rule for any CI fix you make yourself.** Fix the code this MR changed. Never edit `.gitlab-ci.yml`, CI scripts, lint/type/test configuration, thresholds, timeouts or retry counts to make a failure pass; never skip, delete or `.only` a test to get green; never change code outside the MR's scope. If a genuine fix would require any of those, do not do it — report what you found and why it needs a human decision, then ask.
 
 ## Step 1b: Move the Ticket to Code Review (on pipeline success only)
 
@@ -280,7 +306,18 @@ If nothing was fixed (all closed), skip the question; continue to Step 5 if noth
 
 ## Step 5: Final Output — MR URL and Jira Ticket URL
 
-Once CI is terminal for the current `HEAD` **and** no review comments remain unresolved **and** nothing from triage is sitting unpushed in the working tree, print:
+Once CI is terminal for the current `HEAD` **and** no review comments remain unresolved **and** nothing from triage is sitting unpushed in the working tree, confirm the MR is actually mergeable:
+
+```bash
+glab mr view <MR_IID> -R <repo-slug> --output json \
+  | jq -r '"\(.has_conflicts)\t\(.detailed_merge_status)\t\(.blocking_discussions_resolved)"'
+```
+
+- `has_conflicts: true` → back to **Step 1a**.
+- `blocking_discussions_resolved: false` → a thread was opened or re-opened since triage; back to **Step 3**.
+- `detailed_merge_status` of `not_approved` (or anything else that needs a person) is **not** yours to fix — name it in the final line so the user knows what is still outstanding.
+
+Then print:
 
 - **MR URL** — the GitLab merge request URL captured in Step 0 or handed from `/push-branch`
 - **Jira ticket URL** — derive the ticket key from the branch name using the pattern `[A-Z]+-[0-9]+` (e.g., `LW-17033`) and format the URL as:
@@ -288,7 +325,7 @@ Once CI is terminal for the current `HEAD` **and** no review comments remain unr
 
 Example output:
 ```
-✅ Pipeline passed for `LW-17033`. Review comments triaged (2 fixed, 1 closed).
+✅ Pipeline passed for `LW-17033`. Review comments triaged (2 fixed, 1 closed). Mergeable; waiting on approval.
 
 🔗 MR: https://gitlab.com/smartsense4/lists/-/merge_requests/3577
 🎟  Jira: https://smartsensebydigi.atlassian.net/browse/LW-17033
