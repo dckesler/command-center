@@ -363,6 +363,8 @@ export function App() {
    * Confirm dialog for one queued specialist action. "Later" is the default so
    * a stray enter never approves anything; the item stays in the queue.
    */
+  /** approvals Daniel answered "Later" to; not re-opened automatically until he changes chats */
+  const deferredApprovals = useRef(new Set<string>())
   const reviewApproval = useCallback(
     (item: PendingApproval, remaining: number) => {
       const asked = new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -373,7 +375,10 @@ export function App() {
         selected: 0,
         onPick: (i) => {
           setModal(null)
-          if (i === 0) return
+          if (i === 0) {
+            deferredApprovals.current.add(item.id)
+            return
+          }
           const approve = i === 1
           setBusy(approve ? `running: ${item.title}…` : `declining: ${item.title}…`)
           decideApproval(item.id, approve).then((message) => {
@@ -926,22 +931,32 @@ export function App() {
     cloudPrompt !== null
   const drawerVisible = drawerOpen && view !== "central" && !overlayActive
 
-  // A new approval opens its dialog at once unless something else owns the
-  // keyboard (an input, another dialog); otherwise the header shows "! N" and
-  // ! opens the queue.
-  const keyboardOwned =
-    overlayActive ||
-    busy !== null ||
-    todoInput !== null ||
-    (view === "central" && chatFocused) ||
-    (drawerVisible && drawerFocused)
+  // Approvals are asked for by whichever agent Daniel is talking to. The agent
+  // whose chat is open is `talkingTo`; a new approval from that agent opens its
+  // dialog right there, even while he is typing to it. Approvals from any other
+  // agent open only when nothing owns the keyboard; otherwise the header shows
+  // "! N" and ! opens the queue — and opening that agent's chat opens them too.
+  const talkingTo = view === "central" ? "central" : drawerOpen ? view : null
+  const blocked = overlayActive || busy !== null || todoInput !== null
+  const typingElsewhere = (view === "central" && chatFocused) || (drawerVisible && drawerFocused)
   const seenApprovals = useRef(0)
   useEffect(() => {
-    if (approvals.length > seenApprovals.current && !keyboardOwned) {
-      reviewApproval(approvals[approvals.length - 1], approvals.length)
+    deferredApprovals.current.clear()
+  }, [talkingTo])
+  useEffect(() => {
+    if (blocked) {
+      seenApprovals.current = approvals.length
+      return
+    }
+    const fromHere = approvals.filter((a) => a.agent === talkingTo && !deferredApprovals.current.has(a.id))
+    const newest = approvals[approvals.length - 1]
+    if (approvals.length > seenApprovals.current && newest && (newest.agent === talkingTo || !typingElsewhere)) {
+      reviewApproval(newest, approvals.length)
+    } else if (fromHere.length) {
+      reviewApproval(fromHere[0], approvals.length)
     }
     seenApprovals.current = approvals.length
-  }, [approvals, keyboardOwned, reviewApproval])
+  }, [approvals, blocked, typingElsewhere, talkingTo, reviewApproval])
 
   useKeyboard((key) => {
     // While a text input is focused it owns all keys except escape.

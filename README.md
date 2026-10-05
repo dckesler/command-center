@@ -233,10 +233,12 @@ epics, todos, email, cloud, calendar.
 **Agent approvals.** Specialist tools that change state outside this laptop —
 `transition_ticket` and `prep_ticket` (tickets, epics), `start_cloud_agent`,
 `follow_up_cloud`, `cancel_cloud_run` (cloud) — never run when the agent calls them.
-They queue an approval (`src/agents/approvals.ts`) and return at once; the header shows
-`! N to approve`, a dialog opens as soon as nothing else owns the keyboard (default
-option is *Later*, so a stray enter approves nothing), and only your keypress runs the
-action. The outcome goes back to the asking specialist as an event. Nothing an agent
+They queue an approval (`src/agents/approvals.ts`) and return at once. The agent you are
+talking to asks you: an approval from the agent whose chat is open pops its dialog right
+there, even mid-typing; one from any other agent opens when nothing owns the keyboard,
+otherwise the header shows `! N to approve` and `!` (or opening that agent's chat) brings
+it up. The default option is *Later*, so a stray enter approves nothing, and only your
+keypress runs the action. The outcome goes back to the asking specialist as an event. Nothing an agent
 sends another agent — `instruct`, `cc-mail`, a report — can approve on your behalf.
 
 In any agent chat, `/skill-name args` invokes an installed skill explicitly (the
