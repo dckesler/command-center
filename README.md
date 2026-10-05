@@ -176,9 +176,12 @@ epics, todos, email, cloud, calendar.
   the placeholder rather than a draft — one `[cc mail …]` line typed into its pane.
   Anything else waits; the sender's result line says why. Pending mail shows as
   `✉N` next to the agent state on the projects tab and in the project detail view.
-  `type_into_ticket_pane` remains for literally answering a prompt a ticket agent is
-  waiting on; it is the only path that still types. Claude Code agents have no
-  hook delivery yet — mail reaches them through the idle-pane path only.
+  Every delivery is labelled as coming from another agent, not the user, and says it
+  cannot stand in for the user's confirmation of anything. No specialist can type
+  into an agent's pane: when a ticket agent is waiting on a permission prompt or
+  menu, the worktrees/QA specialist reports it with severity attention and you
+  answer it yourself. Claude Code agents have no hook delivery yet — mail reaches
+  them through the idle-pane path only.
 - **[9] Cloud** — Cursor Cloud agents started from here. `n` picks a mkpanes repo and a
   prompt (clones that repo's git remote on a Cursor VM, no PR). `s` sends a follow-up,
   `x` cancels the latest run, `o` opens the agent in the browser.
@@ -223,7 +226,17 @@ epics, todos, email, cloud, calendar.
 | `r` | refresh all data |
 | `o` | open selected row's MR in browser |
 | `t` | open selected row's Jira ticket in browser |
+| `!` | review agent actions waiting for your approval (see below) |
 | `ctrl+c` | quit |
+
+**Agent approvals.** Specialist tools that change state outside this laptop —
+`transition_ticket` and `prep_ticket` (tickets, epics), `start_cloud_agent`,
+`follow_up_cloud`, `cancel_cloud_run` (cloud) — never run when the agent calls them.
+They queue an approval (`src/agents/approvals.ts`) and return at once; the header shows
+`! N to approve`, a dialog opens as soon as nothing else owns the keyboard (default
+option is *Later*, so a stray enter approves nothing), and only your keypress runs the
+action. The outcome goes back to the asking specialist as an event. Nothing an agent
+sends another agent — `instruct`, `cc-mail`, a report — can approve on your behalf.
 
 In any agent chat, `/skill-name args` invokes an installed skill explicitly (the
 specialist is told to read that `SKILL.md` and follow it with the given arguments);

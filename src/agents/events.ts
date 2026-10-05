@@ -117,7 +117,7 @@ function wakeUnreadTabs(): void {
   }
 }
 
-function pushEvent(
+export function pushEvent(
   tab: string,
   line: string,
   severity: InboxSeverity = "info",

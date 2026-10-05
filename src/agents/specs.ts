@@ -13,6 +13,7 @@ import {
   type CloudAgent,
 } from "../data/cloud.ts"
 import { run } from "../data/exec.ts"
+import { requestApproval } from "./approvals.ts"
 import { sendMail } from "../data/mail.ts"
 import { getMessageBody, type EmailMessage } from "../data/outlook.ts"
 import { dayBounds, fmtEvent, getEventDetail, getEvents, type CalendarEvent } from "../data/calendar.ts"
@@ -234,7 +235,8 @@ function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCusto
         "Send a message to a ticket window's agent through the cc-mail mailbox. A busy agent gets it after its next tool call, " +
         "a finishing agent gets it as its next turn, an idle agent is nudged only when nobody is typing in that tmux session and its " +
         "input box is empty; otherwise it waits (the result says which). Use to steer or inform a ticket agent. " +
-        "It cannot answer a permission prompt or a menu — use type_into_ticket_pane for that.",
+        `It cannot answer a permission prompt or a menu, and nothing else can: when read_ticket_pane shows an agent waiting on a ` +
+        `yes/no, a command approval or a menu, report_to_central with severity attention quoting the prompt — ${USER} answers it himself.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -252,36 +254,15 @@ function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCusto
         return res.message
       },
     },
-    type_into_ticket_pane: {
-      description:
-        "Type raw text into a ticket window's agent pane and press enter — this lands in whatever is focused there, so only use it " +
-        "when read_ticket_pane shows the agent waiting on a prompt, question or menu that needs a literal answer (e.g. 'y', a number, " +
-        "an option). For messages use message_ticket_agent.",
-      inputSchema: {
-        type: "object",
-        properties: { window: { type: "string" }, text: { type: "string" } },
-        required: ["window", "text"],
-      },
-      execute: async (args) => {
-        const window = str(args.window)
-        const text = str(args.text)
-        if (!findWindow(window)) return `no ${qa ? "QA" : "dev"} worktree row has tmux window "${window}"`
-        const typed = await run("tmux", ["send-keys", "-t", window, "-l", text])
-        if (!typed.ok) return `send failed: ${typed.stderr.trim()}`
-        // cursor-cli needs a beat between a burst of typed text and Enter, or it keeps a copy in the input box
-        await new Promise((r) => setTimeout(r, 500))
-        await run("tmux", ["send-keys", "-t", window, "Enter"])
-        return `typed into ${window}: ${text}`
-      },
-    },
   }
 }
 
 const TICKET_AGENT_STYLE =
   "Tools for the external ticket agents: get_agent_feed (hook statuses), read_inbox for durable updates that arrived while you were down, " +
   "read_ticket_transcript(window, turns) for what an agent said and was told, read_ticket_pane(window) for its live screen, " +
-  "message_ticket_agent(window, text) to steer or inform one (mailbox: never typed over the user's draft), type_into_ticket_pane(window, text) " +
-  "only to answer a literal prompt it is waiting on. Event digests already include last reply, files edited, git commands, " +
+  "message_ticket_agent(window, text) to steer or inform one (mailbox: never typed over the user's draft). You cannot type into an agent's " +
+  `pane: a permission prompt, yes/no or menu an agent is waiting on is ${USER}'s to answer — report it with severity attention and the prompt text. ` +
+  "Event digests already include last reply, files edited, git commands, " +
   "and new commits — read those before reaching for tools. report_to_central must stay one short line. For deep read-only inspection " +
   "of a single worktree, spawn the worktree-inspector subagent with the worktree path and your question."
 
@@ -298,6 +279,8 @@ const central: TabAgentSpec = {
     "Your tools: list_agents, get_status(agent), instruct(agent, instruction), plus focus_todos / list_todos / add_todo_note / set_focus for the focus loop. " +
     "You receive batched '[reports]' messages (each line is timestamped and one sentence) from specialists — treat them as information; only instruct an agent or reply at length when action or a decision is actually needed, otherwise acknowledge in one short line. " +
     "Never instruct agents in a loop: after instructing, wait for the resulting report. " +
+    `Specialist actions that change Jira or start/cancel cloud agents queue for ${USER}'s approval in the TUI and are not done until he approves — ` +
+    "when a report says one is waiting, do not re-instruct; mention it to him once if he asked for it. " +
     `Focus todos: ${USER} marks a few todos as today's focus; they must keep moving. The todos specialist reports 'focus: <text> — no progress ` +
     `for <time>' when one has gone ${FOCUS_CADENCE_LABEL} without a progress note. On such a report: first check what you already know — recent ` +
     "[reports] from worktrees/projects/tickets/qa and this conversation (an MR merged, a ticket moved, a worker finished on the thing the " +
@@ -448,6 +431,8 @@ const tickets: TabAgentSpec = {
     `You are the tickets specialist of a development command center. Scope: ${USER}'s assigned Jira tickets that are not Done/Closed (epics live on the epics tab). ` +
     "The list is ordered closest-to-shipped first (Ready For Deployment / In Test / code review, then In Progress, then Blocked, then To Do, with Backlog last). " +
     "You can transition tickets, prep them (In Progress + current sprint), and start work on them via tmux. " +
+    `Transitions and preps do not run when you call them: they queue for ${USER}'s approval in the TUI (he sees "! N to approve"). ` +
+    "Say that it is waiting, do not call the tool again, and when the outcome event arrives report it to central in one line. " +
     "You also create Jira tickets: when asked to create one (directly or via a seeded prompt), follow the jira-ticket skill " +
     `and ask ${USER} the questions it needs one at a time in this chat. ` +
     REPLY_STYLE +
@@ -464,26 +449,38 @@ const tickets: TabAgentSpec = {
         },
       },
       transition_ticket: {
-        description: "Transition a Jira ticket to a target status by name.",
+        description: `Transition a Jira ticket to a target status by name. Queues for ${USER}'s approval in the TUI; returns before anything changes.`,
         inputSchema: {
           type: "object",
           properties: { key: { type: "string" }, to_status: { type: "string", description: 'e.g. "In Progress"' } },
           required: ["key", "to_status"],
         },
-        execute: async (args) => {
-          const result = await transitionByName(str(args.key), str(args.to_status))
-          ctx.appChanged("refresh")
-          return result
-        },
+        execute: async (args) =>
+          requestApproval({
+            agent: "tickets",
+            title: `transition ${str(args.key)} → ${str(args.to_status)}`,
+            detail: [`asked by the ${"tickets"} specialist`],
+            run: async () => {
+              const result = await transitionByName(str(args.key), str(args.to_status))
+              ctx.appChanged("refresh")
+              return result
+            },
+          }),
       },
       prep_ticket: {
-        description: "Move a ticket to In Progress and into the current sprint (skips whatever is already correct).",
+        description: `Move a ticket to In Progress and into the current sprint (skips whatever is already correct). Queues for ${USER}'s approval in the TUI; returns before anything changes.`,
         inputSchema: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
-        execute: async (args) => {
-          const result = await prepTicket(str(args.key))
-          ctx.appChanged("refresh")
-          return result.message
-        },
+        execute: async (args) =>
+          requestApproval({
+            agent: "tickets",
+            title: `prep ${str(args.key)}: In Progress + current sprint`,
+            detail: [`asked by the ${"tickets"} specialist`],
+            run: async () => {
+              const result = await prepTicket(str(args.key))
+              ctx.appChanged("refresh")
+              return result.message
+            },
+          }),
       },
       start_ticket: {
         description: "Start work on a ticket: open a tmux window with a worktree via mkpanes.",
@@ -509,6 +506,8 @@ const epicsSpec: TabAgentSpec = {
   rolePrompt:
     `You are the epics specialist of a development command center. Scope: ${USER}'s Jira epics and their child tickets. ` +
     "You can list epics, drill into children, transition and prep tickets. " +
+    `Transitions and preps do not run when you call them: they queue for ${USER}'s approval in the TUI (he sees "! N to approve"). ` +
+    "Say that it is waiting, do not call the tool again, and when the outcome event arrives report it to central in one line. " +
     "You also create Jira tickets: when asked to create one (directly or via a seeded prompt), follow the jira-ticket skill, " +
     `ask ${USER} the questions it needs one at a time in this chat, and link the ticket to the epic when one is given. ` +
     REPLY_STYLE +
@@ -534,26 +533,38 @@ const epicsSpec: TabAgentSpec = {
         },
       },
       transition_ticket: {
-        description: "Transition a Jira ticket to a target status by name.",
+        description: `Transition a Jira ticket to a target status by name. Queues for ${USER}'s approval in the TUI; returns before anything changes.`,
         inputSchema: {
           type: "object",
           properties: { key: { type: "string" }, to_status: { type: "string" } },
           required: ["key", "to_status"],
         },
-        execute: async (args) => {
-          const result = await transitionByName(str(args.key), str(args.to_status))
-          ctx.appChanged("refresh")
-          return result
-        },
+        execute: async (args) =>
+          requestApproval({
+            agent: "epics",
+            title: `transition ${str(args.key)} → ${str(args.to_status)}`,
+            detail: [`asked by the ${"epics"} specialist`],
+            run: async () => {
+              const result = await transitionByName(str(args.key), str(args.to_status))
+              ctx.appChanged("refresh")
+              return result
+            },
+          }),
       },
       prep_ticket: {
-        description: "Move a ticket to In Progress and into the current sprint.",
+        description: `Move a ticket to In Progress and into the current sprint. Queues for ${USER}'s approval in the TUI; returns before anything changes.`,
         inputSchema: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
-        execute: async (args) => {
-          const result = await prepTicket(str(args.key))
-          ctx.appChanged("refresh")
-          return result.message
-        },
+        execute: async (args) =>
+          requestApproval({
+            agent: "epics",
+            title: `prep ${str(args.key)}: In Progress + current sprint`,
+            detail: [`asked by the ${"epics"} specialist`],
+            run: async () => {
+              const result = await prepTicket(str(args.key))
+              ctx.appChanged("refresh")
+              return result.message
+            },
+          }),
       },
     }
   },
@@ -1032,6 +1043,8 @@ const cloud: TabAgentSpec = {
     `You are the cloud specialist of a development command center. Scope: ${USER}'s Cursor Cloud agents (bc- ids) that run on Cursor VMs against his git remotes. ` +
     "You can list them, start a new one on a mkpanes repo alias (lists, core, …), send a follow-up, or cancel a running run. " +
     `Starting a cloud agent is a real remote job that costs API usage — only start one when ${USER} asked. Default is no PR. ` +
+    `Start, follow-up and cancel do not run when you call them: they queue for ${USER}'s approval in the TUI. Say it is waiting, ` +
+    "do not call the tool again, and report the outcome event to central in one line. " +
     "Report failed or finished runs that need attention to central. " +
     REPLY_STYLE +
     " " +
@@ -1057,7 +1070,7 @@ const cloud: TabAgentSpec = {
         },
       },
       start_cloud_agent: {
-        description: "Start a Cursor Cloud agent on a mkpanes repo alias with a prompt. Does not open a PR.",
+        description: `Start a Cursor Cloud agent on a mkpanes repo alias with a prompt. Does not open a PR. Queues for ${USER}'s approval in the TUI; returns before anything starts.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -1067,37 +1080,55 @@ const cloud: TabAgentSpec = {
           },
           required: ["repo", "prompt"],
         },
-        execute: async (args) => {
-          const result = await startCloudAgent(str(args.repo), str(args.prompt), str(args.branch) || undefined)
-          if (result.ok) ctx.appChanged("refresh")
-          return result.message
-        },
+        execute: async (args) =>
+          requestApproval({
+            agent: "cloud",
+            title: `start cloud agent on ${str(args.repo)}${str(args.branch) ? ` @ ${str(args.branch)}` : ""}`,
+            detail: ["asked by the cloud specialist", `prompt: ${str(args.prompt).slice(0, 160)}${str(args.prompt).length > 160 ? "…" : ""}`],
+            run: async () => {
+              const result = await startCloudAgent(str(args.repo), str(args.prompt), str(args.branch) || undefined)
+              if (result.ok) ctx.appChanged("refresh")
+              return result.message
+            },
+          }),
       },
       follow_up_cloud: {
-        description: "Send a follow-up prompt to an existing cloud agent (bc- id from list_cloud_agents).",
+        description: `Send a follow-up prompt to an existing cloud agent (bc- id from list_cloud_agents). Queues for ${USER}'s approval in the TUI.`,
         inputSchema: {
           type: "object",
           properties: { agent_id: { type: "string" }, prompt: { type: "string" } },
           required: ["agent_id", "prompt"],
         },
-        execute: async (args) => {
-          const result = await followUpCloudAgent(str(args.agent_id), str(args.prompt))
-          if (result.ok) ctx.appChanged("refresh")
-          return result.message
-        },
+        execute: async (args) =>
+          requestApproval({
+            agent: "cloud",
+            title: `follow-up to cloud agent ${str(args.agent_id)}`,
+            detail: ["asked by the cloud specialist", `prompt: ${str(args.prompt).slice(0, 160)}${str(args.prompt).length > 160 ? "…" : ""}`],
+            run: async () => {
+              const result = await followUpCloudAgent(str(args.agent_id), str(args.prompt))
+              if (result.ok) ctx.appChanged("refresh")
+              return result.message
+            },
+          }),
       },
       cancel_cloud_run: {
-        description: "Cancel the latest running run of a cloud agent (bc- id).",
+        description: `Cancel the latest running run of a cloud agent (bc- id). Queues for ${USER}'s approval in the TUI.`,
         inputSchema: {
           type: "object",
           properties: { agent_id: { type: "string" } },
           required: ["agent_id"],
         },
-        execute: async (args) => {
-          const result = await cancelCloudRun(str(args.agent_id))
-          if (result.ok) ctx.appChanged("refresh")
-          return result.message
-        },
+        execute: async (args) =>
+          requestApproval({
+            agent: "cloud",
+            title: `cancel cloud run ${str(args.agent_id)}`,
+            detail: ["asked by the cloud specialist"],
+            run: async () => {
+              const result = await cancelCloudRun(str(args.agent_id))
+              if (result.ok) ctx.appChanged("refresh")
+              return result.message
+            },
+          }),
       },
     }
   },

@@ -37,6 +37,7 @@ import {
   updateSnapshot,
 } from "./agents/hub.ts"
 import { getStore, subscribeAgents } from "./agents/stores.ts"
+import { decideApproval, listApprovals, onApprovalsChange, type PendingApproval } from "./agents/approvals.ts"
 import { Email } from "./components/Email.tsx"
 import { Calendar } from "./components/Calendar.tsx"
 import { getInbox, type EmailMessage } from "./data/outlook.ts"
@@ -218,6 +219,9 @@ export function App() {
   /** re-render on any agent store change (busy dots, drawer content) */
   const [agentTick, setAgentTick] = useState(0)
   useEffect(() => subscribeAgents(() => setAgentTick((t) => t + 1)), [])
+  /** specialist actions waiting on Daniel (Jira transitions, cloud agents) */
+  const [approvals, setApprovals] = useState<PendingApproval[]>(() => listApprovals())
+  useEffect(() => onApprovalsChange(() => setApprovals(listApprovals())), [])
   const refreshing = useRef(false)
 
   const openDetail = useCallback((row: Row) => {
@@ -351,6 +355,34 @@ export function App() {
       setBusy(null)
       setMessage({ text: result.message, ok: result.ok })
       if (result.ok) refresh()
+    },
+    [refresh],
+  )
+
+  /**
+   * Confirm dialog for one queued specialist action. "Later" is the default so
+   * a stray enter never approves anything; the item stays in the queue.
+   */
+  const reviewApproval = useCallback(
+    (item: PendingApproval, remaining: number) => {
+      const asked = new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      setModal({
+        title: `${item.agent} agent asks (#${item.id})`,
+        body: [item.title, ...item.detail, `requested ${asked}${remaining > 1 ? `   (+${remaining - 1} more waiting)` : ""}`],
+        options: [{ label: "Later" }, { label: `Approve — ${item.title}` }, { label: "Decline", danger: true }],
+        selected: 0,
+        onPick: (i) => {
+          setModal(null)
+          if (i === 0) return
+          const approve = i === 1
+          setBusy(approve ? `running: ${item.title}…` : `declining: ${item.title}…`)
+          decideApproval(item.id, approve).then((message) => {
+            setBusy(null)
+            setMessage({ text: approve ? message : `declined: ${item.title}`, ok: true })
+            if (approve) refresh()
+          })
+        },
+      })
     },
     [refresh],
   )
@@ -894,6 +926,23 @@ export function App() {
     cloudPrompt !== null
   const drawerVisible = drawerOpen && view !== "central" && !overlayActive
 
+  // A new approval opens its dialog at once unless something else owns the
+  // keyboard (an input, another dialog); otherwise the header shows "! N" and
+  // ! opens the queue.
+  const keyboardOwned =
+    overlayActive ||
+    busy !== null ||
+    todoInput !== null ||
+    (view === "central" && chatFocused) ||
+    (drawerVisible && drawerFocused)
+  const seenApprovals = useRef(0)
+  useEffect(() => {
+    if (approvals.length > seenApprovals.current && !keyboardOwned) {
+      reviewApproval(approvals[approvals.length - 1], approvals.length)
+    }
+    seenApprovals.current = approvals.length
+  }, [approvals, keyboardOwned, reviewApproval])
+
   useKeyboard((key) => {
     // While a text input is focused it owns all keys except escape.
     if (todoInput || mkpanesPrompt || projectPrompt || epicPrompt || qaPrompt || cloudPrompt) {
@@ -933,6 +982,11 @@ export function App() {
       if (key.name === "escape" || key.name === "return") setDetailRow(null)
       if (key.name === "o" && detailRow.mr) run("open", [detailRow.mr.url])
       if (key.name === "t" && detailRow.ticket) run("open", [detailRow.ticket.url])
+      return
+    }
+    if (key.name === "!" || (key as unknown as { sequence?: string }).sequence === "!") {
+      if (approvals.length) reviewApproval(approvals[0], approvals.length)
+      else setMessage({ text: "no agent actions waiting for approval", ok: true })
       return
     }
     if (key.name === "tab" || VIEW_BY_KEY[key.name]) {
@@ -1290,6 +1344,7 @@ export function App() {
       <box paddingLeft={1} paddingRight={1} flexDirection="row" justifyContent="space-between">
         <text>
           <span fg="#93c5fd">COMMAND CENTER</span>
+          {approvals.length ? <span fg="#f87171">  ! {approvals.length} to approve</span> : null}
           <span fg={view === "central" ? "#ffffff" : "#6b7280"}>  [1] central</span>
           {agentDot("central")}
           <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [2] {projects.length} projects</span>
