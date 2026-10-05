@@ -87,6 +87,7 @@ Resolution order: environment variable → `config.json` → default.
 | `dirs.projects` | `CC_PROJECTS_DIR` | `~/projects` | Projects tab root |
 | `dirs.skills` | | cursor/claude/agents skill dirs | roots scanned for `/skill` completion |
 | `commands.agent` | `CC_AGENT_CMD` | `cursor-cli` | command typed into tmux panes to start an agent (alias OK) |
+| `commands.projectModel` | `CC_PROJECT_MODEL` | `claude-opus-5-5-high` | Cursor CLI model for each project's central agent (`cursor-cli --list-models`); `""` = CLI default; only applied when `commands.agent` is the Cursor CLI |
 | `commands.mkpanes` | `MKPANES_BIN` | `~/.local/bin/mkpanes` | worktree launcher; parsed for repo aliases when `repos` is empty |
 | `commands.editor` | | `vim` | opened in the left pane of project/task windows |
 | `commands.terminal` | | `alacritty` | `alacritty` \| `terminal` \| `none` for new project windows |

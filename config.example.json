@@ -16,8 +16,9 @@
   },
 
   "commands": {
-    "$comment": "agent = command typed into a tmux pane to start an AI agent (a shell alias such as cursor-cli or claude is fine — panes run your interactive shell). mkpanes = path to the mkpanes script. terminal = alacritty | terminal (macOS Terminal.app) | none. tmuxSession = session that receives new ticket windows; null = current/first.",
+    "$comment": "agent = command typed into a tmux pane to start an AI agent (a shell alias such as cursor-cli or claude is fine — panes run your interactive shell). projectModel = Cursor CLI model slug for each project's central agent (see `cursor-cli --list-models`; \"\" = CLI default; ignored for other agent CLIs). mkpanes = path to the mkpanes script. terminal = alacritty | terminal (macOS Terminal.app) | none. tmuxSession = session that receives new ticket windows; null = current/first.",
     "agent": "cursor-cli",
+    "projectModel": "claude-opus-5-5-high",
     "mkpanes": "~/.local/bin/mkpanes",
     "editor": "vim",
     "terminal": "alacritty",

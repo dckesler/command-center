@@ -40,6 +40,10 @@ cc_cfg() { # cc_cfg <jq path> <default>
 }
 PROJECTS_DIR="${CC_PROJECTS_DIR:-$(cc_cfg .dirs.projects "$HOME/projects")}"
 AGENT_CMD="${CC_AGENT_CMD:-$(cc_cfg .commands.agent cursor-cli)}"
+# Model for the project's central agent (it plans and delegates, so it gets the
+# strongest model). Only applied to the Cursor CLI, whose slugs these are;
+# set commands.projectModel to "" to use the CLI's own default.
+PROJECT_MODEL="${CC_PROJECT_MODEL-$(cc_cfg .commands.projectModel claude-opus-5-5-high)}"
 EDITOR_CMD="$(cc_cfg .commands.editor vim)"
 TERMINAL_APP="$(cc_cfg .commands.terminal alacritty)"
 RESERVED="command-center node_modules"
@@ -207,7 +211,11 @@ if ! "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
 
   # send-keys types into an interactive zsh, so the cursor-cli alias resolves.
   # AGENT_CMD: config commands.agent, or CC_AGENT_CMD (e.g. claude, or echo for tests).
-  "$TMUX_BIN" send-keys -t "$AGENT_PANE" "$AGENT_CMD \"\$(cat '$PROMPT_FILE')\"" Enter
+  MODEL_FLAG=""
+  case "$AGENT_CMD" in
+    cursor-cli|agent|cursor-agent|*/cursor-agent|*/agent) [ -n "$PROJECT_MODEL" ] && MODEL_FLAG="--model '$PROJECT_MODEL' " ;;
+  esac
+  "$TMUX_BIN" send-keys -t "$AGENT_PANE" "$AGENT_CMD ${MODEL_FLAG}\"\$(cat '$PROMPT_FILE')\"" Enter
   "$TMUX_BIN" send-keys -t "$WIN_ID.1" "$EDITOR_CMD PROJECT.md" Enter
   "$TMUX_BIN" select-pane -t "$AGENT_PANE"
   STARTED=1

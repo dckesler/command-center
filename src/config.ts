@@ -38,6 +38,8 @@ export interface Config {
   commands: {
     /** typed into tmux panes to start an agent; a shell alias is fine */
     agent: string
+    /** Cursor CLI model slug for a project's central agent (start-project --model); "" = CLI default */
+    projectModel: string
     /** path to the mkpanes script (worktree launcher, repo alias registry) */
     mkpanes: string
     editor: string
@@ -95,6 +97,7 @@ export const DEFAULTS: Config = {
   },
   commands: {
     agent: "cursor-cli",
+    projectModel: "claude-opus-5-5-high",
     mkpanes: join(HOME, ".local", "bin", "mkpanes"),
     editor: "vim",
     terminal: "alacritty",
@@ -157,6 +160,7 @@ export function config(): Config {
       ...DEFAULTS.commands,
       ...file.commands,
       agent: env.CC_AGENT_CMD || file.commands?.agent || DEFAULTS.commands.agent,
+      projectModel: env.CC_PROJECT_MODEL ?? file.commands?.projectModel ?? DEFAULTS.commands.projectModel,
       mkpanes: expandHome(env.MKPANES_BIN || file.commands?.mkpanes || DEFAULTS.commands.mkpanes),
     },
     jira: {
