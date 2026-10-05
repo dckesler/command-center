@@ -1,6 +1,6 @@
 ---
 name: start-ticket
-description: Prepare a Jira ticket to begin work on it in the SmartSense Atlassian workspace — fetch the ticket, ensure it is formatted to our standard, assigned to Daniel, set to In Progress, and placed in the current sprint. Then investigate the work, ask until the approach is executable, present a plan for approval, and start implementing only after Daniel approves. Use when starting work on a branch/ticket, when invoked as `/start-ticket <ticket-or-branch>` (optionally with `--no-format` to skip the formatting check), or when the user says "start this ticket", "get this ticket ready", "prep my ticket", or mkpanes launches a worktree. Updates anything that isn't already correct.
+description: Prepare a Jira ticket to begin work on it in the SmartSense Atlassian workspace — fetch the ticket, ensure it is formatted to our standard, assigned to Daniel, set to In Progress, and placed in the current sprint. When running inside tmux, rename this pane's window tab to `<ticket>: <few words>`. Then investigate the work, ask until the approach is executable, present a plan for approval, and start implementing only after Daniel approves. Use when starting work on a branch/ticket, when invoked as `/start-ticket <ticket-or-branch>` (optionally with `--no-format` to skip the formatting check), or when the user says "start this ticket", "get this ticket ready", "prep my ticket", or mkpanes launches a worktree. Updates anything that isn't already correct.
 ---
 
 # Start Ticket Skill
@@ -45,6 +45,29 @@ Call `getJiraIssue` with the cloud ID and the extracted key, requesting fields:
 `["summary", "description", "status", "assignee", "issuetype", "priority", "customfield_10007", "comment"]`.
 
 Note the current title, description, assignee, status, sprint, and comments.
+
+### Step 1.5: Rename this tmux tab
+
+The shell inherits `$TMUX` and `$TMUX_PANE` when this agent was started inside a tmux pane (mkpanes launches cursor-cli that way). `$TMUX_PANE` is this pane. The status-bar tab is the tmux window that contains it.
+
+If either variable is unset, skip this step.
+
+Otherwise:
+
+1. Read the current window name: `tmux display-message -p -t "$TMUX_PANE" '#{window_name}'`.
+2. Skip when that name is `Command Center` or `central`. Those are shared tabs.
+3. Build `<KEY>: <few words>` from the ticket summary.
+   - Drop a leading `[PLATFORM] (type) - ` prefix when present.
+   - Keep 3–6 words. Leave the ticket key only in the `<KEY>:` prefix.
+   - Example: `[BE] (fix) - allow NA setting can't be removed` → `LW-17095: allow NA setting`.
+4. The ticket key must stay in the name. Command Center matches a worktree tab with `window name includes ticket key`.
+5. If the window already has that name, skip. Otherwise run:
+
+```
+tmux rename-window -t "$TMUX_PANE" "$TITLE"
+```
+
+`rename-window` turns off `automatic-rename` for that window, so later shell activity does not replace the name. Target only `$TMUX_PANE`. Do not rename any other window.
 
 ### Step 2: Check formatting against the jira-ticket standard
 
@@ -120,6 +143,7 @@ LW-17095 — [BE] (fix) - allow NA setting can't be removed
 • Assignee:  already Daniel ✓
 • Sprint:    moved into current sprint (id 1234)
 • Status:    To Do → In Progress
+• Tab:       LW-17095: allow NA setting   [or: skipped — not in tmux / shared tab]
 <ticket URL>
 ```
 

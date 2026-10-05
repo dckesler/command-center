@@ -11,6 +11,7 @@ Run an interactive QA session for a Jira ticket. Pull the steps, wait for the te
 
 - **Cloud ID** (do not look up): `3be885af-99d6-4514-939e-3c99560b10eb`
 - **Daniel Kesler** — account ID: `712020:1a6dc1ec-48ca-40bf-81ad-3cc54adc8642`, email: `dkesler@digi.com`. Do NOT call `atlassianUserInfo`.
+- **Test Lead** (Jira Key Details) — field ID `customfield_11800` (user picker). Set to Daniel when a QA session starts.
 
 ## Tool Names
 
@@ -27,11 +28,24 @@ Argument: a ticket key (e.g. `LW-17189`) or a branch name containing one.
 
 ### Step 1: Fetch the ticket
 
-Call `getJiraIssue` with the cloud ID and extracted key, requesting fields `["summary", "description", "status"]` with `responseContentFormat: "markdown"`.
+Call `getJiraIssue` with the cloud ID and extracted key, requesting fields `["summary", "description", "status", "customfield_11800"]` with `responseContentFormat: "markdown"`.
 
 Show the ticket summary so the tester can confirm it's the right one.
 
-### Step 2: Surface the QA steps
+### Step 2: Set Test Lead to Daniel
+
+When Daniel begins QA, the ticket's **Test Lead** (Key Details) must be Daniel.
+
+1. Read `customfield_11800` from the issue. If Test Lead's `accountId` is already `712020:1a6dc1ec-48ca-40bf-81ad-3cc54adc8642`, skip silently.
+2. Otherwise call `editJiraIssue` with:
+   ```json
+   { "customfield_11800": { "accountId": "712020:1a6dc1ec-48ca-40bf-81ad-3cc54adc8642" } }
+   ```
+3. If the edit fails (field not on screen, permissions, etc.), tell Daniel once in one line and continue the QA session — do not block testing.
+
+Do **not** change assignee, status, sprint, labels, or description in this step.
+
+### Step 3: Surface the QA steps
 
 Look for a `## QA Testing Steps` section in the ticket's description.
 
@@ -43,7 +57,7 @@ After showing the steps, say:
 
 > "Ready when you are. Tell me any issues as you find them, and let me know when you're done."
 
-### Step 3: QA session — collect issues
+### Step 4: QA session — collect issues
 
 Wait. The tester will work through the steps and report back. During this phase:
 
@@ -57,7 +71,7 @@ Signals that the session is done (any of these):
 - "done", "that's it", "all good", "passing", "pass", "approve", "no issues", "looks good", "ship it"
 - "found issues, done" / "that's all the issues"
 
-### Step 4: Post the outcome comment
+### Step 5: Post the outcome comment
 
 **If no issues were reported** (tester approved):
 
@@ -81,7 +95,7 @@ QA — Issues Found
 
 Clean up the tester's wording only to fix obvious typos or sentence fragments — preserve their meaning exactly, don't editorialize or add context they didn't give.
 
-### Step 5: Report
+### Step 6: Report
 
 Print a short summary:
 
@@ -97,7 +111,9 @@ If MCP tools are not responding, probe `acli` (`acli jira auth status`). If auth
 
 ## Critical Rules
 
+- ALWAYS set Test Lead (`customfield_11800`) to Daniel at session start (Step 2) when Daniel is the tester
 - NEVER transition the ticket status — that is the tester's or /pass-qa's responsibility
+- NEVER change assignee, sprint, or labels during QA (Test Lead only)
 - NEVER update the ticket description
 - NEVER offer to modify the QA steps on the ticket
 - NEVER post the comment until the tester signals they are done

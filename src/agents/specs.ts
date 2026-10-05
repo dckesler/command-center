@@ -421,7 +421,7 @@ const qa: TabAgentSpec = {
         },
       },
       start_qa: {
-        description: "Open a QA window for a ticket (mkpanes --qa: separate _qa_ worktree + /qa-ticket).",
+        description: "Open a QA window for a ticket (mkpanes --qa: _qa_ worktree + /qa-ticket; sets Jira Test Lead to Daniel).",
         inputSchema: {
           type: "object",
           properties: {
