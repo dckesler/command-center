@@ -22,10 +22,10 @@ Resolve the inputs `mkpanes` needs, validate them, then run the command. The scr
 - Worktree directories are `<repo>_<branch>` where `<repo>` is the alias, or the directory basename when a path was given.
 - **`--qa`** — worktree mode only: QA mode. Creates/opens the worktree (checks out the branch) but does **not** run `/start-ticket`. Instead runs `/qa-ticket <TICKET>` in the AI pane — sets Jira **Test Lead** (`customfield_11800`) to Daniel, pulls the QA steps, waits for the tester to work through them, and posts the outcome (pass or issues found) as a Jira comment when done. Assignee, status, and sprint are never touched. QA worktrees are named `<repo>_qa_<branch>` (instead of `<repo>_<branch>`) so the command center can list them in its dedicated QA tab. This holds even when the branch is already checked out in a dev worktree: QA gets its own `_qa_` directory (a second checkout of the same branch, via `git worktree add --force`), and each mode only ever reuses a directory of its own kind.
 - **`--review`** — worktree mode only: code-review mode for someone else's MR. Creates/opens a `<repo>_review_<branch>` worktree, names the tmux window `Code Review <TICKET>`, and runs `/review-ticket <TICKET>` in the AI pane — the agent reads the ticket's acceptance criteria and the MR diff, writes a verdict with file:line findings, reports to the Command Center review specialist via `cc-report`, and posts comments / approves on GitLab only after Daniel says yes in that chat. Pass `-t <TICKET>` when the branch name is not the ticket key. The command center's review tab lists these worktrees.
-- **`--claude`** — use `claude` instead of `cursor-cli` (the default) in the top-right pane. All prompts (plain, `/start-ticket`, `/resume-ticket`, QA, code review) are passed the same way either way. (`--cursor` is still accepted as a no-op for backwards compatibility.)
+- **`--claude`** — use `claude` instead of `cursor-cli` (the default) in the agent pane (top-left). All prompts (plain, `/start-ticket`, `/resume-ticket`, QA, code review) are passed the same way either way. (`--cursor` is still accepted as a no-op for backwards compatibility.)
 - **`--code-review`** — code review mode. Starts the AI with a "code reviewer" role prompt and waits for the user to provide code, diffs, or descriptions to review. Works in both plain and worktree mode; takes precedence over `--qa` and `/start-ticket`.
 
-It opens a new tmux window with: top-left `vim`, top-right `cursor-cli` (or `/start-ticket`), and a bottom row of shell panes; in worktree mode with a `package.json` it runs `nvm use && <install>` in a bottom pane, where the install command is detected from the lockfile (`pnpm-lock.yaml` → `pnpm install`, `yarn.lock` → `yarn`, otherwise `npm install`).
+It opens a new tmux window with: top-left `cursor-cli` (or `/start-ticket`) at 60% width, top-right `vim`, and a bottom row of shell panes; in worktree mode with a `package.json` it runs `nvm use && <install>` in a bottom pane, where the install command is detected from the lockfile (`pnpm-lock.yaml` → `pnpm install`, `yarn.lock` → `yarn`, otherwise `npm install`).
 
 The default scenario is **starting a ticket worktree**: `mkpanes <repo> -w <TICKET>`.
 
@@ -35,7 +35,7 @@ From what the user typed, extract:
 
 1. **Repo** — e.g. "lists", "node-task-worker", or a path.
 2. **Branch / ticket** — a Jira key like `LW-17124` (worktree mode) or an explicit branch name. If the user names a ticket or says "worktree", this is worktree mode. If they just say "open <repo>", it's plain mode (no `-w`).
-3. **Flags** — `--no-ticket` (they don't want /start-ticket), `--no-format` (skip formatting), `--qa` (QA mode — surface QA steps, don't touch the ticket), `--claude` (use `claude` instead of the default `cursor-cli` in the top-right pane), `--code-review` (start AI in code reviewer role, wait for user input).
+3. **Flags** — `--no-ticket` (they don't want /start-ticket), `--no-format` (skip formatting), `--qa` (QA mode — surface QA steps, don't touch the ticket), `--claude` (use `claude` instead of the default `cursor-cli` in the agent pane), `--code-review` (start AI in code reviewer role, wait for user input).
 
 Only ask the user for pieces that are missing or ambiguous. Common gap: repo named but no ticket, or ticket named but no repo — ask for the missing one.
 
