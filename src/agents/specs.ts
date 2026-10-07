@@ -365,7 +365,7 @@ const worktrees: TabAgentSpec = {
         description: "List current dev worktrees with git/ticket/MR/agent state.",
         inputSchema: { type: "object", properties: {} },
         execute: () => {
-          const rows = ctx.snapshot().rows.filter((r) => !r.isQa)
+          const rows = ctx.snapshot().rows.filter((r) => !r.isQa && !r.isReview)
           return rows.length ? rows.map(fmtRow).join("\n") : "no worktrees"
         },
       },

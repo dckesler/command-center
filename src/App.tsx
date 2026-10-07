@@ -410,26 +410,33 @@ export function App() {
         setMessage({ text: ok ? `switched to ${row.tmuxWindow}` : "tmux select-window failed", ok })
         return
       }
-      // The worktree already exists: for QA rows mkpanes re-runs the QA-steps
-      // prompt (--qa), otherwise it detects the worktree and runs /resume-ticket.
-      const verb = row.isQa ? "Re-open QA for" : "Resume"
+      // The worktree already exists: mkpanes must be told which kind it is so it
+      // reuses the right checkout and starts the right skill — QA rows re-run
+      // /qa-ticket (--qa), review rows re-run /review-ticket (--review), and
+      // dev rows get /resume-ticket.
+      const kind = row.isQa ? "qa" : row.isReview ? "review" : "dev"
+      const verb = kind === "qa" ? "Re-open QA for" : kind === "review" ? "Re-open code review for" : "Resume"
+      const pick = kind === "qa" ? "Open QA window" : kind === "review" ? "Open review window" : "Resume in tmux window"
+      const extra = kind === "qa" ? ["--qa"] : kind === "review" ? ["-t", row.branch, "--review"] : []
       setModal({
         title: `${verb} ${row.repo} / ${row.branch} via mkpanes?`,
-        options: [{ label: row.isQa ? "Open QA window" : "Resume in tmux window" }, { label: "Cancel" }],
+        options: [{ label: pick }, { label: "Cancel" }],
         selected: 0,
         onPick: (i) => {
           setModal(null)
           if (i !== 0) return
-          setBusy(`${row.isQa ? "opening QA for" : "resuming"} ${row.branch}…`)
+          setBusy(`${kind === "dev" ? "resuming" : `opening ${kind} for`} ${row.branch}…`)
           targetSession()
-            .then((session) => launchWork(row.repo, row.branch, session, row.isQa ? ["--qa"] : []))
+            .then((session) => launchWork(row.repo, row.branch, session, extra))
             .then((result) =>
               finishAction({
                 ...result,
                 message: result.ok
-                  ? row.isQa
+                  ? kind === "qa"
                     ? `QA window for ${row.branch} opened`
-                    : `resuming ${row.branch} — /resume-ticket running`
+                    : kind === "review"
+                      ? `Code Review ${row.branch} window opened — /review-ticket running`
+                      : `resuming ${row.branch} — /resume-ticket running`
                   : result.message,
               }),
             )
