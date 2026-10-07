@@ -125,6 +125,22 @@ export async function deleteBranch(repoPath: string, branch: string): Promise<Ac
 
 const TICKET_RE = /([A-Z][A-Z0-9]+-\d+)/
 
+export type WorktreeKind = "dev" | "qa" | "review"
+
+/** Which tab a worktree belongs to, from the mkpanes naming convention. */
+export function worktreeKind(dir: string): WorktreeKind {
+  const name = dir.split("/").pop() ?? dir
+  if (name.includes("_review_")) return "review"
+  if (name.includes("_qa_")) return "qa"
+  return "dev"
+}
+
+/** Tab (specialist id) that owns a worktree directory. */
+export function tabForWorktree(dir: string): "worktrees" | "qa" | "review" {
+  const kind = worktreeKind(dir)
+  return kind === "dev" ? "worktrees" : kind
+}
+
 export function ticketKeyFromBranch(branch: string): string | null {
   const match = branch.match(TICKET_RE)
   return match ? match[1] : null

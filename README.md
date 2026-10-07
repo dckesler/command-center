@@ -108,17 +108,29 @@ and the agents it launches. `bun run doctor` reports what is missing.
 
 ## Views
 
-Tabs are `1`–`9`, `0` (or `tab` to cycle): central, projects, worktrees, qa, tickets,
-epics, todos, email, cloud, calendar.
+Tabs are `1`–`9`, `0`, `-` (or `tab` to cycle): central, projects, review, worktrees,
+qa, tickets, epics, todos, email, cloud, calendar.
 
-- **[3] Worktrees** — one row per git worktree, joining local git state, Jira, GitLab MR,
+- **[3] Review** — code reviews of other people's merge requests, one row per
+  `<repo>_review_<branch>` worktree (`mkpanes --review`). Columns: ticket, MR URL,
+  MR title, agent, approval (`✓ approved 2/2`, `1/2 approved`, `unapproved`; `★` marks
+  your own approval). `n` picks a repo and asks for the ticket key (the branch is assumed
+  to be named after it), creates the worktree, opens a tmux window named
+  `Code Review <TICKET>` and starts `/review-ticket <TICKET>` in the agent pane. That
+  agent reads the ticket's acceptance criteria and the full diff, writes a verdict with
+  file:line findings in its chat, reports to the review specialist with `cc-report`, and
+  posts comments or approves on GitLab **only after you say yes in its chat**. `a`
+  approves the selected MR as you (confirm dialog); `s` jumps to the window, `x` cleans
+  up and closes it. The review specialist relays verdicts and stuck agents to central.
+
+- **[4] Worktrees** — one row per git worktree, joining local git state, Jira, GitLab MR,
   and tmux.
-- **[5] Tickets** — tickets assigned to you that aren't Done/Closed (epics stay on
+- **[6] Tickets** — tickets assigned to you that aren't Done/Closed (epics stay on
   Epics). Sorted closest-to-shipped first (In Test / code review above In Progress,
   Blocked below it, Backlog last). The WT column marks tickets that already have a local
   worktree. `s` starts a ticket: pick a repo and it launches
   `mkpanes <repo> -w <KEY> -s <session>`. `n` creates a ticket in the tab's agent drawer.
-- **[6] Epics** — your open Jira epics. `enter` opens an epic's child tickets (the open
+- **[7] Epics** — your open Jira epics. `enter` opens an epic's child tickets (the open
   epic stays put while you switch tabs; `esc` closes it). `n` creates a ticket under the
   epic, `f` runs finalize-epic in a tmux window.
 - **[2] Projects** — every directory in `dirs.projects` (default `~/projects`, minus
@@ -183,10 +195,10 @@ epics, todos, email, cloud, calendar.
   menu, the worktrees/QA specialist reports it with severity attention and you
   answer it yourself. Claude Code agents have no hook delivery yet — mail reaches
   them through the idle-pane path only.
-- **[9] Cloud** — Cursor Cloud agents started from here. `n` picks a mkpanes repo and a
+- **[0] Cloud** — Cursor Cloud agents started from here. `n` picks a mkpanes repo and a
   prompt (clones that repo's git remote on a Cursor VM, no PR). `s` sends a follow-up,
   `x` cancels the latest run, `o` opens the agent in the browser.
-- **[0] Calendar** — today's Outlook calendar, read-only (`Calendars.Read`). Rows show
+- **[-] Calendar** — today's Outlook calendar, read-only (`Calendars.Read`). Rows show
   time, subject, where (room or Teams), organizer and your response (`✓` accepted, `?`
   tentative, `!` not responded, `✗` declined/cancelled); the current meeting is green,
   anything starting within 15 minutes yellow. `enter` joins the online meeting (or opens
@@ -197,7 +209,7 @@ epics, todos, email, cloud, calendar.
   line. Ask it about your schedule (`;` drawer): `today_schedule`, `list_events(start,
   end)` for other days, `event_detail(id)` for attendees and the invite body. It has no
   write tools.
-- **[7] Todos** — local list for things without a ticket or branch, stored in
+- **[8] Todos** — local list for things without a ticket or branch, stored in
   `dirs.config/todos.json`. `a` adds, `e` edits, `space`/`enter` toggles done,
   `x` deletes (with confirm). The top **FOCUS** section holds the todos that must
   stay in motion today: `f` toggles focus (soft cap `todos.focusMax`, the view warns

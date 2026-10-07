@@ -5,6 +5,7 @@ import { CloudPrompt } from "./components/CloudPrompt.tsx"
 import { Tickets } from "./components/Tickets.tsx"
 import { Chat } from "./components/Chat.tsx"
 import { Dashboard } from "./components/Dashboard.tsx"
+import { Reviews } from "./components/Reviews.tsx"
 import { DetailPanel } from "./components/DetailPanel.tsx"
 import { EpicDetail } from "./components/EpicDetail.tsx"
 import { Epics } from "./components/Epics.tsx"
@@ -71,7 +72,7 @@ import {
 } from "./data/cloud.ts"
 import { collect } from "./data/collect.ts"
 import { run } from "./data/exec.ts"
-import { getMrExtras, mergeMr } from "./data/gitlab.ts"
+import { approveMr, getMrExtras, gitlabUsername, mergeMr } from "./data/gitlab.ts"
 import {
   applyTransition,
   getAssignedTickets,
@@ -97,11 +98,12 @@ import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
 
-type View = "central" | "worktrees" | "qa" | "tickets" | "epics" | "projects" | "todos" | "email" | "cloud" | "calendar"
+type View = "central" | "review" | "worktrees" | "qa" | "tickets" | "epics" | "projects" | "todos" | "email" | "cloud" | "calendar"
 
 const VIEW_ORDER: View[] = [
   "central",
   "projects",
+  "review",
   "worktrees",
   "qa",
   "tickets",
@@ -115,14 +117,15 @@ const VIEW_ORDER: View[] = [
 const VIEW_BY_KEY: Record<string, View> = {
   "1": "central",
   "2": "projects",
-  "3": "worktrees",
-  "4": "qa",
-  "5": "tickets",
-  "6": "epics",
-  "7": "todos",
-  "8": "email",
-  "9": "cloud",
-  "0": "calendar",
+  "3": "review",
+  "4": "worktrees",
+  "5": "qa",
+  "6": "tickets",
+  "7": "epics",
+  "8": "todos",
+  "9": "email",
+  "0": "cloud",
+  "-": "calendar",
 }
 
 /** How often today's calendar is re-fetched on its own (meetings move). */
@@ -159,6 +162,12 @@ export function App() {
   const [load, setLoad] = useState<LoadState>(INITIAL_LOAD)
   const [selected, setSelected] = useState(0)
   const [selectedQa, setSelectedQa] = useState(0)
+  const [selectedReview, setSelectedReview] = useState(0)
+  /** GitLab login, for the ★ "you approved" marker on the review tab */
+  const [gitlabMe, setGitlabMe] = useState<string | null>(null)
+  useEffect(() => {
+    gitlabUsername().then(setGitlabMe)
+  }, [])
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [detailRow, setDetailRow] = useState<Row | null>(null)
   const [extras, setExtras] = useState<MrExtras | null>(null)
@@ -210,6 +219,8 @@ export function App() {
   const [mkpanesPrompt, setMkpanesPrompt] = useState(false)
   /** set when the QA flow has a repo picked and is waiting for the ticket key */
   const [qaPrompt, setQaPrompt] = useState<{ repo: string } | null>(null)
+  /** set when the review flow has a repo picked and is waiting for the ticket key */
+  const [reviewPrompt, setReviewPrompt] = useState<{ repo: string } | null>(null)
   /** chat view: whether the message input owns the keyboard */
   const [chatFocused, setChatFocused] = useState(false)
   const [chatScroll, setChatScroll] = useState(0)
@@ -851,6 +862,69 @@ export function App() {
     })
   }, [])
 
+  const startReview = useCallback(() => {
+    const repos = parseRepoMap()
+    setModal({
+      title: "New code review — pick a repo",
+      options: [...repos.map((r) => ({ label: r.alias })), { label: "Cancel" }],
+      selected: 0,
+      onPick: (i) => {
+        setModal(null)
+        if (i >= repos.length) return
+        setReviewPrompt({ repo: repos[i].alias })
+      },
+    })
+  }, [])
+
+  const submitReviewTicket = useCallback(
+    (ticket: string) => {
+      if (!reviewPrompt) return
+      const repo = reviewPrompt.repo
+      setReviewPrompt(null)
+      setBusy(`opening code review for ${ticket} in ${repo}…`)
+      targetSession()
+        .then((session) => runMkpanes([repo, "-w", ticket, "-t", ticket, "--review"], session))
+        .then((result) =>
+          finishAction({
+            ...result,
+            message: result.ok ? `Code Review ${ticket} window opened` : result.message,
+          }),
+        )
+    },
+    [reviewPrompt, finishAction],
+  )
+
+  /** Approve the selected review's MR as you — a keypress with a confirm, never an agent. */
+  const approveReview = useCallback(
+    (row: Row) => {
+      if (!row.mr || row.mr.state !== "opened") {
+        setMessage({ text: "no open MR on this row", ok: false })
+        return
+      }
+      const mr = row.mr
+      const a = row.approval
+      const body = [
+        mr.title,
+        mr.url,
+        a ? `approvals: ${a.approvalsRequired - a.approvalsLeft}/${a.approvalsRequired}${a.approvedBy.length ? ` (${a.approvedBy.join(", ")})` : ""}` : "approvals: unknown",
+        ...(a?.unresolvedThreads ? [`${a.unresolvedThreads} unresolved thread${a.unresolvedThreads === 1 ? "" : "s"}`] : []),
+      ]
+      setModal({
+        title: `Approve !${mr.iid} as ${gitlabMe ?? "you"}?`,
+        body,
+        options: [{ label: "Cancel" }, { label: `Approve !${mr.iid}` }],
+        selected: 0,
+        onPick: (i) => {
+          setModal(null)
+          if (i !== 1) return
+          setBusy(`approving !${mr.iid}…`)
+          approveMr(row.repoPath, mr.projectId, mr.iid).then(finishAction)
+        },
+      })
+    },
+    [gitlabMe, finishAction],
+  )
+
   const startCloud = useCallback(() => {
     const repos = parseRepoMap()
     setModal({
@@ -916,8 +990,9 @@ export function App() {
     [qaPrompt, finishAction],
   )
 
-  const workRows = rows.filter((r) => !r.isQa)
+  const workRows = rows.filter((r) => !r.isQa && !r.isReview)
   const qaRows = rows.filter((r) => r.isQa)
+  const reviewRows = rows.filter((r) => r.isReview)
 
   // An open epic is a view within the epics tab, not an overlay: its agent
   // drawer stays usable.
@@ -928,6 +1003,7 @@ export function App() {
     projectPrompt ||
     epicPrompt !== null ||
     qaPrompt !== null ||
+    reviewPrompt !== null ||
     cloudPrompt !== null
   const drawerVisible = drawerOpen && view !== "central" && !overlayActive
 
@@ -960,13 +1036,14 @@ export function App() {
 
   useKeyboard((key) => {
     // While a text input is focused it owns all keys except escape.
-    if (todoInput || mkpanesPrompt || projectPrompt || epicPrompt || qaPrompt || cloudPrompt) {
+    if (todoInput || mkpanesPrompt || projectPrompt || epicPrompt || qaPrompt || reviewPrompt || cloudPrompt) {
       if (key.name === "escape") {
         setTodoInput(null)
         setMkpanesPrompt(false)
         setProjectPrompt(false)
         setEpicPrompt(null)
         setQaPrompt(null)
+        setReviewPrompt(null)
         setCloudPrompt(null)
       }
       return
@@ -1004,9 +1081,10 @@ export function App() {
       else setMessage({ text: "no agent actions waiting for approval", ok: true })
       return
     }
-    if (key.name === "tab" || VIEW_BY_KEY[key.name]) {
-      const next =
-        key.name === "tab" ? VIEW_ORDER[(VIEW_ORDER.indexOf(view) + 1) % VIEW_ORDER.length] : VIEW_BY_KEY[key.name]
+    const keySeq = (key as unknown as { sequence?: string }).sequence ?? ""
+    const viewKey = VIEW_BY_KEY[key.name] ?? VIEW_BY_KEY[keySeq]
+    if (key.name === "tab" || viewKey) {
+      const next = key.name === "tab" ? VIEW_ORDER[(VIEW_ORDER.indexOf(view) + 1) % VIEW_ORDER.length] : viewKey
       setView(next)
       if (next === "central") {
         setChatScroll(0)
@@ -1203,6 +1281,32 @@ export function App() {
       return
     }
 
+    if (view === "review") {
+      const row = reviewRows[selectedReview]
+      if (key.name === "j" || key.name === "down") {
+        setSelectedReview((s) => Math.min(s + 1, Math.max(0, reviewRows.length - 1)))
+      }
+      if (key.name === "k" || key.name === "up") {
+        setSelectedReview((s) => Math.max(s - 1, 0))
+      }
+      if (key.name === "return" && row) openDetail(row)
+      if (key.name === "n") startReview()
+      if (key.name === "s" && row) startOrJump(row)
+      if (key.name === "a" && row) approveReview(row)
+      if (key.name === "c" && row) changeStatus(row.ticketKey, row.ticket?.status)
+      // Review cleanup also closes the review tmux window — the review is done with.
+      if (key.name === "x" && row) cleanupWorktree(row, true)
+      if (key.name === "o") {
+        const url = row?.mr?.url
+        if (url) run("open", [url])
+      }
+      if (key.name === "t") {
+        const url = row?.ticket?.url
+        if (url) run("open", [url])
+      }
+      return
+    }
+
     if (view === "qa") {
       const row = qaRows[selectedQa]
       if (key.name === "j" || key.name === "down") {
@@ -1364,24 +1468,26 @@ export function App() {
           {agentDot("central")}
           <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [2] {projects.length} projects</span>
           {agentDot("projects")}
-          <span fg={view === "worktrees" ? "#ffffff" : "#6b7280"}>  [3] {workRows.length} worktrees</span>
+          <span fg={view === "review" ? "#ffffff" : "#6b7280"}>  [3] {reviewRows.length} review</span>
+          {agentDot("review")}
+          <span fg={view === "worktrees" ? "#ffffff" : "#6b7280"}>  [4] {workRows.length} worktrees</span>
           {agentDot("worktrees")}
-          <span fg={view === "qa" ? "#ffffff" : "#6b7280"}>  [4] {qaRows.length} qa</span>
+          <span fg={view === "qa" ? "#ffffff" : "#6b7280"}>  [5] {qaRows.length} qa</span>
           {agentDot("qa")}
-          <span fg={view === "tickets" ? "#ffffff" : "#6b7280"}>  [5] {tickets.length} tickets</span>
+          <span fg={view === "tickets" ? "#ffffff" : "#6b7280"}>  [6] {tickets.length} tickets</span>
           {agentDot("tickets")}
-          <span fg={view === "epics" ? "#ffffff" : "#6b7280"}>  [6] {epics.length} epics</span>
+          <span fg={view === "epics" ? "#ffffff" : "#6b7280"}>  [7] {epics.length} epics</span>
           {agentDot("epics")}
-          <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [7] {todos.filter((t) => !t.done).length} todos</span>
+          <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [8] {todos.filter((t) => !t.done).length} todos</span>
           {agentDot("todos")}
           <span fg={view === "email" ? "#ffffff" : "#6b7280"}>
-            {"  "}[8] {emails === null ? "" : `${emails.filter((e) => !e.isRead).length} `}email
+            {"  "}[9] {emails === null ? "" : `${emails.filter((e) => !e.isRead).length} `}email
           </span>
           {agentDot("email")}
-          <span fg={view === "cloud" ? "#ffffff" : "#6b7280"}>  [9] {cloudAgents.length} cloud</span>
+          <span fg={view === "cloud" ? "#ffffff" : "#6b7280"}>  [0] {cloudAgents.length} cloud</span>
           {agentDot("cloud")}
           <span fg={view === "calendar" ? "#ffffff" : "#6b7280"}>
-            {"  "}[0] {events === null ? "" : `${events.filter((e) => !e.isCancelled && new Date(e.end).getTime() > Date.now()).length} `}calendar
+            {"  "}[-] {events === null ? "" : `${events.filter((e) => !e.isCancelled && new Date(e.end).getTime() > Date.now()).length} `}calendar
           </span>
           {agentDot("calendar")}
         </text>
@@ -1402,6 +1508,8 @@ export function App() {
           />
         ) : qaPrompt ? (
           <QaTicketPrompt repo={qaPrompt.repo} onSubmit={submitQaTicket} />
+        ) : reviewPrompt ? (
+          <QaTicketPrompt repo={reviewPrompt.repo} mode="review" onSubmit={submitReviewTicket} />
         ) : cloudPrompt ? (
           <CloudPrompt
             title={
@@ -1527,6 +1635,12 @@ export function App() {
             width={width - 2}
             height={contentHeight}
           />
+        ) : view === "review" ? (
+          reviewRows.length === 0 ? (
+            <text fg="#6b7280">no code reviews — press n to start one (pick repo, enter ticket)</text>
+          ) : (
+            <Reviews rows={reviewRows} selected={selectedReview} load={load} me={gitlabMe} width={width - 2} height={contentHeight} />
+          )
         ) : view === "qa" ? (
           qaRows.length === 0 ? (
             <text fg="#6b7280">no QA worktrees — press n to start one (pick repo, enter ticket)</text>
@@ -1562,7 +1676,7 @@ export function App() {
                 ? "enter send   esc table keys   ; close agent chat"
                 : projectPrompt
                 ? "enter next step (empty skips optional ones)   esc cancel"
-                : mkpanesPrompt || epicPrompt || qaPrompt || cloudPrompt
+                : mkpanesPrompt || epicPrompt || qaPrompt || reviewPrompt || cloudPrompt
                 ? "enter run   esc cancel"
                 : modal
                 ? "j/k move   enter select   esc cancel"
@@ -1592,6 +1706,8 @@ export function App() {
                           ? "esc back   j/k move   enter/s jump to tab   e epic   t open epic/ticket   m open MR   b PROJECT.md   o folder   ; agent   r refresh   ctrl+c quit"
                         : view === "projects"
                           ? "tab views   j/k move   enter details   s open or resume   e epic   n new project   o open folder   t open PROJECT.md   ; agent   r refresh   ctrl+c quit"
+                          : view === "review"
+                            ? "tab views   j/k move   enter details   n new review   s open/jump   a approve MR   c status   x cleanup   ; agent   r refresh   o/t open   ctrl+c quit"
                           : view === "qa"
                             ? "tab views   j/k move   enter details   n new QA   s open/jump   c status   x cleanup   ; agent   r refresh   o/t open   ctrl+c quit"
                             : "tab views   j/k move   enter details   n new   s start/jump   c status   w wrap-up   x cleanup   X mass cleanup   ; agent   r refresh   o/t open   ctrl+c quit"}

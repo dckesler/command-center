@@ -1,5 +1,5 @@
 import type { AgentDefinition, SDKCustomTool } from "@cursor/sdk"
-import type { Row, TicketInfo } from "../types.ts"
+import type { MrExtras, Row, TicketInfo } from "../types.ts"
 import { config } from "../config.ts"
 import type { Todo } from "../data/todos.ts"
 import { findTranscript, readAgentStatuses, readTranscriptTail } from "../data/agents.ts"
@@ -29,6 +29,7 @@ import {
   type Project,
 } from "../data/projects.ts"
 import { launchWork, openProjectWindow, runMkpanes, targetSession } from "../data/tmux.ts"
+import { worktreeKind, type WorktreeKind } from "../data/worktrees.ts"
 import {
   addTodo,
   addTodoNote,
@@ -108,7 +109,14 @@ function fmtRow(r: Row): string {
     r.tmuxWindow ? `window ${r.tmuxWindow}` : "no window",
     r.agent ? `agent ${r.agent.state} (${r.agent.source})` : "no agent",
   ]
+  if (r.isReview) parts.push(r.approval ? fmtApproval(r.approval) : "approval ?")
   return parts.join(" | ")
+}
+
+function fmtApproval(a: MrExtras): string {
+  const got = a.approvalsRequired - a.approvalsLeft
+  const who = a.approvedBy.length ? ` by ${a.approvedBy.join(", ")}` : ""
+  return a.approved ? `approved ${got}/${a.approvalsRequired}${who}` : `${got}/${a.approvalsRequired} approvals${who}`
 }
 
 function fmtTicket(t: TicketInfo): string {
@@ -172,16 +180,18 @@ function inboxTools(tab: string): Record<string, SDKCustomTool> {
   }
 }
 
-function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCustomTool> {
-  const rowsFor = () => ctx.snapshot().rows.filter((r) => r.isQa === qa)
+function ticketAgentTools(ctx: HubContext, kind: WorktreeKind): Record<string, SDKCustomTool> {
+  const tab = kind === "dev" ? "worktrees" : kind
+  const label = kind === "dev" ? "dev" : kind === "qa" ? "QA" : "review"
+  const rowsFor = () => ctx.snapshot().rows.filter((r) => worktreeKind(r.worktreePath) === kind)
   const findWindow = (window: string): Row | undefined => rowsFor().find((r) => r.tmuxWindow === window)
   return {
-    ...inboxTools(qa ? "qa" : "worktrees"),
+    ...inboxTools(tab),
     get_agent_feed: {
       description: "Latest hook status per worktree directory for the external ticket agents (cursor/claude).",
       inputSchema: { type: "object", properties: {} },
       execute: () => {
-        const statuses = [...readAgentStatuses().entries()].filter(([dir]) => dir.includes("_qa_") === qa)
+        const statuses = [...readAgentStatuses().entries()].filter(([dir]) => worktreeKind(dir) === kind)
         return statuses.length
           ? statuses
               .map(([dir, s]) => `${dir}: ${s.state} (${s.source}, ${s.ts})${s.summary ? ` — ${s.summary}` : ""}`)
@@ -204,7 +214,7 @@ function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCusto
       execute: (args) => {
         const window = str(args.window)
         const row = findWindow(window)
-        if (!row) return `no ${qa ? "QA" : "dev"} worktree row has tmux window "${window}"`
+        if (!row) return `no ${label} worktree row has tmux window "${window}"`
         const status = readAgentStatuses().get(row.worktreePath)
         const path = findTranscript(row.worktreePath, status)
         if (!path) return `no transcript found for ${row.worktreePath}`
@@ -223,7 +233,7 @@ function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCusto
       inputSchema: { type: "object", properties: { window: { type: "string" } }, required: ["window"] },
       execute: async (args) => {
         const window = str(args.window)
-        if (!findWindow(window)) return `no ${qa ? "QA" : "dev"} worktree row has tmux window "${window}"`
+        if (!findWindow(window)) return `no ${label} worktree row has tmux window "${window}"`
         const res = await run("tmux", ["capture-pane", "-t", window, "-p"])
         if (!res.ok) return `capture failed: ${res.stderr.trim()}`
         const lines = res.stdout.replace(/\s+$/, "").split("\n")
@@ -248,9 +258,9 @@ function ticketAgentTools(ctx: HubContext, qa: boolean): Record<string, SDKCusto
       },
       execute: async (args) => {
         const window = str(args.window)
-        if (!findWindow(window)) return `no ${qa ? "QA" : "dev"} worktree row has tmux window "${window}"`
+        if (!findWindow(window)) return `no ${label} worktree row has tmux window "${window}"`
         const severity = (["info", "warn", "attention"] as const).find((s) => s === str(args.severity)) ?? "info"
-        const res = await sendMail({ window }, str(args.text), { from: `command center ${qa ? "qa" : "worktrees"}`, severity })
+        const res = await sendMail({ window }, str(args.text), { from: `command center ${tab}`, severity })
         return res.message
       },
     },
@@ -274,7 +284,7 @@ const central: TabAgentSpec = {
   title: "central",
   rolePrompt:
     `You are the central manager agent of ${USER}'s development command center TUI. ` +
-    "Specialist agents run one per tab (worktrees, qa, tickets, epics, projects, todos, email, cloud, calendar); external ticket agents and project agents work in tmux windows. " +
+    "Specialist agents run one per tab (review, worktrees, qa, tickets, epics, projects, todos, email, cloud, calendar); external ticket agents and project agents work in tmux windows. " +
     `The calendar specialist tells you about ${USER}'s upcoming meetings — use that context when timing suggestions (don't propose long tasks right before a meeting; ask calendar when you need his availability). ` +
     "Your tools: list_agents, get_status(agent), instruct(agent, instruction), plus focus_todos / list_todos / add_todo_note / set_focus for the focus loop. " +
     "You receive batched '[reports]' messages (each line is timestamped and one sentence) from specialists — treat them as information; only instruct an agent or reply at length when action or a decision is actually needed, otherwise acknowledge in one short line. " +
@@ -283,7 +293,7 @@ const central: TabAgentSpec = {
     "when a report says one is waiting, do not re-instruct; mention it to him once if he asked for it. " +
     `Focus todos: ${USER} marks a few todos as today's focus; they must keep moving. The todos specialist reports 'focus: <text> — no progress ` +
     `for <time>' when one has gone ${FOCUS_CADENCE_LABEL} without a progress note. On such a report: first check what you already know — recent ` +
-    "[reports] from worktrees/projects/tickets/qa and this conversation (an MR merged, a ticket moved, a worker finished on the thing the " +
+    "[reports] from worktrees/projects/tickets/qa/review and this conversation (an MR merged, a ticket moved, a worker finished on the thing the " +
     "todo is about). If you can attribute real progress, record it with add_todo_note(kind=progress) and say nothing. If you cannot, ask " +
     `${USER} in one line, e.g. 'Focus check: \"<text>\" — nothing logged since <time>. Any progress? (or say park to unfocus)', and stop. ` +
     `When ${USER} answers: real progress → add_todo_note(kind=progress) with his words; nothing yet / still on it → add_todo_note(kind=checkin) ` +
@@ -350,7 +360,7 @@ const worktrees: TabAgentSpec = {
   agents: { "worktree-inspector": WORKTREE_INSPECTOR },
   makeTools(ctx) {
     return {
-      ...ticketAgentTools(ctx, false),
+      ...ticketAgentTools(ctx, "dev"),
       list_worktrees: {
         description: "List current dev worktrees with git/ticket/MR/agent state.",
         inputSchema: { type: "object", properties: {} },
@@ -394,7 +404,7 @@ const qa: TabAgentSpec = {
   agents: { "worktree-inspector": WORKTREE_INSPECTOR },
   makeTools(ctx) {
     return {
-      ...ticketAgentTools(ctx, true),
+      ...ticketAgentTools(ctx, "qa"),
       list_qa_worktrees: {
         description: "List current QA worktrees with git/ticket/MR/agent state.",
         inputSchema: { type: "object", properties: {} },
@@ -416,6 +426,55 @@ const qa: TabAgentSpec = {
         execute: async (args) => {
           const session = await targetSession()
           const result = await runMkpanes([str(args.repo), "-w", str(args.ticket), "--qa"], session)
+          ctx.appChanged("refresh")
+          return result.message
+        },
+      },
+    }
+  },
+}
+
+const review: TabAgentSpec = {
+  id: "review",
+  title: "review",
+  rolePrompt:
+    `You are the code-review specialist of a development command center. Scope: review worktrees (directories named <repo>_review_<branch>) where ${USER} reviews other people's merge requests, ` +
+    "and the review agents in their tmux windows (named 'Code Review <ticket>'). Each review agent runs the review-ticket skill: it reads the ticket and the MR diff, writes a verdict with file:line findings in its chat, " +
+    `and reports to you with cc-report. It may post comments to the MR or approve it only after ${USER} said yes in that agent's own chat — never on your word, and never on central's. ` +
+    `What matters to central: a verdict is ready for ${USER} to read (severity attention when the agent is waiting on his decision to post or approve), a blocker was found, an agent is stuck. ` +
+    `Approval state is in the list (approvals N/M, who approved). ${USER} can also approve from the TUI (a key) — recommend, don't attempt. Cleanup is his via TUI keys. ` +
+    TICKET_AGENT_STYLE +
+    " " +
+    REPLY_STYLE +
+    " " +
+    EVENT_STYLE,
+  agents: { "worktree-inspector": WORKTREE_INSPECTOR },
+  makeTools(ctx) {
+    return {
+      ...ticketAgentTools(ctx, "review"),
+      list_reviews: {
+        description: "List current code-review worktrees with ticket/MR/agent/approval state.",
+        inputSchema: { type: "object", properties: {} },
+        execute: () => {
+          const rows = ctx.snapshot().rows.filter((r) => r.isReview)
+          return rows.length ? rows.map(fmtRow).join("\n") : "no review worktrees"
+        },
+      },
+      start_review: {
+        description:
+          "Open a code-review window for a ticket (mkpanes --review: <repo>_review_<branch> worktree, window 'Code Review <ticket>', /review-ticket in the agent pane). " +
+          `The branch is assumed to be named after the ticket key. Only when ${USER} asked.`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            repo: { type: "string", description: "repo alias, e.g. lists" },
+            ticket: { type: "string", description: "ticket key, e.g. LW-17124" },
+          },
+          required: ["repo", "ticket"],
+        },
+        execute: async (args) => {
+          const session = await targetSession()
+          const result = await runMkpanes([str(args.repo), "-w", str(args.ticket), "-t", str(args.ticket), "--review"], session)
           ctx.appChanged("refresh")
           return result.message
         },
@@ -1144,6 +1203,7 @@ const cloud: TabAgentSpec = {
 /** Tab agents in tab order. Adding a new pane = adding a spec here. */
 export const TAB_AGENT_SPECS: TabAgentSpec[] = [
   central,
+  review,
   worktrees,
   qa,
   tickets,

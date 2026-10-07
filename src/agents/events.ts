@@ -19,6 +19,7 @@ import { run } from "../data/exec.ts"
 import type { EmailMessage } from "../data/outlook.ts"
 import { fmtEvent, fmtMinutes, fmtRange, isNow, minutesUntil, type CalendarEvent } from "../data/calendar.ts"
 import { isProjectDir, projectRootOf, type Project } from "../data/projects.ts"
+import { tabForWorktree } from "../data/worktrees.ts"
 import {
   FOCUS_CADENCE_MS,
   fmtMinutes as fmtTodoMinutes,
@@ -74,6 +75,7 @@ const wakeTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const WAKE_TABS = [
   "worktrees",
   "qa",
+  "review",
   "tickets",
   "epics",
   "projects",
@@ -87,7 +89,7 @@ const WAKE_TABS = [
 function reportTab(to: string | undefined, dir: string): string {
   if (to && (WAKE_TABS as readonly string[]).includes(to)) return to
   if (isProjectDir(dir)) return "projects"
-  return dir.includes("_qa_") ? "qa" : "worktrees"
+  return tabForWorktree(dir)
 }
 
 /** First snapshot with rows: drain downtime, then wake any tab that has unread. */
@@ -326,7 +328,7 @@ function drainFeed(): void {
     if (event.state !== "attention" && lastStateByDir.get(event.dir) === event.state) continue
     lastStateByDir.set(event.dir, event.state)
     if (!INTERESTING_STATES.has(event.state)) continue
-    const tab = projectRoot ? "projects" : event.dir.includes("_qa_") ? "qa" : "worktrees"
+    const tab = projectRoot ? "projects" : tabForWorktree(event.dir)
     const severity: InboxSeverity = event.state === "attention" ? "attention" : "info"
     const brief = describeStateEvent(event, { brief: true, consume: false })
     const full = describeStateEvent(event, { brief: false })
@@ -356,11 +358,11 @@ export function ingestRows(rows: Row[]): void {
   const prev = prevRows
   prevRows = rows
   if (!prev || prev.length === 0) return
-  const byKey = new Map(prev.map((r) => [`${r.repo}:${r.branch}:${r.isQa}`, r]))
+  const byKey = new Map(prev.map((r) => [`${r.repo}:${r.branch}:${r.worktreePath}`, r]))
   for (const row of rows) {
-    const old = byKey.get(`${row.repo}:${row.branch}:${row.isQa}`)
+    const old = byKey.get(`${row.repo}:${row.branch}:${row.worktreePath}`)
     if (!old) continue
-    const tab = row.isQa ? "qa" : "worktrees"
+    const tab = tabForWorktree(row.worktreePath)
     const label = `${row.repo}/${row.branch}`
     if (old.mr && row.mr && old.mr.state !== row.mr.state) {
       pushEvent(tab, `${label}: MR !${row.mr.iid} went ${old.mr.state} → ${row.mr.state}`)
@@ -373,6 +375,17 @@ export function ingestRows(rows: Row[]): void {
     }
     if (old.git?.head && row.git?.head && old.git.head !== row.git.head) {
       void describeHeadMove(row.worktreePath, old.git.head, row.git.head).then((line) => pushEvent(tab, `${label}: ${line}`))
+    }
+    if (old.approval && row.approval && row.mr) {
+      const was = old.approval.approvalsRequired - old.approval.approvalsLeft
+      const now = row.approval.approvalsRequired - row.approval.approvalsLeft
+      if (was !== now || old.approval.approved !== row.approval.approved) {
+        pushEvent(
+          tab,
+          `${label}: !${row.mr.iid} approvals ${was} → ${now} of ${row.approval.approvalsRequired}${row.approval.approved ? " — approved" : ""}` +
+            (row.approval.approvedBy.length ? ` (by ${row.approval.approvedBy.join(", ")})` : ""),
+        )
+      }
     }
   }
 }

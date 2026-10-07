@@ -1,6 +1,28 @@
 import type { MrExtras, MrInfo } from "../types.ts"
 import { run } from "./exec.ts"
 
+let cachedUsername: string | null | undefined
+/** GitLab username of the glab login (cached for the process). */
+export async function gitlabUsername(cwd?: string): Promise<string | null> {
+  if (cachedUsername !== undefined) return cachedUsername
+  const res = await run("glab", ["api", "user"], cwd ? { cwd } : undefined)
+  if (!res.ok) return (cachedUsername = null)
+  try {
+    cachedUsername = (JSON.parse(res.stdout) as { username?: string }).username ?? null
+  } catch {
+    cachedUsername = null
+  }
+  return cachedUsername
+}
+
+/** Approve an MR as the glab login. Only ever called from a TUI keypress. */
+export async function approveMr(repoPath: string, projectId: number, iid: number): Promise<{ ok: boolean; message: string }> {
+  const res = await run("glab", ["api", "-X", "POST", `projects/${projectId}/merge_requests/${iid}/approve`], { cwd: repoPath })
+  if (res.ok) return { ok: true, message: `approved !${iid}` }
+  const err = res.stderr.trim() || res.stdout.trim()
+  return { ok: false, message: `approve !${iid} failed: ${err.slice(0, 160)}` }
+}
+
 interface GlabMr {
   iid: number
   project_id: number

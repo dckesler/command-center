@@ -8,7 +8,7 @@ description: Launch a tmux dev workspace via the `mkpanes` command — resolve w
 Resolve the inputs `mkpanes` needs, validate them, then run the command. The script is the source of truth for repo aliases and behavior:
 
 - **Command:** `/Users/devadmin/.local/bin/mkpanes`
-- **Signature:** `mkpanes <repo-or-path> [-w <branch>] [--no-ticket] [--no-format] [--qa] [--claude] [--from <base-branch>]`
+- **Signature:** `mkpanes <repo-or-path> [-w <branch>] [--no-ticket] [--no-format] [--qa] [--review] [--claude] [--from <base-branch>]`
 
 ## What the command does
 
@@ -21,6 +21,7 @@ Resolve the inputs `mkpanes` needs, validate them, then run the command. The scr
 - **`--prompt-file <path>`** — start the AI pane with the prompt in this file instead of `/start-ticket` / `/qa-ticket` / plain. `project-task` uses it to give worktree workers a prompt that reports to the project's central agent. **`--print-window-id`** prints the created window id (for callers that tag or rename the window). `MKPANES_AI_CMD` env overrides the AI command.
 - Worktree directories are `<repo>_<branch>` where `<repo>` is the alias, or the directory basename when a path was given.
 - **`--qa`** — worktree mode only: QA mode. Creates/opens the worktree (checks out the branch) but does **not** run `/start-ticket`. Instead runs `/qa-ticket <TICKET>` in the AI pane — sets Jira **Test Lead** (`customfield_11800`) to Daniel, pulls the QA steps, waits for the tester to work through them, and posts the outcome (pass or issues found) as a Jira comment when done. Assignee, status, and sprint are never touched. QA worktrees are named `<repo>_qa_<branch>` (instead of `<repo>_<branch>`) so the command center can list them in its dedicated QA tab. This holds even when the branch is already checked out in a dev worktree: QA gets its own `_qa_` directory (a second checkout of the same branch, via `git worktree add --force`), and each mode only ever reuses a directory of its own kind.
+- **`--review`** — worktree mode only: code-review mode for someone else's MR. Creates/opens a `<repo>_review_<branch>` worktree, names the tmux window `Code Review <TICKET>`, and runs `/review-ticket <TICKET>` in the AI pane — the agent reads the ticket's acceptance criteria and the MR diff, writes a verdict with file:line findings, reports to the Command Center review specialist via `cc-report`, and posts comments / approves on GitLab only after Daniel says yes in that chat. Pass `-t <TICKET>` when the branch name is not the ticket key. The command center's review tab lists these worktrees.
 - **`--claude`** — use `claude` instead of `cursor-cli` (the default) in the top-right pane. All prompts (plain, `/start-ticket`, `/resume-ticket`, QA, code review) are passed the same way either way. (`--cursor` is still accepted as a no-op for backwards compatibility.)
 - **`--code-review`** — code review mode. Starts the AI with a "code reviewer" role prompt and waits for the user to provide code, diffs, or descriptions to review. Works in both plain and worktree mode; takes precedence over `--qa` and `/start-ticket`.
 

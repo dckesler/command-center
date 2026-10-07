@@ -27,7 +27,7 @@ Resolve the binary in this order: `cc-report` on `PATH`, then `~/.local/bin/cc-r
 - **target** — who you report to:
   - `project:<name>` — the central agent of `~/projects/<name>`. Use this if you are a **task-tab worker** inside a project session — including worktree tabs whose cwd is a repo under `~/code`; the session decides, not the directory.
   - `projects` — Command Center's projects specialist. Use this if you are a **project central agent** (the `central` window of a project session).
-  - `worktrees` / `qa` — Command Center's worktrees or QA specialist. Use this if you are a **ticket agent** in a worktree.
+  - `worktrees` / `qa` / `review` — Command Center's worktrees, QA, or code-review specialist. Use this if you are a **ticket agent** in a worktree (the default picks the right one from the directory name: `_qa_` → qa, `_review_` → review, else worktrees).
   - `tickets` | `epics` | `todos` | `email` | `cloud` | `central` — other Command Center tabs; only when Daniel asked.
   - Omitted: the default follows the rules above from your cwd and tmux window, so from the right place plain `cc-report "<summary>"` is correct.
 - **severity**: `info` (FYI), `warn` (degrading), `attention` (Daniel needed now)

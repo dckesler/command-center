@@ -23,13 +23,14 @@
 #     (by session, so worktree task tabs under ~/code still reach the central agent)
 #   - in a project's "central" window, or cwd under ~/projects          → projects
 #   - cwd contains _qa_                                                → qa
+#   - cwd contains _review_                                            → review
 #   - otherwise                                                        → worktrees
 #
 # Always exits 0 so a logging failure can never block an agent.
 
 set -uo pipefail
 
-TABS="worktrees qa tickets epics projects todos email cloud central"
+TABS="worktrees qa review tickets epics projects todos email cloud central"
 # --- command-center config -------------------------------------------------
 # Values come from env, then $CC_CONFIG_DIR/config.json (see config.example.json
 # in the command-center repo), then the defaults here.
@@ -56,7 +57,7 @@ usage() {
   echo "usage: cc-report [target] [--severity info|warn|attention] <summary>" >&2
   echo "  target: $TABS | project:<name>" >&2
   echo "  default: project:<name> from a project task tab; projects from a project's central window;" >&2
-  echo "           qa if cwd has _qa_; otherwise worktrees" >&2
+  echo "           qa if cwd has _qa_; review if cwd has _review_; otherwise worktrees" >&2
 }
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -74,7 +75,7 @@ while [ $# -gt 0 ]; do
       usage
       exit 0
       ;;
-    worktrees|qa|tickets|epics|projects|todos|email|cloud|central|project:*)
+    worktrees|qa|review|tickets|epics|projects|todos|email|cloud|central|project:*)
       if [ -z "$TARGET" ]; then
         TARGET="$1"
       else
@@ -143,6 +144,7 @@ if [ -z "$TARGET" ]; then
   else
     case "$DIR" in
       *_qa_*) TARGET="qa" ;;
+      *_review_*) TARGET="review" ;;
       *) TARGET="worktrees" ;;
     esac
   fi

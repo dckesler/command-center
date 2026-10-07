@@ -69,6 +69,10 @@ export interface Row {
   agent: AgentStatus | null
   /** true for QA worktrees (mkpanes --qa names them <repo>_qa_<branch>) */
   isQa: boolean
+  /** true for code-review worktrees (mkpanes --review names them <repo>_review_<branch>) */
+  isReview: boolean
+  /** MR approvals; fetched eagerly for review rows only (null = not loaded / no MR) */
+  approval: MrExtras | null
 }
 
 export interface TransitionOption {

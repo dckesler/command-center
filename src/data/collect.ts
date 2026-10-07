@@ -1,10 +1,10 @@
 import type { LoadState, Row } from "../types.ts"
 import { readAgentStatuses } from "./agents.ts"
-import { getMrForBranch } from "./gitlab.ts"
+import { getMrExtras, getMrForBranch } from "./gitlab.ts"
 import { getTicketsByKeys } from "./jira.ts"
 import { parseRepoMap } from "./repos.ts"
 import { findWindowFor, listTmuxWindows } from "./tmux.ts"
-import { getGitStatus, listWorktrees, ticketKeyFromBranch } from "./worktrees.ts"
+import { getGitStatus, listWorktrees, ticketKeyFromBranch, worktreeKind } from "./worktrees.ts"
 
 export type Update = (rows: Row[], load: LoadState) => void
 
@@ -29,7 +29,9 @@ export async function collect(onUpdate: Update): Promise<void> {
       mr: null,
       tmuxWindow: null,
       agent: agentStatuses.get(wt.path) ?? null,
-      isQa: wt.path.split("/").pop()?.includes("_qa_") ?? false,
+      isQa: worktreeKind(wt.path) === "qa",
+      isReview: worktreeKind(wt.path) === "review",
+      approval: null,
     }))
     .sort((a, b) => a.repo.localeCompare(b.repo) || a.branch.localeCompare(b.branch))
 
@@ -58,6 +60,8 @@ export async function collect(onUpdate: Update): Promise<void> {
   const gitlabDone = Promise.all(
     rows.map(async (row) => {
       row.mr = await getMrForBranch(row.repoPath, row.branch)
+      // The review tab shows approval state up front; other tabs load it lazily.
+      if (row.isReview && row.mr) row.approval = await getMrExtras(row.repoPath, row.mr.projectId, row.mr.iid)
     }),
   ).then(() => {
     load.gitlab = true
