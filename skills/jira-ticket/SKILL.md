@@ -100,8 +100,8 @@ Follow the reference for whichever tool was selected in Step 4:
 
 If the chosen tool fails:
 
-- **Before the ticket exists** (connection/auth error, or the create call returned no issue key): retry the create with the other tool.
-- **After the ticket exists, or if you can't tell**: never create again. Search first with JQL `project = <PROJECT_KEY> AND reporter = currentUser() AND created >= -30m ORDER BY created DESC` and match the summary. If it exists, finish the remaining steps (Branch Id, sprint, verify) on that key with whichever tool works. If neither tool can, report the key and the steps left, then stop.
+- **Definitely before the ticket exists** (the tool was unreachable, auth was rejected, or Jira returned a validation/field error): retry the create with the other tool.
+- **Anything else** — the ticket exists, the create timed out, or it reported success without an issue key: treat it as possibly created and never create again. Search first with JQL `project = <PROJECT_KEY> AND reporter = currentUser() AND created >= -30m ORDER BY created DESC` and match the summary. If it exists, finish the remaining steps (Branch Id, sprint, verify) on that key with whichever tool works. If neither tool can, report the key and the steps left, then stop.
 
 ## Critical Rules
 

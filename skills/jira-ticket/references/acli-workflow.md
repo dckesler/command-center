@@ -48,7 +48,11 @@ If `acli jira workitem create` fails:
 
 ## Creation Workflow
 
-Keep temporary payloads in `${TMPDIR:-/tmp}/acli-jira/`, outside any repo, so they are never committed.
+Create a private temporary directory for this run, outside any repo, and use that exact path for every payload below. Shell variables may not persist between commands, so record the printed path and substitute it for `<ACLI_TMP>`:
+
+```bash
+mktemp -d "${TMPDIR:-/tmp}/acli-jira.XXXXXX"
+```
 
 ### 1. Verify Auth and Site
 
@@ -62,18 +66,18 @@ Continue only if it reports `✓ Authenticated` and `Site: smartsensebydigi.atla
 
 Skip this step when the sprint target is `backlog`. Use a sprint ID directly if one was given.
 
-For `current sprint` or a sprint name, find an issue in an open sprint, then read its sprint field:
+For `current sprint` or a sprint name, list the project's boards, then the sprints on each `scrum` board:
 
 ```bash
-acli jira workitem search --jql "project = <PROJECT_KEY> AND sprint in openSprints() ORDER BY updated DESC" --limit 1 --json
-acli jira workitem view <KEY_FROM_SEARCH> --json --fields customfield_10007
+acli jira board search --project <PROJECT_KEY> --json
+acli jira board list-sprints --id <BOARD_ID> --state active,future --json
 ```
 
-`customfield_10007` is a list of sprints. Use the `id` of the entry whose `state` is `active` (or whose `name` matches the requested sprint). If several active sprints match, ask the user which one. If none do, ask whether to continue in backlog or provide a sprint ID.
+Collect sprints from every scrum board and dedupe by `id`. For `current sprint`, use the sprints whose `state` is `active`; for a sprint name, match on `name`. If exactly one matches, use its `id`. If several match, ask the user which one (name + ID). If none do, ask whether to continue in backlog or provide a sprint ID.
 
 ### 3. Build ADF JSON Payload
 
-Write the payload to `${TMPDIR:-/tmp}/acli-jira/workitem-create.json`. Descriptions MUST use ADF JSON (not markdown) for rich formatting in Jira.
+Write the payload to `<ACLI_TMP>/workitem-create.json`. Descriptions MUST use ADF JSON (not markdown) for rich formatting in Jira.
 
 - `type`: `Story` unless the user specified another issue type.
 - `parentIssueId`: omit when there is no parent.
@@ -226,14 +230,14 @@ Write the payload to `${TMPDIR:-/tmp}/acli-jira/workitem-create.json`. Descripti
 ### 4. Create the Ticket
 
 ```bash
-acli jira workitem create --from-json "${TMPDIR:-/tmp}/acli-jira/workitem-create.json" --json
+acli jira workitem create --from-json "<ACLI_TMP>/workitem-create.json" --json
 ```
 
-Record the created issue key from the output. Once a key exists, never run the create again — finish the remaining steps on that ticket.
+Record the created issue key from the output. Once a key exists, never run the create again — finish the remaining steps on that ticket. If the command times out or prints no key without a validation error, do not retry: run the duplicate check in [SKILL.md](../SKILL.md) Step 5.
 
 ### 5. Update Branch Id in Description (required)
 
-Write `${TMPDIR:-/tmp}/acli-jira/workitem-edit.json` with the created key and the same `description` document you just sent, changing only the first heading from `Branch Id:` to `Branch Id: <ISSUE_KEY>`. Rebuild from the local payload rather than reading the description back, so nothing is lost in the round-trip.
+Write `<ACLI_TMP>/workitem-edit.json` with the created key and the same `description` document you just sent, changing only the first heading from `Branch Id:` to `Branch Id: <ISSUE_KEY>`. Rebuild from the local payload rather than reading the description back, so nothing is lost in the round-trip.
 
 ```json
 {
@@ -243,7 +247,7 @@ Write `${TMPDIR:-/tmp}/acli-jira/workitem-edit.json` with the created key and th
 ```
 
 ```bash
-acli jira workitem edit --from-json "${TMPDIR:-/tmp}/acli-jira/workitem-edit.json" -y --json
+acli jira workitem edit --from-json "<ACLI_TMP>/workitem-edit.json" -y --json
 ```
 
 If this edit fails, report the error and the issue key, and stop. Do not create another ticket.
@@ -263,7 +267,7 @@ Report the issue key and `https://smartsensebydigi.atlassian.net/browse/<ISSUE_K
 Remove the temporary payloads after success:
 
 ```bash
-rm -rf "${TMPDIR:-/tmp}/acli-jira"
+rm -rf "<ACLI_TMP>"
 ```
 
 ## Editing an Existing Ticket
@@ -274,10 +278,10 @@ rm -rf "${TMPDIR:-/tmp}/acli-jira"
 acli jira workitem edit --generate-json
 ```
 
-Fill in `issues` with the ticket key(s), modify the remaining fields, then apply:
+Fill in `issues` with the ticket key(s), modify the remaining fields, save it in a `mktemp -d` directory as above, then apply:
 
 ```bash
-acli jira workitem edit --from-json "${TMPDIR:-/tmp}/acli-jira/workitem-edit.json" -y --json
+acli jira workitem edit --from-json "<ACLI_TMP>/workitem-edit.json" -y --json
 ```
 
 The edit payload supports summary, description, assignee, type, and labels only — not parent or custom fields such as sprint.
@@ -342,6 +346,6 @@ Use this to discover custom field IDs for sprint, story points, etc.
 - ALWAYS show the `acli` command preview before running it
 - Use `-y` / `--yes` flag for mutating commands that prompt (edit, assign, transition)
 - Verify with `view --json` after every mutation
-- Store temporary JSON payloads in `${TMPDIR:-/tmp}/acli-jira/` (never inside a repo) and remove them after success
+- Store temporary JSON payloads in a per-run `mktemp -d` directory (never inside a repo, never shared between runs) and remove it after success
 - `--description` / `--description-file` accept plain text or ADF but never render markdown. Use `--from-json` so the ADF description, assignee, parent, and custom fields go in one payload
 - NEVER run `create` twice for the same ticket. Once a key exists, finish the remaining steps on that key
