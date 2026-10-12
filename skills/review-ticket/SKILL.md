@@ -115,19 +115,38 @@ Post one comment per finding. **Every comment body starts with the file and line
 <what is wrong, what happens, what to do instead>
 ```
 
-Use `path:line` for a new-version line, `path:line (old)` for a deleted one, and `path:start-end` for a range (anchor the inline discussion to the last line of the range). Try the inline discussion first; if GitLab rejects the position (the line is outside the diff, or the file was renamed), fall back to a plain note — the body already carries the location, so nothing is lost:
+Use `path:line` for a new-version line, `path:line (old)` for a deleted one, and `path:start-end` for a range (anchor the inline discussion to the last line of the range).
+
+**Send the position as a JSON body, not as `-f` form fields.** `glab api -X POST -f "position[...]"` returns HTTP 201 while GitLab silently drops the position, so the comment is stored as a plain note and never appears on the diff. A JSON body with an explicit `Content-Type: application/json` header is what actually anchors it. Also set `old_path` to the same file as `new_path` for an added or changed line; omitting it makes GitLab reject the position on some lines (`line_code can't be blank`).
 
 ```bash
 # diff refs for inline positions
-glab api "projects/:id/merge_requests/<IID>/versions" | jq -r '.[0] | "\(.base_commit_sha) \(.start_commit_sha) \(.head_commit_sha)"'
+glab api "projects/:id/merge_requests/<IID>/versions" \
+  | jq -r '.[0] | "\(.base_commit_sha) \(.start_commit_sha) \(.head_commit_sha)"'
 
-# inline discussion (new-version line; for a deleted line use old_path/old_line instead)
-glab api -X POST "projects/:id/merge_requests/<IID>/discussions" \
-  -f body="$(printf '`%s:%s`\n%s' "<file>" "<line>" "<finding text>")" \
-  -f "position[position_type]=text" \
-  -f "position[base_sha]=<base>" -f "position[start_sha]=<start>" -f "position[head_sha]=<head>" \
-  -f "position[new_path]=<file>" -f "position[new_line]=<line>" \
-|| glab api -X POST "projects/:id/merge_requests/<IID>/notes" \
+# inline discussion on a new-version line (for a deleted line, send old_path and
+# old_line instead of new_path and new_line)
+jq -n --arg body "$(printf '`%s:%s`\n%s' "<file>" "<line>" "<finding text>")" \
+  --arg base "<base>" --arg start "<start>" --arg head "<head>" \
+  --arg file "<file>" --argjson line <line> \
+  '{body: $body, position: {position_type: "text", base_sha: $base, start_sha: $start,
+    head_sha: $head, new_path: $file, old_path: $file, new_line: $line}}' \
+| glab api --method POST "projects/:id/merge_requests/<IID>/discussions" \
+  -H "Content-Type: application/json" --input -
+```
+
+A 201 is not proof the anchor stuck. After each post, read the discussion back and check `.notes[0].position.new_line` (or `.old_line`) is set:
+
+```bash
+glab api "projects/:id/merge_requests/<IID>/discussions/<discussion id>" \
+  | jq -r '.notes[0].position | "\(.new_path // .old_path):\(.new_line // .old_line)"'
+```
+
+If that prints `null`, or GitLab returned 400 (`line_code can't be blank` — the line is outside the diff hunks), delete the note and retry on a different changed line in the same area. Only fall back to a plain note when no changed line can carry it:
+
+```bash
+glab api --method DELETE "projects/:id/merge_requests/<IID>/discussions/<discussion id>/notes/<note id>"
+glab api --method POST "projects/:id/merge_requests/<IID>/notes" \
   -f body="$(printf '`%s:%s`\n%s' "<file>" "<line>" "<finding text>")"
 ```
 
@@ -144,6 +163,10 @@ glab mr approve <IID>
 Then `cc-report "<TICKET>: posted <n> comments<, approved>"` and print the MR URL. If he said "nothing", report `"<TICKET>: review done, nothing posted"` and stop.
 
 If he disagrees with a finding, say in one line why you raised it, then drop it if he still disagrees — it is his review.
+
+## Wrap up
+
+When Daniel says "wrap up" or "wrap up review" in a review session, that means the worktree-only flow in the wrap-up skill: remove this review worktree and close its tmux window. Do not approve, post, resolve threads, close the MR, transition the Jira ticket, or delete the branch.
 
 ## When something changes mid-review
 
