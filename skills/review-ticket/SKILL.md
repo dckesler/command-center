@@ -41,7 +41,7 @@ glab mr view <branch> --output json 2>/dev/null | jq -r '"\(.iid)\t\(.web_url)\t
 
 ### Step 2: Read the ticket
 
-`getJiraIssue` with the cloud ID and key, fields `["summary", "description", "status", "issuetype"]`, `responseContentFormat: "markdown"`. Pull out the **Summary**, **Acceptance Criteria**, **Test Plan / Test Cases**, and any **Implementation Details** or **Agent implementation instructions**. These are the review's yardstick: the MR is done when the ACs are met, not when the code looks nice.
+`getJiraIssue` with the cloud ID and key, fields `["summary", "description", "status", "issuetype"]`, `responseContentFormat: "markdown"`. Pull out the **Summary**, **Acceptance Criteria**, **Test Plan / QA Steps**, and any **Implementation Details** or **Agent implementation instructions**. These are the review's yardstick: the MR is done when the ACs are met, not when the code looks nice.
 
 ### Step 3: Read the change
 

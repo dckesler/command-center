@@ -47,7 +47,7 @@ Do **not** change assignee, status, sprint, labels, or description in this step.
 
 ### Step 3: Surface the QA steps
 
-Look for a `## QA Testing Steps` section in the ticket's description.
+Look for a `## QA Steps` section in the ticket's description. Older tickets may use `## QA Testing Steps` or `## Test Cases` instead — treat those the same.
 
 **If QA steps exist in the ticket:** extract and display them exactly as written. Do not reformat or summarize — the tester needs the literal steps.
 

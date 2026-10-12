@@ -5,7 +5,7 @@ Use the [Atlassian CLI](https://developer.atlassian.com/cloud/acli/guides/introd
 ## Prerequisites
 
 - `acli` installed ([install guide](https://developer.atlassian.com/cloud/acli/guides/install/))
-- Authenticated: `acli jira auth status`
+- Authenticated against the SmartSense site: `acli jira auth status` must show `Site: smartsensebydigi.atlassian.net`
 
 If auth fails in sandbox mode, retry with full/local permissions.
 
@@ -28,34 +28,67 @@ If `acli jira auth status` reports unauthenticated or expired token:
 2. Wait for the user to authenticate.
 3. Re-check with `acli jira auth status` before proceeding.
 
+### acli Authenticated to Another Site
+
+If `acli jira auth status` shows a `Site:` other than `smartsensebydigi.atlassian.net`:
+
+1. Stop. Never create or edit tickets on another site.
+2. Tell the user which site acli is on and ask them to run `acli jira auth switch` (or `acli jira auth login`) for `smartsensebydigi.atlassian.net`.
+3. Re-check with `acli jira auth status` before proceeding.
+
 ### acli Create Fails
 
 If `acli jira workitem create` fails:
 
 1. Show the full error output to the user.
-2. Common causes: invalid project key, wrong issue type, malformed ADF JSON.
-3. If it's an auth/permission error, suggest `acli jira auth login`.
-4. If MCP is available, offer to retry via MCP as fallback.
+2. Common causes: invalid project key, wrong issue type, a missing required field, malformed ADF JSON.
+3. If the error names a required field, ask the user for that value, add it under `additionalAttributes`, and retry.
+4. If it's an auth/permission error, suggest `acli jira auth login`.
+5. Before retrying via MCP, follow the duplicate check in [SKILL.md](../SKILL.md) Step 5.
 
 ## Creation Workflow
 
-### 1. Verify Auth
+Keep temporary payloads in `${TMPDIR:-/tmp}/acli-jira/`, outside any repo, so they are never committed.
+
+### 1. Verify Auth and Site
 
 ```bash
 acli jira auth status
 ```
 
-### 2. Build ADF JSON Payload
+Continue only if it reports `✓ Authenticated` and `Site: smartsensebydigi.atlassian.net`.
 
-Create a temporary JSON file in a scratch/working directory (e.g. `.acli-tmp/workitem-create.json`). Descriptions MUST use ADF JSON (not markdown) for rich formatting in Jira.
+### 2. Resolve Sprint Target (if requested)
+
+Skip this step when the sprint target is `backlog`. Use a sprint ID directly if one was given.
+
+For `current sprint` or a sprint name, find an issue in an open sprint, then read its sprint field:
+
+```bash
+acli jira workitem search --jql "project = <PROJECT_KEY> AND sprint in openSprints() ORDER BY updated DESC" --limit 1 --json
+acli jira workitem view <KEY_FROM_SEARCH> --json --fields customfield_10007
+```
+
+`customfield_10007` is a list of sprints. Use the `id` of the entry whose `state` is `active` (or whose `name` matches the requested sprint). If several active sprints match, ask the user which one. If none do, ask whether to continue in backlog or provide a sprint ID.
+
+### 3. Build ADF JSON Payload
+
+Write the payload to `${TMPDIR:-/tmp}/acli-jira/workitem-create.json`. Descriptions MUST use ADF JSON (not markdown) for rich formatting in Jira.
+
+- `type`: `Story` unless the user specified another issue type.
+- `parentIssueId`: omit when there is no parent.
+- `additionalAttributes`: holds the sprint (`customfield_10007`, numeric sprint ID) and any other required custom fields. Omit `customfield_10007` when the sprint target is `backlog`. Set the sprint here — `acli jira workitem edit` cannot set custom fields after creation.
 
 ```json
 {
-  "projectKey": "LW",
-  "type": "Task",
+  "projectKey": "<PROJECT_KEY>",
+  "type": "Story",
   "summary": "[BE] (feat) - add report email digest system",
   "assignee": "@me",
-  "parentIssueId": "LW-12345",
+  "parentIssueId": "<PARENT_KEY>",
+  "additionalAttributes": {
+    "customfield_10007": 1234
+  },
   "description": {
     "type": "doc",
     "version": 1,
@@ -124,7 +157,7 @@ Create a temporary JSON file in a scratch/working directory (e.g. `.acli-tmp/wor
       {
         "type": "heading",
         "attrs": { "level": 2 },
-        "content": [{ "type": "text", "text": "Test Cases" }]
+        "content": [{ "type": "text", "text": "QA Steps" }]
       },
       {
         "type": "bulletList",
@@ -190,24 +223,47 @@ Create a temporary JSON file in a scratch/working directory (e.g. `.acli-tmp/wor
 }
 ```
 
-### 3. Create the Ticket
+### 4. Create the Ticket
 
 ```bash
-acli jira workitem create --from-json ".acli-tmp/workitem-create.json" --json
+acli jira workitem create --from-json "${TMPDIR:-/tmp}/acli-jira/workitem-create.json" --json
 ```
 
-### 4. Verify
+Record the created issue key from the output. Once a key exists, never run the create again — finish the remaining steps on that ticket.
 
-```bash
-acli jira workitem view LW-XXXXX --json
+### 5. Update Branch Id in Description (required)
+
+Write `${TMPDIR:-/tmp}/acli-jira/workitem-edit.json` with the created key and the same `description` document you just sent, changing only the first heading from `Branch Id:` to `Branch Id: <ISSUE_KEY>`. Rebuild from the local payload rather than reading the description back, so nothing is lost in the round-trip.
+
+```json
+{
+  "issues": ["<ISSUE_KEY>"],
+  "description": { "type": "doc", "version": 1, "content": [ "...same nodes, with the Branch Id heading updated..." ] }
+}
 ```
 
-### 5. Clean Up
+```bash
+acli jira workitem edit --from-json "${TMPDIR:-/tmp}/acli-jira/workitem-edit.json" -y --json
+```
 
-Remove the temporary JSON file after successful creation:
+If this edit fails, report the error and the issue key, and stop. Do not create another ticket.
+
+### 6. Verify
 
 ```bash
-rm .acli-tmp/workitem-create.json
+acli jira workitem view <ISSUE_KEY> --json --fields summary,description,assignee,parent,customfield_10007
+```
+
+Confirm the Branch Id heading, assignee, parent (if one was requested), and sprint (if one was requested). acli cannot set `parent` or custom fields after creation, so if either is missing, tell the user which field to fix in Jira.
+
+Report the issue key and `https://smartsensebydigi.atlassian.net/browse/<ISSUE_KEY>`.
+
+### 7. Clean Up
+
+Remove the temporary payloads after success:
+
+```bash
+rm -rf "${TMPDIR:-/tmp}/acli-jira"
 ```
 
 ## Editing an Existing Ticket
@@ -218,22 +274,24 @@ rm .acli-tmp/workitem-create.json
 acli jira workitem edit --generate-json
 ```
 
-Modify the generated JSON, then apply:
+Fill in `issues` with the ticket key(s), modify the remaining fields, then apply:
 
 ```bash
-acli jira workitem edit --from-json ".acli-tmp/workitem-edit.json" -y --json
+acli jira workitem edit --from-json "${TMPDIR:-/tmp}/acli-jira/workitem-edit.json" -y --json
 ```
+
+The edit payload supports summary, description, assignee, type, and labels only — not parent or custom fields such as sprint.
 
 ## Transitioning Ticket Status
 
 ```bash
-acli jira workitem transition LW-XXXXX --status "In Progress"
+acli jira workitem transition --key "<ISSUE_KEY>" --status "In Progress" -y
 ```
 
 ## Inspecting All Fields (for custom fields)
 
 ```bash
-acli jira workitem view LW-XXXXX --json --fields "*all"
+acli jira workitem view <ISSUE_KEY> --json --fields "*all"
 ```
 
 Use this to discover custom field IDs for sprint, story points, etc.
@@ -256,10 +314,13 @@ Use this to discover custom field IDs for sprint, story points, etc.
 |--------|-----|------|
 | Description format | Markdown (MCP converts) | ADF JSON (must build manually) |
 | Auth | Automatic via MCP server | `acli jira auth status` |
-| Creation | `CallMcpTool createJiraIssue` | `acli jira workitem create --from-json` |
-| Verification | `CallMcpTool getJiraIssue` | `acli jira workitem view KEY --json` |
-| Transitions | Not supported | `acli jira workitem transition` |
-| Field inspection | Limited | `--fields "*all"` to discover custom fields |
+| Workspace check | `getAccessibleAtlassianResources` | `Site:` line of `acli jira auth status` |
+| Creation | `createJiraIssue` | `acli jira workitem create --from-json` |
+| Sprint | `editJiraIssue` after creation | `additionalAttributes.customfield_10007` at creation only |
+| Parent | `parent` on create | `parentIssueId` on create only |
+| Verification | `getJiraIssue` | `acli jira workitem view KEY --json` |
+| Transitions | `transitionJiraIssue` | `acli jira workitem transition --key KEY` |
+| Field inspection | `getJiraIssueTypeMetaWithFields` | `--fields "*all"` to discover custom fields |
 
 ## acli Command Quick Reference
 
@@ -267,12 +328,12 @@ Use this to discover custom field IDs for sprint, story points, etc.
 |--------|---------|
 | Check auth | `acli jira auth status` |
 | Create ticket | `acli jira workitem create --from-json file.json --json` |
-| Create (simple) | `acli jira workitem create --summary "Title" --project LW --type Task` |
+| Create (simple) | `acli jira workitem create --summary "Title" --project <PROJECT_KEY> --type Story` |
 | Edit ticket | `acli jira workitem edit --from-json file.json -y --json` |
 | View ticket | `acli jira workitem view KEY --json` |
-| Transition | `acli jira workitem transition KEY --status "Status"` |
-| Assign | `acli jira workitem assign KEY --assignee "@me"` |
-| Search | `acli jira workitem search --jql "project = LW AND status = Open"` |
+| Transition | `acli jira workitem transition --key KEY --status "Status" -y` |
+| Assign | `acli jira workitem assign --key KEY --assignee "@me" -y` |
+| Search | `acli jira workitem search --jql "project = <PROJECT_KEY> AND status = Open"` |
 | All fields | `acli jira workitem view KEY --json --fields "*all"` |
 | Generate JSON | `acli jira workitem create --generate-json` |
 
@@ -281,5 +342,6 @@ Use this to discover custom field IDs for sprint, story points, etc.
 - ALWAYS show the `acli` command preview before running it
 - Use `-y` / `--yes` flag for mutating commands that prompt (edit, assign, transition)
 - Verify with `view --json` after every mutation
-- Store temporary JSON payloads in a scratch/working directory and remove them after success
-- `--description-file` sends plain text only -- it does NOT render markdown as rich formatting. Always use `--from-json` with ADF for structured descriptions
+- Store temporary JSON payloads in `${TMPDIR:-/tmp}/acli-jira/` (never inside a repo) and remove them after success
+- `--description` / `--description-file` accept plain text or ADF but never render markdown. Use `--from-json` so the ADF description, assignee, parent, and custom fields go in one payload
+- NEVER run `create` twice for the same ticket. Once a key exists, finish the remaining steps on that key

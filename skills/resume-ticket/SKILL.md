@@ -31,7 +31,7 @@ Call `getJiraIssue` with the cloud ID and the key, requesting:
 
 From the result, note:
 
-- Summary and the **Acceptance Criteria** / **QA Testing Steps** sections of the description.
+- Summary and the **Acceptance Criteria** / **QA Steps** sections of the description.
 - Current status. If it is not `In Progress`, that is a signal worth surfacing (e.g. bounced back from QA, or moved to Done while local work remains) — report it, and only transition it back to In Progress if Daniel asks.
 - Recent comments — especially anything since work started: QA feedback, reviewer notes, Universal Test Plan Agent updates.
 

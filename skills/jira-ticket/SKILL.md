@@ -51,7 +51,7 @@ Ask only for missing required fields. Do NOT ask for platform, assignee, parent 
 - Data model or schema changes
 - Acceptance criteria
 - Test plan — written at ticket creation, before coding: what prerequisites are needed to test (hardware, software, data), the flow that proves each AC *can* be tested, and what automated tests will be written. Goal is to confirm the work is provably testable before starting.
-- Test cases — the steps a QA engineer runs once the MR is ready to verify (same thing as "QA Testing Steps"). Infer from the summary and ACs when possible. Do not restate the ACs.
+- QA steps — the steps a QA engineer runs once the MR is ready to verify (same thing as "QA Testing Steps"). Infer from the summary and ACs when possible. Do not restate the ACs.
 
 **Optional (ask only if needed):**
 
@@ -79,7 +79,7 @@ Use the appropriate template from [references/templates.md](references/templates
 
 ### Step 3: Show Preview and Confirm
 
-ALWAYS present a preview showing: Workspace, Project, Issue Type, Title, Description (including Test Plan and Test Cases), Assignee, Sprint Target, Priority, Parent (if any). Ask: "Should I proceed with creating this ticket?" and WAIT for explicit approval.
+ALWAYS present a preview showing: Workspace, Project, Issue Type, Title, Description (including Test Plan and QA Steps), Assignee, Sprint Target, Priority, Parent (if any). Ask: "Should I proceed with creating this ticket?" and WAIT for explicit approval.
 
 ### Step 4: Detect Available Tool
 
@@ -89,7 +89,7 @@ Before creating, resolve the MCP workspace:
 2. Dedupe returned resources by `cloudId` + `url`.
 3. Select only the SmartSense workspace: `https://smartsensebydigi.atlassian.net` (`3be885af-99d6-4514-939e-3c99560b10eb`).
 4. If SmartSense is present, continue with MCP. Follow [references/mcp-workflow.md](references/mcp-workflow.md).
-5. If MCP is unavailable, times out, returns no resources, or SmartSense is missing: probe `acli` (`acli jira auth status`). If authenticated, follow [references/acli-workflow.md](references/acli-workflow.md) instead. If `acli` is also unavailable, stop and tell the user to fix the Atlassian MCP connection (or install/authenticate `acli`).
+5. If MCP is unavailable, times out, returns no resources, or SmartSense is missing: probe `acli` (`acli jira auth status`). If it is authenticated and its `Site:` is `smartsensebydigi.atlassian.net`, follow [references/acli-workflow.md](references/acli-workflow.md) instead. If `acli` is also unavailable, stop and tell the user to fix the Atlassian MCP connection (or install/authenticate `acli`).
 
 ### Step 5: Create the Ticket
 
@@ -98,7 +98,10 @@ Follow the reference for whichever tool was selected in Step 4:
 - **MCP**: [references/mcp-workflow.md](references/mcp-workflow.md)
 - **acli**: [references/acli-workflow.md](references/acli-workflow.md)
 
-If the chosen tool fails mid-creation, attempt the other tool as fallback before reporting an error and stopping.
+If the chosen tool fails:
+
+- **Before the ticket exists** (connection/auth error, or the create call returned no issue key): retry the create with the other tool.
+- **After the ticket exists, or if you can't tell**: never create again. Search first with JQL `project = <PROJECT_KEY> AND reporter = currentUser() AND created >= -30m ORDER BY created DESC` and match the summary. If it exists, finish the remaining steps (Branch Id, sprint, verify) on that key with whichever tool works. If neither tool can, report the key and the steps left, then stop.
 
 ## Critical Rules
 
@@ -107,7 +110,7 @@ If the chosen tool fails mid-creation, attempt the other tool as fallback before
 - ALWAYS default assignee to current user
 - ALWAYS target the SmartSense Atlassian workspace only
 - NEVER silently target another Atlassian workspace
-- For bugs, put environment / observed / expected in Summary and use "Test Cases" for post-MR QA steps (never "Repro Steps" or "QA Testing Steps")
+- For bugs, put environment / observed / expected in Summary and use "QA Steps" for post-MR QA steps (never "Repro Steps", "QA Testing Steps", or "Test Cases")
 - ALWAYS update "Branch Id:" to the created Jira issue key immediately after creation
 - Use "None" or "N/A" for inapplicable fields
 - Keep conversation focused -- ask only essential questions

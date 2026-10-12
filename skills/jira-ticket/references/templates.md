@@ -1,10 +1,10 @@
 # Ticket Description Templates
 
-Human-facing sections come first (Branch Id through Test Cases). Implementation Details is last and is written for agents.
+Human-facing sections come first (Branch Id through QA Steps). Implementation Details is last and is written for agents.
 
 **Test Plan** is required at ticket creation. It must show the work is testable: prerequisites, the flow that proves each AC, and what automated tests will be written.
 
-**Test Cases** are the steps a QA engineer runs once the MR is ready to verify. This is the same section as "QA Testing Steps" / "QA Steps" — always use the heading `## Test Cases`. Do not add a second QA section.
+**QA Steps** are the steps a QA engineer runs once the MR is ready to verify. This is the same section as "QA Testing Steps" / "Test Cases" — always use the heading `## QA Steps`. Do not add a second QA section.
 
 ## Standard Ticket (Feature / Refactor / Chore / Maintenance)
 
@@ -32,7 +32,7 @@ Human-facing sections come first (Branch Id through Test Cases). Implementation 
 
 **Automated tests:** {Unit or integration tests to be written — or "None"}
 
-## Test Cases
+## QA Steps
 
 {Steps a QA engineer runs once the MR is ready. Concrete navigation and checks, including at least one regression check when a nearby flow could break. Not a restatement of the ACs.}
 
@@ -67,7 +67,7 @@ Human-facing sections come first (Branch Id through Test Cases). Implementation 
 
 ## Bug Ticket
 
-Same section order as standard. Put environment, observed result, and expected result in Summary. There is no separate QA Testing Steps section — use Test Cases.
+Same section order as standard. Put environment, observed result, and expected result in Summary. There is no separate QA Testing Steps section — use QA Steps.
 
 ```
 ## Branch Id:
@@ -99,7 +99,7 @@ Same section order as standard. Put environment, observed result, and expected r
 
 **Automated tests:** {Unit or integration tests to be written to prevent regression — or "None"}
 
-## Test Cases
+## QA Steps
 
 - {Perform the original repro path}
 - {Confirm the expected result — the bug no longer occurs}
@@ -132,14 +132,14 @@ Same section order as standard. Put environment, observed result, and expected r
 ## Formatting Rules
 
 - Use `##` (H2) for all main section headers
-- Human sections stay above Implementation Details: Branch Id, Merge Request, Summary, Acceptance Criteria, Test Plan, Test Cases
+- Human sections stay above Implementation Details: Branch Id, Merge Request, Summary, Acceptance Criteria, Test Plan, QA Steps
 - Implementation Details is agent-facing. Sub-items: bold label with colon, answer on the same line
 - When writing ADF (acli), emit Implementation Details as a collapsed `expand` node titled `Implementation Details`. When writing markdown (MCP), use `## Implementation Details` — MCP markdown does not reliably produce expand nodes
 - Acceptance Criteria: paragraph or bulleted list (no checkboxes)
 - Leave "Merge Request" empty during creation
 - Keep "Branch Id:" empty in the preview template, then auto-update it to the Jira issue key immediately after creation
 - Do not create a Business Context or Technical Details section. Fold any existing "why" into Summary; map old Technical Details into Implementation Details
-- Always use `## Test Cases` (never "QA Steps", "QA Testing Steps", or "Repro Steps")
+- Always use `## QA Steps` (never "Test Cases", "QA Testing Steps", or "Repro Steps")
 
 ## Platform Detection
 
@@ -192,7 +192,7 @@ Implement a new GraphQL mutation and type resolvers to allow content group admin
 
 **Automated tests:** Unit/integration tests for createFollowUpActionReportEmailDigest (happy path, duplicate, permission) and for reportEmailDigests on ListTemplate.
 
-## Test Cases
+## QA Steps
 
 - Log in as a content group admin and open an audit template linked to a follow-up action template
 - Configure a report email digest for a FUA report type with a frequency, save, and confirm it appears with the correct frequency

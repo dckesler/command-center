@@ -112,16 +112,16 @@ If MCP tools are not responding (error, timeout, or the Atlassian MCP server is 
 
 1. Inform the user: "The Atlassian MCP server is not available."
 2. Probe `acli` as a fallback: run `acli jira auth status` in the shell.
-3. If `acli` is authenticated, switch to the acli workflow ([references/acli-workflow.md](acli-workflow.md)) and proceed.
+3. If `acli` is authenticated and its `Site:` is `smartsensebydigi.atlassian.net`, switch to the acli workflow ([references/acli-workflow.md](acli-workflow.md)) and proceed.
 4. If neither tool works, tell the user and suggest: verify the Atlassian MCP connection in your AI tool's settings, or run `acli jira auth login` (install from [developer.atlassian.com/cloud/acli](https://developer.atlassian.com/cloud/acli/guides/install/) if not present).
 
 ### MCP Tool Errors During Creation
 
 - If `getAccessibleAtlassianResources` returns no resources, ask the developer to verify their Atlassian connection
 - If `getAccessibleAtlassianResources` returns resources but SmartSense is missing, stop and ask the developer to fix workspace access
-- If `createJiraIssue` fails, show the error. If it's an auth/permission issue, try `acli` as a fallback ([references/acli-workflow.md](acli-workflow.md)).
+- If `createJiraIssue` fails, show the error. If it's an auth/permission issue, run the duplicate check in [SKILL.md](../SKILL.md) Step 5, then try `acli` as a fallback ([references/acli-workflow.md](acli-workflow.md)) only if no ticket was created.
 - If `createJiraIssue` fails with a field error, ask the developer to verify project and issue type
 - If required-field metadata calls fail, report the error and stop
-- If Branch Id update fails, report the error and stop
+- If Branch Id update fails, report the error and the issue key, then stop. Do not create another ticket
 - If multiple current sprints are found, ask the developer to pick one
 - If current sprint lookup fails, ask whether to continue in backlog or provide a sprint ID directly
