@@ -124,7 +124,12 @@ qa, tickets, epics, todos, email, cloud, calendar.
   up and closes it. The review specialist relays verdicts and stuck agents to central.
 
 - **[4] Worktrees** — one row per git worktree, joining local git state, Jira, GitLab MR,
-  and tmux.
+  and tmux. `w` wraps a branch up (merge the MR, ticket → Done, close the tmux window,
+  remove the worktree + branch; refused while the MR has unresolved review threads), `x`
+  removes just the worktree, `X` mass-cleans worktrees whose ticket is Done and MR merged.
+  The same wrap-up is available by asking — "wrap up lists/LW-1234" in the worktrees
+  chat (or central, which relays it) queues the identical plan for your approval; both
+  paths share `src/data/wrapup.ts`.
 - **[6] Tickets** — tickets assigned to you that aren't Done/Closed (epics stay on
   Epics). Sorted closest-to-shipped first (In Test / code review above In Progress,
   Blocked below it, Backlog last). The WT column marks tickets that already have a local
@@ -243,8 +248,9 @@ qa, tickets, epics, todos, email, cloud, calendar.
 | `ctrl+c` | quit |
 
 **Agent approvals.** Specialist tools that change state outside this laptop —
-`transition_ticket` and `prep_ticket` (tickets, epics), `start_cloud_agent`,
-`follow_up_cloud`, `cancel_cloud_run` (cloud) — never run when the agent calls them.
+`transition_ticket` and `prep_ticket` (tickets, epics), `wrap_up_worktree` (worktrees),
+`cleanup_worktree` (worktrees, qa, review), `start_cloud_agent`, `follow_up_cloud`,
+`cancel_cloud_run` (cloud) — never run when the agent calls them.
 They queue an approval (`src/agents/approvals.ts`) and return at once. The agent you are
 talking to asks you: an approval from the agent whose chat is open pops its dialog right
 there, even mid-typing; one from any other agent opens when nothing owns the keyboard,

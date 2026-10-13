@@ -30,6 +30,7 @@ import {
 } from "../data/projects.ts"
 import { launchWork, openProjectWindow, runMkpanes, targetSession } from "../data/tmux.ts"
 import { worktreeKind, type WorktreeKind } from "../data/worktrees.ts"
+import { isDirty, planWrapUp, runCleanup, runWrapUp } from "../data/wrapup.ts"
 import {
   addTodo,
   addTodoNote,
@@ -185,6 +186,7 @@ function ticketAgentTools(ctx: HubContext, kind: WorktreeKind): Record<string, S
   const label = kind === "dev" ? "dev" : kind === "qa" ? "QA" : "review"
   const rowsFor = () => ctx.snapshot().rows.filter((r) => worktreeKind(r.worktreePath) === kind)
   const findWindow = (window: string): Row | undefined => rowsFor().find((r) => r.tmuxWindow === window)
+  const findRow = (repo: string, branch: string): Row | undefined => findWorktreeRow(rowsFor(), repo, branch)
   return {
     ...inboxTools(tab),
     get_agent_feed: {
@@ -264,7 +266,51 @@ function ticketAgentTools(ctx: HubContext, kind: WorktreeKind): Record<string, S
         return res.message
       },
     },
+    cleanup_worktree: {
+      description:
+        `Remove a ${label} worktree directory${kind === "dev" ? " (optionally its branch)" : " and close its window"} — no MR, no Jira. ` +
+        `Queues for ${USER}'s approval in the TUI; returns before anything changes. ` +
+        (kind === "dev"
+          ? "Use when the branch is finished elsewhere (MR already merged, or abandoned); for a full merge + Done + teardown use wrap_up_worktree."
+          : `The branch is someone else's — this never deletes it. Use when the ${label} session is over.`),
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "repo alias as shown in the list" },
+          branch: { type: "string", description: "branch as shown in the list" },
+          ...(kind === "dev" ? { delete_branch: { type: "boolean", description: "also delete the local branch (default false)" } } : {}),
+        },
+        required: ["repo", "branch"],
+      },
+      execute: (args) => {
+        const row = findRow(str(args.repo), str(args.branch))
+        if (!row) return `no ${label} worktree ${str(args.repo)}/${str(args.branch)}`
+        const deleteBranch = kind === "dev" && args.delete_branch === true
+        const detail = [
+          `asked by the ${tab} specialist`,
+          `remove ${row.worktreePath}${deleteBranch ? ` + delete branch ${row.branch}` : ""}`,
+          ...(kind !== "dev" && row.tmuxWindow ? [`close tmux window ${row.tmuxWindow}`] : []),
+          ...(isDirty(row) ? [`⚠ ${row.git!.dirtyCount} dirty files will be lost`] : []),
+        ]
+        return requestApproval({
+          agent: tab,
+          title: `clean up ${row.repo}/${row.branch}${deleteBranch ? " + branch" : ""}`,
+          detail,
+          run: async () => {
+            const result = await runCleanup(row, { deleteBranch, closeWindow: kind !== "dev" })
+            ctx.appChanged("refresh")
+            return result.message
+          },
+        })
+      },
+    },
   }
+}
+
+/** Resolve a row the way the specialist names it: repo alias + branch (ticket key works too). */
+function findWorktreeRow(rows: Row[], repo: string, branch: string): Row | undefined {
+  const want = branch.toLowerCase()
+  return rows.find((r) => r.repo === repo && (r.branch.toLowerCase() === want || r.ticketKey?.toLowerCase() === want))
 }
 
 const TICKET_AGENT_STYLE =
@@ -291,6 +337,8 @@ const central: TabAgentSpec = {
     "Never instruct agents in a loop: after instructing, wait for the resulting report. " +
     `Specialist actions that change Jira or start/cancel cloud agents queue for ${USER}'s approval in the TUI and are not done until he approves — ` +
     "when a report says one is waiting, do not re-instruct; mention it to him once if he asked for it. " +
+    `Wrap-ups live with the worktrees specialist: when ${USER} says a branch/ticket is done, instruct(worktrees, "wrap up <repo>/<branch>") — ` +
+    "it queues merge + Done + window close + worktree removal for his approval. Never relay a wrap-up he did not ask for. " +
     `Focus todos: ${USER} marks a few todos as today's focus; they must keep moving. The todos specialist reports 'focus: <text> — no progress ` +
     `for <time>' when one has gone ${FOCUS_CADENCE_LABEL} without a progress note. On such a report: first check what you already know — recent ` +
     "[reports] from worktrees/projects/tickets/qa/review and this conversation (an MR merged, a ticket moved, a worker finished on the thing the " +
@@ -351,7 +399,11 @@ const worktrees: TabAgentSpec = {
     "You are the worktrees specialist of a development command center, and the field manager of the external ticket agents (cursor-cli/claude) working in tmux windows — one per worktree. " +
     "Scope: local git worktrees, their branches, MRs, CI, and the ticket agents working in them. " +
     `You get event digests about agent activity and MR/CI changes; report anything needing ${USER}'s attention to central (severity: info < warn < attention). ` +
-    `Destructive operations (removing worktrees, merging) are done by ${USER} via TUI keys — recommend, don't attempt. ` +
+    `You are the one place wrap-ups happen: when ${USER} (or central on his behalf) says a branch is done, call wrap_up_worktree(repo, branch) — ` +
+    "it merges the MR, moves the ticket to Done, closes the tmux window, and removes the worktree + branch, but only after he approves the queued " +
+    `plan in the TUI (the dialog opens in whichever chat he is in). cleanup_worktree is the lighter version (worktree only, no MR/Jira). ` +
+    `Never call either tool on a hunch: he must have asked for that branch, and if a wrap-up comes back blocked (open review threads) tell him why and stop. ` +
+    `Before queuing, check the row yourself (list_worktrees): dirty files, an unmerged MR with a failing pipeline, or an agent still busy there are worth one line of warning in your reply. ` +
     TICKET_AGENT_STYLE +
     " " +
     REPLY_STYLE +
@@ -384,6 +436,36 @@ const worktrees: TabAgentSpec = {
           const result = await launchWork(str(args.repo), str(args.branch), session)
           ctx.appChanged("refresh")
           return result.message
+        },
+      },
+      wrap_up_worktree: {
+        description:
+          "Finish a branch: merge its MR (if open), transition the ticket to Done, close the tmux window, remove the worktree and delete the branch. " +
+          `Refuses up front when the MR has unresolved review threads. Otherwise queues the full plan for ${USER}'s approval in the TUI and returns before anything changes.`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            repo: { type: "string", description: "repo alias as shown in list_worktrees" },
+            branch: { type: "string", description: "branch or ticket key as shown in list_worktrees" },
+          },
+          required: ["repo", "branch"],
+        },
+        execute: async (args) => {
+          const rows = ctx.snapshot().rows.filter((r) => worktreeKind(r.worktreePath) === "dev")
+          const row = findWorktreeRow(rows, str(args.repo), str(args.branch))
+          if (!row) return `no dev worktree ${str(args.repo)}/${str(args.branch)}`
+          const plan = await planWrapUp(row)
+          if (plan.blocked) return `wrap-up blocked: ${plan.blocked}. Nothing queued — tell ${USER}.`
+          return requestApproval({
+            agent: "worktrees",
+            title: `wrap up ${row.repo}/${row.branch}`,
+            detail: ["asked by the worktrees specialist", ...plan.steps, ...plan.warnings.map((w) => `⚠ ${w}`)],
+            run: async () => {
+              const result = await runWrapUp(row)
+              ctx.appChanged("refresh")
+              return result.message
+            },
+          })
         },
       },
     }

@@ -72,7 +72,7 @@ import {
 } from "./data/cloud.ts"
 import { collect } from "./data/collect.ts"
 import { run } from "./data/exec.ts"
-import { approveMr, getMrExtras, gitlabUsername, mergeMr } from "./data/gitlab.ts"
+import { approveMr, getMrExtras, gitlabUsername } from "./data/gitlab.ts"
 import {
   applyTransition,
   getAssignedTickets,
@@ -86,7 +86,6 @@ import { parseRepoMap } from "./data/repos.ts"
 import {
   createTicketPrompt,
   jumpToWindow,
-  killWindow,
   launchWork,
   openFinalizeEpic,
   openProjectWindow,
@@ -94,6 +93,7 @@ import {
   targetSession,
 } from "./data/tmux.ts"
 import { deleteBranch, removeWorktree } from "./data/worktrees.ts"
+import { planWrapUp, runCleanup, runWrapUp } from "./data/wrapup.ts"
 import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
@@ -500,103 +500,30 @@ export function App() {
 
   const wrapUp = useCallback(
     async (row: Row) => {
-      const dirty = (row.git?.dirtyCount ?? 0) > 0
+      if (row.mr?.state === "opened") setBusy(`checking !${row.mr.iid} for open comments…`)
+      const plan = await planWrapUp(row)
+      setBusy(null)
 
-      // Fresh unresolved-comments check for open MRs: merging over open
-      // review threads is the one wrap-up mistake that can't be undone.
-      if (row.mr?.state === "opened") {
-        setBusy(`checking !${row.mr.iid} for open comments…`)
-        const extras = await getMrExtras(row.repoPath, row.mr.projectId, row.mr.iid)
-        setBusy(null)
-        const unresolved = extras
-          ? extras.unresolvedThreads
-          : row.mr.blockingDiscussionsResolved === false
-            ? -1 // extras fetch failed but the last refresh knew of unresolved threads
-            : 0
-        if (unresolved !== 0) {
-          setModal({
-            title: `Wrap up blocked — !${row.mr.iid} has open comments`,
-            body: [
-              unresolved > 0
-                ? `✗ ${unresolved} unresolved comment thread${unresolved === 1 ? "" : "s"} on the MR`
-                : "✗ MR has unresolved comment threads (count unavailable)",
-              "Resolve them in GitLab first (o opens the MR), then wrap up again.",
-            ],
-            options: [{ label: "Close" }],
-            selected: 0,
-            onPick: () => setModal(null),
-          })
-          return
-        }
+      if (plan.blocked) {
+        setModal({
+          title: `Wrap up blocked — ${row.repo}/${row.branch}`,
+          body: [`✗ ${plan.blocked}`, "(o opens the MR), then wrap up again."],
+          options: [{ label: "Close" }],
+          selected: 0,
+          onPick: () => setModal(null),
+        })
+        return
       }
-
-      const steps: string[] = []
-      if (row.mr?.state === "opened") steps.push(`• merge !${row.mr.iid}`)
-      else if (row.mr?.state === "merged") steps.push(`• MR !${row.mr.iid} already merged — skipping merge`)
-      else steps.push("• no open MR — skipping merge")
-      if (row.ticketKey) steps.push(`• transition ${row.ticketKey} to Done`)
-      if (row.tmuxWindow) steps.push(`• close tmux window ${row.tmuxWindow}`)
-      steps.push(`• remove worktree + delete branch ${row.branch}`)
-
-      const warnings: string[] = []
-      if (row.mr?.state === "opened" && row.mr.detailedMergeStatus !== "mergeable") {
-        warnings.push(`⚠ MR is not mergeable (${row.mr.detailedMergeStatus}) — merge may fail or be queued`)
-      }
-      if (dirty) warnings.push(`⚠ ${row.git!.dirtyCount} dirty files will be lost`)
 
       setModal({
         title: `Wrap up ${row.repo}/${row.branch}`,
-        body: [...steps, ...warnings],
+        body: [...plan.steps.map((s) => `• ${s}`), ...plan.warnings.map((w) => `⚠ ${w}`)],
         options: [{ label: "Wrap up", danger: true }, { label: "Cancel" }],
         selected: 1,
         onPick: async (i) => {
           setModal(null)
           if (i !== 0) return
-          const notes: string[] = []
-
-          if (row.mr?.state === "opened") {
-            setBusy(`merging !${row.mr.iid}…`)
-            const merged = await mergeMr(row.repoPath, row.mr.iid)
-            if (!merged.ok) {
-              finishAction({ ok: false, message: `merge failed: ${merged.message} — wrap-up aborted` })
-              return
-            }
-            notes.push(`!${row.mr.iid} merged`)
-          }
-
-          if (row.ticketKey) {
-            setBusy(`transitioning ${row.ticketKey} to Done…`)
-            const transitions = await getTransitions(row.ticketKey)
-            const done =
-              transitions?.find((t) => t.toStatus.toLowerCase() === "done") ??
-              transitions?.find((t) => t.toStatus.toLowerCase() === "closed")
-            if (done && (await applyTransition(row.ticketKey, done.id))) {
-              notes.push(`${row.ticketKey} → ${done.toStatus}`)
-            } else {
-              notes.push(
-                `⚠ could not transition ${row.ticketKey}${
-                  transitions ? ` (available: ${transitions.map((t) => t.toStatus).join(", ")})` : ""
-                }`,
-              )
-            }
-          }
-
-          if (row.tmuxWindow) {
-            setBusy(`closing tmux window ${row.tmuxWindow}…`)
-            if (await killWindow(row.tmuxWindow)) notes.push(`window ${row.tmuxWindow} closed`)
-            else notes.push(`⚠ could not close window ${row.tmuxWindow}`)
-          }
-
-          setBusy(`removing ${row.worktreePath}…`)
-          const removed = await removeWorktree(row.repoPath, row.worktreePath, dirty)
-          if (removed.ok) {
-            await deleteBranch(row.repoPath, row.branch)
-            notes.push("worktree + branch removed")
-          } else {
-            notes.push(`⚠ ${removed.message}`)
-          }
-
-          finishAction({ ok: !notes.some((n) => n.startsWith("⚠")), message: notes.join(" · ") })
+          finishAction(await runWrapUp(row, setBusy))
         },
       })
     },
@@ -670,25 +597,7 @@ export function App() {
         onPick: async (i) => {
           setModal(null)
           if (i === 2) return
-          setBusy(`removing ${row.worktreePath}…`)
-          const result = await removeWorktree(row.repoPath, row.worktreePath, dirty)
-          if (!result.ok) {
-            finishAction(result)
-            return
-          }
-          const notes: string[] = ["worktree removed"]
-          if (i === 1) {
-            const branchResult = await deleteBranch(row.repoPath, row.branch)
-            notes.push(branchResult.ok ? `branch ${row.branch} deleted` : `⚠ ${branchResult.message}`)
-          }
-          if (closeWindow && row.tmuxWindow) {
-            notes.push(
-              (await killWindow(row.tmuxWindow))
-                ? `window ${row.tmuxWindow} closed`
-                : `⚠ could not close window ${row.tmuxWindow}`,
-            )
-          }
-          finishAction({ ok: !notes.some((n) => n.startsWith("⚠")), message: notes.join(" · ") })
+          finishAction(await runCleanup(row, { deleteBranch: i === 1, closeWindow }, setBusy))
         },
       })
     },
