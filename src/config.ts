@@ -68,6 +68,8 @@ export interface Config {
     retrySeconds: number
     /** how long the retrier keeps trying before giving up (hooks still deliver after that) */
     retryMinutes: number
+    /** pending mail older than this is "stuck": header badge, red ✉ on projects, one warn event to the owning tab */
+    staleMinutes: number
   }
   todos: {
     /** minutes a focus todo may go without a progress note before the todos specialist pings central */
@@ -111,7 +113,7 @@ export const DEFAULTS: Config = {
   jira: { baseUrl: "", cloudId: "", sprintField: "customfield_10007" },
   model: "composer-2.5",
   projects: { exclude: ["command-center", "node_modules"] },
-  mail: { quietSeconds: 30, retrySeconds: 20, retryMinutes: 180 },
+  mail: { quietSeconds: 30, retrySeconds: 20, retryMinutes: 180, staleMinutes: 10 },
   todos: { focusCadenceMinutes: 30, focusMax: 3, focusHours: "09:00-17:30" },
   repos: {},
 }
@@ -178,6 +180,7 @@ export function config(): Config {
       quietSeconds: Number(file.mail?.quietSeconds) || DEFAULTS.mail.quietSeconds,
       retrySeconds: Number(file.mail?.retrySeconds) || DEFAULTS.mail.retrySeconds,
       retryMinutes: Number(file.mail?.retryMinutes) || DEFAULTS.mail.retryMinutes,
+      staleMinutes: Number(file.mail?.staleMinutes) || DEFAULTS.mail.staleMinutes,
     },
     todos: {
       focusCadenceMinutes: Number(file.todos?.focusCadenceMinutes) || DEFAULTS.todos.focusCadenceMinutes,

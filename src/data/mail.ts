@@ -12,7 +12,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { statePath } from "../config.ts"
+import { config, statePath } from "../config.ts"
 import { run } from "./exec.ts"
 
 const MAIL_DIR = statePath("mail")
@@ -47,28 +47,62 @@ function countLines(path: string): number {
   }
 }
 
-/** Undelivered message counts keyed by canonical directory (only dirs with pending mail). */
-export function readPendingMail(): Map<string, number> {
-  const map = new Map<string, number>()
+export interface PendingMail {
+  count: number
+  /** epoch ms of the oldest undelivered message (0 if unparsable) */
+  oldestAt: number
+  /** sender of the oldest undelivered message */
+  oldestFrom: string
+}
+
+/** Undelivered mail keyed by canonical directory (only dirs with pending mail). */
+export function readPendingMail(): Map<string, PendingMail> {
+  const map = new Map<string, PendingMail>()
   if (!existsSync(MAIL_DIR)) return map
   for (const name of readdirSync(MAIL_DIR)) {
     if (!name.endsWith(".jsonl")) continue
     const box = join(MAIL_DIR, name)
-    const total = countLines(box)
+    let lines: string[]
+    try {
+      lines = readFileSync(box, "utf8").split("\n").filter((l) => l.length > 0)
+    } catch {
+      continue
+    }
     let read = 0
     try {
       read = Number(readFileSync(`${box}.read`, "utf8").replace(/\D/g, "")) || 0
     } catch {
       read = 0
     }
-    if (total > read) map.set(decodeBox(name), total - read)
+    if (lines.length <= read) continue
+    let oldestAt = 0
+    let oldestFrom = "?"
+    try {
+      const first = JSON.parse(lines[read]) as { ts?: string; from?: string }
+      oldestAt = first.ts ? Date.parse(first.ts) || 0 : 0
+      oldestFrom = first.from ?? "?"
+    } catch {
+      // unparsable line: age unknown
+    }
+    map.set(decodeBox(name), { count: lines.length - read, oldestAt, oldestFrom })
   }
   return map
 }
 
-/** Pending mail for one directory (0 when none). Accepts raw or canonical paths. */
-export function pendingMailFor(pending: Map<string, number>, dir: string): number {
-  return pending.get(dir) ?? pending.get(canon(dir)) ?? 0
+/** Pending mail for one directory (null when none). Accepts raw or canonical paths. */
+export function pendingMailFor(pending: Map<string, PendingMail>, dir: string): PendingMail | null {
+  return pending.get(dir) ?? pending.get(canon(dir)) ?? null
+}
+
+/** Minutes the oldest pending message has waited (0 when unknown). */
+export function mailWaitMinutes(mail: PendingMail | null, now: number = Date.now()): number {
+  if (!mail || !mail.oldestAt) return 0
+  return Math.max(0, Math.floor((now - mail.oldestAt) / 60_000))
+}
+
+/** Pending mail older than `mail.staleMinutes` — the retrier has not managed to hand it over. */
+export function isMailStuck(mail: PendingMail | null, now: number = Date.now()): boolean {
+  return mailWaitMinutes(mail, now) >= config().mail.staleMinutes
 }
 
 export type MailTarget = { dir: string } | { pane: string } | { window: string }

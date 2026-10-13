@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
-import type { Project, ProjectReport, ProjectTask } from "../data/projects.ts"
+import { fmtMail, type Project, type ProjectReport, type ProjectTask } from "../data/projects.ts"
+import { isMailStuck, mailWaitMinutes, type PendingMail } from "../data/mail.ts"
 import type { TicketInfo } from "../types.ts"
 
 const C = {
@@ -77,8 +78,8 @@ function relative(iso: string): string {
 
 const COLS = { tab: 26, where: 24, ticket: 22, mr: 14, agent: 11 }
 const FIXED_WIDTH = Object.values(COLS).reduce((a, b) => a + b, 0)
-/** "✉2 " — undelivered cc-mail waiting for the agent; fills the tail of the AGENT column. */
-const mailTag = (n: number) => `✉${n} `
+/** "✉2 " / "✉2 68m " — undelivered cc-mail waiting for the agent (age once stuck); fills the tail of the AGENT column. */
+const mailTag = (m: PendingMail) => (isMailStuck(m) ? `✉${m.count} ${mailWaitMinutes(m)}m ` : `✉${m.count} `)
 
 export interface EpicSummary {
   key: string
@@ -127,7 +128,7 @@ export function ProjectDetail({
       <span fg={project.tmuxWindow ? C.green : C.dim}>{project.tmuxWindow ?? "not running"}</span>
       <span fg={C.dim}>{"   central agent "}</span>
       <span fg={project.agent ? AGENT_COLORS[project.agent.state] ?? C.gray : C.dim}>{project.agent?.state ?? "none"}</span>
-      {project.mail > 0 && <span fg={C.yellow}>{` ✉${project.mail} unread mail`}</span>}
+      {project.mail && <span fg={isMailStuck(project.mail) ? C.red : C.yellow}>{` ✉${fmtMail(project.mail)}`}</span>}
       <span fg={C.dim}>
         {brief ? `   ${brief.doneSteps} done / ${brief.nextSteps.length} open steps` : ""}
       </span>
@@ -219,7 +220,7 @@ export function ProjectDetail({
               <span fg={t.agent ? AGENT_COLORS[t.agent.state] ?? C.gray : C.dim}>
                 {fit(t.agent?.state ?? "-", t.mail ? COLS.agent - mailTag(t.mail).length : COLS.agent)}
               </span>
-              {t.mail > 0 && <span fg={C.yellow}>{mailTag(t.mail)}</span>}
+              {t.mail && <span fg={isMailStuck(t.mail) ? C.red : C.yellow}>{mailTag(t.mail)}</span>}
               <span fg={t.lastReport ? SEVERITY_COLORS[t.lastReport.severity] : C.dim}>{fit(report, reportWidth)}</span>
             </text>
           </box>

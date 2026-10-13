@@ -99,6 +99,7 @@ Resolution order: environment variable → `config.json` → default.
 | `mail.quietSeconds` | | `30` | quiet time for the recipient's tmux window before `cc-mail` may type into an on-screen idle agent's pane |
 | `mail.retrySeconds` | | `20` | how often cc-mail's retrier re-attempts idle delivery of queued mail |
 | `mail.retryMinutes` | | `180` | how long the retrier keeps trying (hooks still deliver after it stops) |
+| `mail.staleMinutes` | | `10` | pending mail older than this is flagged stuck (header badge, red `✉`, warn event to the owning tab) |
 | `todos.focusCadenceMinutes` | | `30` | how long a focus todo may go without a progress note before a focus check |
 | `todos.focusMax` | | `3` | soft cap on focus todos; the Todos view warns past it |
 | `todos.focusHours` | | `09:00-17:30` | weekday window for focus checks and the start/end-of-day announcements |
@@ -199,7 +200,11 @@ qa, tickets, epics, todos, email, cloud, calendar.
   says why, and a detached retrier (`cc-mail retry-loop`, one per mailbox) re-tries
   every `mail.retrySeconds` for up to `mail.retryMinutes`. `cc-mail kick --dir <dir>`
   is one attempt by hand. The pane is found through the window's `@agent_pane`
-  option, which `mkpanes`, `start-project` and `project-task` set. Pending mail shows as
+  option, which `mkpanes`, `start-project` and `project-task` set. Mail still waiting
+  after `mail.staleMinutes` is *stuck*: the header shows `✉ N stuck`, the projects tab
+  and project detail turn the `✉` red with the wait (`✉2 68m`), and the tab that owns
+  the directory gets one `warn` event per batch asking it to look at the pane and tell
+  central what is blocking delivery. Pending mail shows as
   `✉N` next to the agent state on the projects tab and in the project detail view.
   Every delivery is labelled as coming from another agent, not the user, and says it
   cannot stand in for the user's confirmation of anything. No specialist can type

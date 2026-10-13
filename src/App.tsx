@@ -1,5 +1,5 @@
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Cloud } from "./components/Cloud.tsx"
 import { CloudPrompt } from "./components/CloudPrompt.tsx"
 import { Tickets } from "./components/Tickets.tsx"
@@ -48,6 +48,7 @@ import {
   ingestTodos,
   ingestCloud,
   ingestEmails,
+  ingestMail,
   ingestProjects,
   ingestRows,
   ingestTickets,
@@ -94,6 +95,7 @@ import {
 } from "./data/tmux.ts"
 import { deleteBranch, removeWorktree } from "./data/worktrees.ts"
 import { planWrapUp, runCleanup, runWrapUp } from "./data/wrapup.ts"
+import { isMailStuck, readPendingMail, type PendingMail } from "./data/mail.ts"
 import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
@@ -185,6 +187,8 @@ export function App() {
   const [epicDetail, setEpicDetail] = useState<{ epic: TicketInfo; tickets: TicketInfo[] | null } | null>(null)
   const [selectedEpicTicket, setSelectedEpicTicket] = useState(0)
   const [projects, setProjects] = useState<Project[]>([])
+  /** every mailbox with undelivered cc-mail, re-read on each refresh (header shows the stuck ones) */
+  const [pendingMail, setPendingMail] = useState<Map<string, PendingMail>>(new Map())
   const [projectsLoading, setProjectsLoading] = useState(true)
   const [selectedProject, setSelectedProject] = useState(0)
   /** new-project name prompt */
@@ -275,6 +279,7 @@ export function App() {
       setProjects(result)
       setProjectsLoading(false)
     })
+    setPendingMail(readPendingMail())
     setEmailsLoading(true)
     getInbox().then((result) => {
       setEmails(result)
@@ -334,6 +339,10 @@ export function App() {
   useEffect(() => {
     if (!projectsLoading) ingestProjects(projects)
   }, [projects, projectsLoading])
+  useEffect(() => {
+    ingestMail(pendingMail)
+  }, [pendingMail])
+  const stuckMail = useMemo(() => [...pendingMail.values()].filter((m) => isMailStuck(m)).reduce((n, m) => n + m.count, 0), [pendingMail])
   useEffect(() => {
     if (!emailsLoading && emails !== null) ingestEmails(emails)
   }, [emails, emailsLoading])
@@ -1380,6 +1389,7 @@ export function App() {
         <text>
           <span fg="#93c5fd">COMMAND CENTER</span>
           {approvals.length ? <span fg="#f87171">  ! {approvals.length} to approve</span> : null}
+          {stuckMail ? <span fg="#f87171">  ✉ {stuckMail} stuck</span> : null}
           <span fg={view === "central" ? "#ffffff" : "#6b7280"}>  [1] central</span>
           {agentDot("central")}
           <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [2] {projects.length} projects</span>

@@ -19,6 +19,7 @@ import { run } from "../data/exec.ts"
 import type { EmailMessage } from "../data/outlook.ts"
 import { fmtEvent, fmtMinutes, fmtRange, isNow, minutesUntil, type CalendarEvent } from "../data/calendar.ts"
 import { isProjectDir, projectRootOf, type Project } from "../data/projects.ts"
+import { isMailStuck, mailWaitMinutes, type PendingMail } from "../data/mail.ts"
 import { tabForWorktree } from "../data/worktrees.ts"
 import {
   FOCUS_CADENCE_MS,
@@ -348,6 +349,35 @@ function drainFeed(): void {
 // progressive-load artifact.
 
 let prevRows: Row[] | null = null
+
+/** dir → oldestAt already warned about, so each stuck batch is reported once */
+const warnedMail = new Map<string, number>()
+
+/**
+ * Pending cc-mail older than mail.staleMinutes: the retrier has been failing
+ * (no agent pane, menu open, draft in the input box, pane on screen and busy),
+ * so tell the tab that owns the directory once per batch.
+ */
+export function ingestMail(pending: Map<string, PendingMail>): void {
+  const now = Date.now()
+  for (const [dir, mail] of pending) {
+    if (!isMailStuck(mail, now)) continue
+    if (warnedMail.get(dir) === mail.oldestAt) continue
+    warnedMail.set(dir, mail.oldestAt)
+    const tab = reportTab(undefined, dir)
+    const n = mail.count === 1 ? "1 message" : `${mail.count} messages`
+    pushEvent(
+      tab,
+      `stuck mail: ${n} for ${basename(dir)} waiting ${mailWaitMinutes(mail, now)}m (oldest from ${mail.oldestFrom}) — its agent has not picked them up; ` +
+        `look at its pane (idle with a menu or draft open? no agent running?) and tell central what is blocking it`,
+      "warn",
+      { dir },
+    )
+  }
+  for (const dir of [...warnedMail.keys()]) {
+    if (!pending.has(dir)) warnedMail.delete(dir)
+  }
+}
 
 export function ingestRows(rows: Row[]): void {
   drainFeed()

@@ -1,4 +1,5 @@
 import type { Project } from "../data/projects.ts"
+import { isMailStuck, mailWaitMinutes, type PendingMail } from "../data/mail.ts"
 
 const C = {
   dim: "#6b7280",
@@ -30,8 +31,8 @@ const COLS = {
   agent: 11,
 }
 const FIXED_WIDTH = Object.values(COLS).reduce((a, b) => a + b, 0)
-/** "✉2 " — undelivered cc-mail waiting for the agent; fills the tail of the AGENT column. */
-const mailTag = (n: number) => `✉${n} `
+/** "✉2 " / "✉2 68m " — undelivered cc-mail waiting for the agent (age once stuck); fills the tail of the AGENT column. */
+const mailTag = (m: PendingMail) => (isMailStuck(m) ? `✉${m.count} ${mailWaitMinutes(m)}m ` : `✉${m.count} `)
 
 function relativeDays(iso: string): string {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
@@ -133,7 +134,7 @@ export function Projects({
               <span fg={project.agent ? AGENT_COLORS[project.agent.state] ?? C.gray : C.dim}>
                 {fit(project.agent?.state ?? "-", project.mail ? COLS.agent - mailTag(project.mail).length : COLS.agent)}
               </span>
-              {project.mail > 0 && <span fg={C.yellow}>{mailTag(project.mail)}</span>}
+              {project.mail && <span fg={isMailStuck(project.mail) ? C.red : C.yellow}>{mailTag(project.mail)}</span>}
               <span fg={C.gray}>{fit(brief?.goal || (brief ? "" : "press s to create PROJECT.md and start"), summaryWidth)}</span>
             </text>
           </box>
