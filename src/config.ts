@@ -62,8 +62,12 @@ export interface Config {
     exclude: string[]
   }
   mail: {
-    /** seconds without keyboard activity in an agent's tmux session before cc-mail may type into an idle agent's pane */
+    /** seconds the recipient's tmux *window* must have been quiet before cc-mail types into an on-screen idle agent's pane */
     quietSeconds: number
+    /** how often cc-mail's detached retrier re-attempts idle delivery of queued mail */
+    retrySeconds: number
+    /** how long the retrier keeps trying before giving up (hooks still deliver after that) */
+    retryMinutes: number
   }
   todos: {
     /** minutes a focus todo may go without a progress note before the todos specialist pings central */
@@ -107,7 +111,7 @@ export const DEFAULTS: Config = {
   jira: { baseUrl: "", cloudId: "", sprintField: "customfield_10007" },
   model: "composer-2.5",
   projects: { exclude: ["command-center", "node_modules"] },
-  mail: { quietSeconds: 30 },
+  mail: { quietSeconds: 30, retrySeconds: 20, retryMinutes: 180 },
   todos: { focusCadenceMinutes: 30, focusMax: 3, focusHours: "09:00-17:30" },
   repos: {},
 }
@@ -170,7 +174,11 @@ export function config(): Config {
     },
     model: env.CC_MODEL || file.model || DEFAULTS.model,
     projects: { exclude: file.projects?.exclude ?? DEFAULTS.projects.exclude },
-    mail: { quietSeconds: Number(file.mail?.quietSeconds) || DEFAULTS.mail.quietSeconds },
+    mail: {
+      quietSeconds: Number(file.mail?.quietSeconds) || DEFAULTS.mail.quietSeconds,
+      retrySeconds: Number(file.mail?.retrySeconds) || DEFAULTS.mail.retrySeconds,
+      retryMinutes: Number(file.mail?.retryMinutes) || DEFAULTS.mail.retryMinutes,
+    },
     todos: {
       focusCadenceMinutes: Number(file.todos?.focusCadenceMinutes) || DEFAULTS.todos.focusCadenceMinutes,
       focusMax: Number(file.todos?.focusMax) || DEFAULTS.todos.focusMax,

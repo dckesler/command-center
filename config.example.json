@@ -40,8 +40,10 @@
   },
 
   "mail": {
-    "$comment": "Inter-agent messages (cc-mail). An idle agent is nudged by typing into its pane only after nobody has typed in its tmux session for this many seconds and its input box is empty.",
-    "quietSeconds": 30
+    "$comment": "Inter-agent messages (cc-mail). An idle agent is nudged by typing into its pane only when the human cannot be typing there (pane off screen, or its window quiet for quietSeconds) and its input box is empty; otherwise a detached retrier re-tries every retrySeconds for up to retryMinutes.",
+    "quietSeconds": 30,
+    "retrySeconds": 20,
+    "retryMinutes": 180
   },
 
   "todos": {

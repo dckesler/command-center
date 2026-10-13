@@ -15,9 +15,9 @@ Messages between agents are never typed straight into a pane. `cc-mail` appends 
 
 1. the recipient is working → injected as extra context after its next tool call (Cursor `postToolUse` hook)
 2. the recipient finishes a turn → submitted as its next user message (Cursor `stop` hook)
-3. the recipient is idle, nobody has typed in its tmux session for `mail.quietSeconds` (default 30) and its input box is empty → one line is typed into its pane
+3. the recipient is idle, the human cannot be typing into its pane (the pane is off screen, or its window has been quiet for `mail.quietSeconds`, default 30) and its input box is empty → one line is typed into its pane
 
-Otherwise it waits; the command's one-line result says which happened and why.
+Otherwise it waits; the command's one-line result says which happened and why, and a detached retrier re-tries path 3 every `mail.retrySeconds` (default 20) for up to `mail.retryMinutes` (default 180) — a queued message does not need a second `send`. `cc-mail kick --dir <dir>` makes one attempt by hand.
 
 ## Command
 
@@ -25,6 +25,7 @@ Otherwise it waits; the command's one-line result says which happened and why.
 cc-mail send (--dir <dir> | --pane <pane-id> | --window <tmux target>) [--from <who>] [--severity info|warn|attention] <text>
 cc-mail pending --dir <dir>     # how many messages are waiting for the agent in <dir>
 cc-mail peek --dir <dir>        # show them without delivering
+cc-mail kick --dir <dir>        # one idle-delivery attempt now (the retrier does this on its own)
 ```
 
 Resolve the binary: `cc-mail` on `PATH`, then `~/.local/bin/cc-mail`, then `~/.agents/skills/cc-mail/cc-mail`. `jq` and `tmux` must be available.

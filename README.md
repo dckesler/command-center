@@ -96,7 +96,9 @@ Resolution order: environment variable → `config.json` → default.
 | `jira.cloudId`, `jira.sprintField` | | `""`, `customfield_10007` | Atlassian MCP cloud id; sprint custom field |
 | `model` | `CC_MODEL` | `composer-2.5` | Cursor SDK model for specialists and Cloud agents |
 | `projects.exclude` | | `command-center, node_modules` | dirs under `dirs.projects` that are not projects |
-| `mail.quietSeconds` | | `30` | keyboard-quiet time in an agent's tmux session before `cc-mail` may type into an idle agent's pane |
+| `mail.quietSeconds` | | `30` | quiet time for the recipient's tmux window before `cc-mail` may type into an on-screen idle agent's pane |
+| `mail.retrySeconds` | | `20` | how often cc-mail's retrier re-attempts idle delivery of queued mail |
+| `mail.retryMinutes` | | `180` | how long the retrier keeps trying (hooks still deliver after it stops) |
 | `todos.focusCadenceMinutes` | | `30` | how long a focus todo may go without a progress note before a focus check |
 | `todos.focusMax` | | `3` | soft cap on focus todos; the Todos view warns past it |
 | `todos.focusHours` | | `09:00-17:30` | weekday window for focus checks and the start/end-of-day announcements |
@@ -189,10 +191,15 @@ qa, tickets, epics, todos, email, cloud, calendar.
   offset — never inside a repo) and is delivered by whichever happens first: the
   recipient's next tool call (Cursor `postToolUse` → `additional_context`), the end of
   its current turn (`stop` → `followup_message`), or — only when the hook feed says
-  the agent is idle, nobody has typed in that tmux session for `mail.quietSeconds`
-  (tmux `session_activity`, which `send-keys` does not bump) and its input box shows
-  the placeholder rather than a draft — one `[cc mail …]` line typed into its pane.
-  Anything else waits; the sender's result line says why. Pending mail shows as
+  the agent is idle, the human cannot be typing into that pane (it is not the active
+  pane of an attached session's current window, or its *window* has been quiet for
+  `mail.quietSeconds` — a busy sibling window such as a project's `central` does not
+  count) and its input box shows the placeholder rather than a draft — one
+  `[cc mail …]` line typed into its pane. Anything else waits; the sender's result line
+  says why, and a detached retrier (`cc-mail retry-loop`, one per mailbox) re-tries
+  every `mail.retrySeconds` for up to `mail.retryMinutes`. `cc-mail kick --dir <dir>`
+  is one attempt by hand. The pane is found through the window's `@agent_pane`
+  option, which `mkpanes`, `start-project` and `project-task` set. Pending mail shows as
   `✉N` next to the agent state on the projects tab and in the project detail view.
   Every delivery is labelled as coming from another agent, not the user, and says it
   cannot stand in for the user's confirmation of anything. No specialist can type

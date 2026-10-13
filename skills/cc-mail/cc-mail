@@ -8,9 +8,11 @@
 #
 #   1. postToolUse hook → additional_context  (agent is working: after its next tool call)
 #   2. stop hook        → followup_message    (agent just finished a turn)
-#   3. cc-mail send     → tmux send-keys      (agent is idle AND nobody has typed in its
-#      tmux session for mail.quietSeconds AND its input box is empty; otherwise
-#      the message waits for 1/2 or for the next send)
+#   3. cc-mail send     → tmux send-keys      (agent is idle AND the human cannot be typing
+#      into that pane — it is off screen, or its window has been quiet for
+#      mail.quietSeconds — AND its input box is empty; otherwise
+#      the message waits for 1/2, re-trying 3 every mail.retrySeconds from a
+#      detached retrier for up to mail.retryMinutes)
 #
 # Mailboxes live in $CC_CONFIG_DIR/mail/<dir with / → %>.jsonl with a .read
 # offset file beside them, so nothing lands inside a repo or project directory.
@@ -21,6 +23,7 @@
 #   cc-mail drain --dir <dir> [--json]   print undelivered messages (hook text) and mark them delivered
 #   cc-mail peek  --dir <dir>            print undelivered messages without marking them
 #   cc-mail pending --dir <dir>          number of undelivered messages
+#   cc-mail kick  --dir <dir>            try idle delivery of what is pending (what the retrier runs)
 #   cc-mail path  --dir <dir>            mailbox path
 #
 # Always exits 0 so a messaging failure can never block an agent (usage errors exit 1).
@@ -55,6 +58,7 @@ usage:
   cc-mail drain --dir <dir> [--json]   print undelivered messages (hook text) and mark them delivered
   cc-mail peek  --dir <dir>            print undelivered messages without marking them
   cc-mail pending --dir <dir>          number of undelivered messages
+  cc-mail kick  --dir <dir>            try idle delivery of what is pending
   cc-mail path  --dir <dir>            mailbox path
 EOF
   exit 1
@@ -185,40 +189,95 @@ case "$CMD" in
     [ "$(pending_count "$BOX")" -gt 0 ] || exit 0
     if [ "$JSON" = 1 ]; then take "$BOX"; else take "$BOX" | fmt_hook; fi
     exit 0 ;;
-  send) ;;
+  send|kick|retry-loop) ;;
   *) usage ;;
 esac
 
 # ---------------------------------------------------------------------------
-# send
+# idle delivery (shared by send, kick and the retrier)
+#
+# Typing into the pane is only safe when the agent is idle, the human cannot be
+# typing there, and its input box is empty. When one of those fails the mail
+# stays queued: a hook delivers it if the agent wakes up, otherwise the
+# retrier (`retry-loop`, spawned by send) re-runs `kick` until it goes.
 
-TEXT="$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '\n\r' '  ' | sed 's/[[:space:]][[:space:]]*/ /g')"
-[ -n "$TEXT" ] || usage
-[ "${#TEXT}" -gt "$TEXT_MAX" ] && TEXT="${TEXT:0:$TEXT_MAX}"
+# queued <why>: report why the mail is still waiting and exit (retrier started by caller)
+QUEUED_PREFIX=""
+RETRY=0
+queued() {
+  echo "${QUEUED_PREFIX} — $1"
+  [ "$RETRY" = 1 ] && start_retrier
+  exit 0
+}
 
-SENDER_DIR="$(canon "$(pwd)")"
-if [ -z "$FROM" ]; then
-  if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then FROM="$(tmux display-message -p -t "$TMUX_PANE" '#W' 2>/dev/null || true)"; fi
-  FROM="${FROM:-$(basename "$SENDER_DIR")}"
-fi
-if [ "$DIR" = "$SENDER_DIR" ] && [ -z "$PANE" ]; then
-  echo "cc-mail: refusing to mail my own directory ($DIR)" >&2
+# One detached retrier per mailbox. Its own session (perl setsid) so the
+# caller's shell tool finishing — or killing its process group — does not take
+# the retrier with it.
+start_retrier() {
+  local pidf="$BOX.retry" pid
+  pid="$(cat "$pidf" 2>/dev/null || true)"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then return 0; fi
+  if command -v perl >/dev/null 2>&1; then
+    perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' -- "$0" retry-loop --dir "$DIR" >/dev/null 2>&1 </dev/null &
+  else
+    nohup "$0" retry-loop --dir "$DIR" >/dev/null 2>&1 </dev/null &
+  fi
+  disown 2>/dev/null || true
+}
+
+# Re-try idle delivery every mail.retrySeconds until the mailbox is empty
+# (a hook or a kick delivered it) or mail.retryMinutes have passed.
+if [ "$CMD" = "retry-loop" ]; then
+  INTERVAL="$(cc_cfg .mail.retrySeconds 20)"
+  LIMIT="$(cc_cfg .mail.retryMinutes 180)"
+  PIDF="$BOX.retry"
+  printf '%s' "$$" > "$PIDF"
+  trap 'rm -f "$PIDF"' EXIT
+  END=$(( $(date +%s) + LIMIT * 60 ))
+  while [ "$(date +%s)" -lt "$END" ]; do
+    sleep "$INTERVAL"
+    [ "$(pending_count "$BOX")" -gt 0 ] || exit 0
+    "$0" kick --dir "$DIR" 2>/dev/null | grep -q '^delivered' && exit 0
+  done
   exit 0
 fi
 
-mkdir -p "$MAIL_DIR" 2>/dev/null || exit 0
-LINE="$(jq -nc --arg from "$FROM" --arg severity "$SEVERITY" --arg text "$TEXT" --arg dir "$SENDER_DIR" \
-  '{ts: (now | todate), from: $from, severity: $severity, text: $text, dir: $dir}')" || exit 0
-if lock "$BOX"; then
-  printf '%s\n' "$LINE" >> "$BOX"
-  unlock "$BOX"
+if [ "$CMD" = "send" ]; then
+  TEXT="$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '\n\r' '  ' | sed 's/[[:space:]][[:space:]]*/ /g')"
+  [ -n "$TEXT" ] || usage
+  [ "${#TEXT}" -gt "$TEXT_MAX" ] && TEXT="${TEXT:0:$TEXT_MAX}"
+
+  SENDER_DIR="$(canon "$(pwd)")"
+  if [ -z "$FROM" ]; then
+    if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then FROM="$(tmux display-message -p -t "$TMUX_PANE" '#W' 2>/dev/null || true)"; fi
+    FROM="${FROM:-$(basename "$SENDER_DIR")}"
+  fi
+  if [ "$DIR" = "$SENDER_DIR" ] && [ -z "$PANE" ]; then
+    echo "cc-mail: refusing to mail my own directory ($DIR)" >&2
+    exit 0
+  fi
+
+  mkdir -p "$MAIL_DIR" 2>/dev/null || exit 0
+  LINE="$(jq -nc --arg from "$FROM" --arg severity "$SEVERITY" --arg text "$TEXT" --arg dir "$SENDER_DIR" \
+    '{ts: (now | todate), from: $from, severity: $severity, text: $text, dir: $dir}')" || exit 0
+  if lock "$BOX"; then
+    printf '%s\n' "$LINE" >> "$BOX"
+    unlock "$BOX"
+  else
+    printf '%s\n' "$LINE" >> "$BOX"
+  fi
+
+  QUEUED_PREFIX="queued for $(basename "$DIR") ($SEVERITY) from $FROM: $TEXT"
+  DELIVERED_PREFIX="delivered to $(basename "$DIR") ($SEVERITY) from $FROM: $TEXT"
+  [ "$WAKE" = 1 ] || queued "not waking (--no-wake); delivered on the agent's next tool call or turn end"
+  RETRY=1
 else
-  printf '%s\n' "$LINE" >> "$BOX"
+  # kick: nothing new to add, just try to hand over what is waiting
+  [ "$(pending_count "$BOX")" -gt 0 ] || { echo "nothing pending for $(basename "$DIR")"; exit 0; }
+  QUEUED_PREFIX="still queued for $(basename "$DIR") ($(pending_count "$BOX") message(s))"
+  DELIVERED_PREFIX="delivered to $(basename "$DIR")"
 fi
 
-queued() { echo "queued for $(basename "$DIR") ($SEVERITY) from $FROM: $TEXT — $1"; exit 0; }
-
-[ "$WAKE" = 1 ] || queued "not waking (--no-wake); delivered on the agent's next tool call or turn end"
 command -v tmux >/dev/null 2>&1 || queued "no tmux; delivered on the agent's next tool call or turn end"
 
 # --- find the agent pane for this directory ---------------------------------
@@ -250,11 +309,19 @@ AGE=$(( $(date +%s) - $(printf '%s' "$STATE_JSON" | jq -r '.ts | sub("\\.[0-9]+Z
 [ "$STATE" = "idle" ] || queued "agent is $STATE; delivered on its next tool call or turn end"
 [ "$AGE" -lt 86400 ] || queued "agent state is stale; delivered on its next tool call or turn end"
 
-# --- the human must not be using that tmux session ---------------------------
+# --- the human must not be about to type into that pane ---------------------
+# Keys only reach the active pane of the active window of an attached session.
+# If the recipient pane is not that, nobody can be typing into it, and a busy
+# session (the human talking to the project's central window, say) is no
+# reason to wait. If it is on screen, require its *window* — not the whole
+# session — to have been quiet for mail.quietSeconds.
 QUIET_SECONDS="$(cc_cfg .mail.quietSeconds 30)"
-ACTIVITY="$(tmux display-message -p -t "$PANE" '#{session_activity}' 2>/dev/null || echo 0)"
-QUIET=$(( $(date +%s) - ${ACTIVITY:-0} ))
-[ "$QUIET" -ge "$QUIET_SECONDS" ] || queued "someone typed in that tmux session ${QUIET}s ago; waiting for quiet (${QUIET_SECONDS}s)"
+ON_SCREEN="$(tmux display-message -p -t "$PANE" '#{pane_active}#{window_active}#{?session_attached,1,0}' 2>/dev/null || echo 000)"
+if [ "$ON_SCREEN" = "111" ]; then
+  ACTIVITY="$(tmux display-message -p -t "$PANE" '#{window_activity}' 2>/dev/null || echo 0)"
+  QUIET=$(( $(date +%s) - ${ACTIVITY:-0} ))
+  [ "$QUIET" -ge "$QUIET_SECONDS" ] || queued "the agent's pane is on screen and its window was active ${QUIET}s ago; waiting for quiet (${QUIET_SECONDS}s)"
+fi
 
 # --- and the input box must be empty (cursor-cli shows a placeholder) -------
 if [ "$SOURCE" = "cursor" ]; then
@@ -265,19 +332,19 @@ fi
 
 # --- deliver everything pending by typing one line ---------------------------
 PENDING="$(take "$BOX")"
-[ -n "$PENDING" ] || queued "already delivered by a hook"
+[ -n "$PENDING" ] || { RETRY=0; queued "already delivered by a hook"; }
 N="$(printf '%s\n' "$PENDING" | grep -c .)"
 NUDGE="$(printf '%s\n' "$PENDING" | fmt_line)"
 # cursor-cli needs a beat between a burst of typed text and Enter: with an
 # immediate Enter it submits the text but also leaves a copy in the input box.
 if tmux send-keys -t "$PANE" -l "$NUDGE" 2>/dev/null && sleep 0.5 && tmux send-keys -t "$PANE" Enter 2>/dev/null; then
-  echo "delivered to $(basename "$DIR") ($SEVERITY) from $FROM: $TEXT — idle agent in $PANE nudged ($N message(s))"
+  echo "$DELIVERED_PREFIX — idle agent in $PANE nudged ($N message(s))"
 else
-  # typing failed: put the lines back so a hook can deliver them
+  # typing failed: put the lines back so a hook (or the retrier) can deliver them
   if lock "$BOX"; then
     printf '%s\n' "$PENDING" >> "$BOX"
     unlock "$BOX"
   fi
-  echo "queued for $(basename "$DIR") ($SEVERITY) from $FROM: $TEXT — tmux send-keys failed; delivered on the agent's next turn"
+  queued "tmux send-keys failed; delivered on the agent's next turn"
 fi
 exit 0

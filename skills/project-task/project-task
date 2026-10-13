@@ -271,7 +271,10 @@ EOF
   KIND="project dir"
 fi
 
-AGENT_PANE="$("$TMUX_BIN" display-message -p -t "$WIN_ID.2" '#{pane_id}')"
+# mkpanes records its agent pane in @agent_pane (its layout is its own business);
+# the plain-tab layout built above puts the agent in pane .2.
+AGENT_PANE="$("$TMUX_BIN" show-option -wqv -t "$WIN_ID" @agent_pane 2>/dev/null || true)"
+[ -n "$AGENT_PANE" ] || AGENT_PANE="$("$TMUX_BIN" display-message -p -t "$WIN_ID.2" '#{pane_id}')"
 "$TMUX_BIN" set-option -w -t "$WIN_ID" @agent_pane "$AGENT_PANE"
 "$TMUX_BIN" set-option -w -t "$WIN_ID" @cc_role task
 "$TMUX_BIN" set-option -w -t "$WIN_ID" @cc_project "$PROJECT"
