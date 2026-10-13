@@ -19,7 +19,7 @@ import { run } from "../data/exec.ts"
 import type { EmailMessage } from "../data/outlook.ts"
 import { fmtEvent, fmtMinutes, fmtRange, isNow, minutesUntil, type CalendarEvent } from "../data/calendar.ts"
 import { isProjectDir, projectRootOf, type Project } from "../data/projects.ts"
-import { isMailStuck, mailWaitMinutes, type PendingMail } from "../data/mail.ts"
+import { ccMailBin, isMailStuck, mailWaitMinutes, type PendingMail } from "../data/mail.ts"
 import { tabForWorktree } from "../data/worktrees.ts"
 import {
   FOCUS_CADENCE_MS,
@@ -363,6 +363,13 @@ export function ingestMail(pending: Map<string, PendingMail>): void {
   for (const [dir, mail] of pending) {
     if (!isMailStuck(mail, now)) continue
     if (warnedMail.get(dir) === mail.oldestAt) continue
+    if (!existsSync(dir)) {
+      // The directory is gone (worktree wrapped up): nobody will ever read
+      // this box. Mark it delivered instead of nagging about it.
+      warnedMail.set(dir, mail.oldestAt)
+      void run(ccMailBin(), ["drain", "--dir", dir, "--json"], { timeoutMs: 10_000 })
+      continue
+    }
     warnedMail.set(dir, mail.oldestAt)
     const tab = reportTab(undefined, dir)
     const n = mail.count === 1 ? "1 message" : `${mail.count} messages`
