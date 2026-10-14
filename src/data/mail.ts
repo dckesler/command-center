@@ -89,6 +89,47 @@ export function readPendingMail(): Map<string, PendingMail> {
   return map
 }
 
+export interface MailMessage {
+  ts: string
+  from: string
+  severity: string
+  text: string
+}
+
+/** The undelivered messages for one directory, oldest first (via `cc-mail peek --json`). */
+export async function peekMail(dir: string): Promise<MailMessage[]> {
+  const res = await run(ccMailBin(), ["peek", "--dir", dir, "--json"], { timeoutMs: 10_000 })
+  if (!res.ok) return []
+  const out: MailMessage[] = []
+  for (const line of res.stdout.split("\n")) {
+    if (!line.trim()) continue
+    try {
+      const m = JSON.parse(line) as Partial<MailMessage>
+      out.push({ ts: m.ts ?? "", from: m.from ?? "?", severity: m.severity ?? "info", text: m.text ?? "" })
+    } catch {
+      // skip a corrupt line
+    }
+  }
+  return out
+}
+
+/**
+ * One idle-delivery attempt now (what the retrier runs). Resolves to the
+ * CLI's line: "delivered …" or "still queued … — <why>".
+ */
+export async function kickMail(dir: string): Promise<{ delivered: boolean; message: string }> {
+  const res = await run(ccMailBin(), ["kick", "--dir", dir], { timeoutMs: 15_000 })
+  const out = (res.stdout.trim() || res.stderr.trim()).split("\n").pop() ?? ""
+  return { delivered: out.startsWith("delivered"), message: out || "cc-mail kick failed" }
+}
+
+/** Mark everything pending as delivered without delivering it. Returns how many were dropped. */
+export async function discardMail(dir: string): Promise<number> {
+  const res = await run(ccMailBin(), ["drain", "--dir", dir, "--json"], { timeoutMs: 10_000 })
+  if (!res.ok) return 0
+  return res.stdout.split("\n").filter((l) => l.trim()).length
+}
+
 /** Pending mail for one directory (null when none). Accepts raw or canonical paths. */
 export function pendingMailFor(pending: Map<string, PendingMail>, dir: string): PendingMail | null {
   return pending.get(dir) ?? pending.get(canon(dir)) ?? null

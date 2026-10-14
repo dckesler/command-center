@@ -54,6 +54,25 @@ export async function targetSession(): Promise<string | null> {
   return sessions[0]?.name ?? null
 }
 
+/**
+ * "session:index" of the window whose agent pane (or, failing that, any pane)
+ * runs in `dir`; null when no pane is there.
+ */
+export async function windowForDir(dir: string): Promise<string | null> {
+  const res = await run("tmux", [
+    "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}\t#{pane_current_path}\t#{@agent_pane}",
+  ])
+  if (!res.ok) return null
+  let fallback: string | null = null
+  for (const line of res.stdout.split("\n")) {
+    const [paneId, target, path, agentPane] = line.split("\t")
+    if (!target || path !== dir) continue
+    if (agentPane && agentPane === paneId) return target
+    fallback ??= target
+  }
+  return fallback
+}
+
 export async function jumpToWindow(target: string): Promise<boolean> {
   const res = await run("tmux", ["select-window", "-t", target])
   return res.ok

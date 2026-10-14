@@ -88,6 +88,7 @@ import {
   createTicketPrompt,
   jumpToWindow,
   launchWork,
+  windowForDir,
   openFinalizeEpic,
   openProjectWindow,
   runMkpanes,
@@ -95,7 +96,7 @@ import {
 } from "./data/tmux.ts"
 import { deleteBranch, removeWorktree } from "./data/worktrees.ts"
 import { planWrapUp, runCleanup, runWrapUp } from "./data/wrapup.ts"
-import { isMailStuck, readPendingMail, type PendingMail } from "./data/mail.ts"
+import { discardMail, isMailStuck, kickMail, peekMail, readPendingMail, type PendingMail } from "./data/mail.ts"
 import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
@@ -342,7 +343,15 @@ export function App() {
   useEffect(() => {
     ingestMail(pendingMail)
   }, [pendingMail])
-  const stuckMail = useMemo(() => [...pendingMail.values()].filter((m) => isMailStuck(m)).reduce((n, m) => n + m.count, 0), [pendingMail])
+  const stuckDirs = useMemo(
+    () =>
+      [...pendingMail.entries()]
+        .filter(([, m]) => isMailStuck(m))
+        .sort((a, b) => a[1].oldestAt - b[1].oldestAt)
+        .map(([dir]) => dir),
+    [pendingMail],
+  )
+  const stuckMail = useMemo(() => stuckDirs.reduce((n, dir) => n + (pendingMail.get(dir)?.count ?? 0), 0), [stuckDirs, pendingMail])
   useEffect(() => {
     if (!emailsLoading && emails !== null) ingestEmails(emails)
   }, [emails, emailsLoading])
@@ -410,6 +419,74 @@ export function App() {
       })
     },
     [refresh],
+  )
+
+  /**
+   * Stuck-mail dialog (`@`): one mailbox at a time. Opening it makes one
+   * delivery attempt — if that works there is nothing to show — otherwise it
+   * shows the messages and why cc-mail is holding them, with jump / discard.
+   */
+  const reviewStuckMail = useCallback(
+    async (dirs: string[], index: number) => {
+      const dir = dirs[index]
+      if (!dir) {
+        setBusy(null)
+        setPendingMail(readPendingMail())
+        return
+      }
+      const name = dir.split("/").filter(Boolean).pop() ?? dir
+      setBusy(`stuck mail: trying ${name}…`)
+      const [kick, messages, window] = await Promise.all([kickMail(dir), peekMail(dir), windowForDir(dir)])
+      setBusy(null)
+      if (kick.delivered) {
+        setMessage({ text: kick.message, ok: true })
+        return reviewStuckMail(dirs, index + 1)
+      }
+      const why = kick.message.split(" — ").pop() ?? kick.message
+      const clock = (ts: string) => {
+        const d = new Date(ts)
+        return Number.isNaN(d.getTime()) ? "--:--" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      }
+      const shown = messages.slice(0, 4).map((m) => {
+        const line = `${clock(m.ts)} (${m.severity}) ${m.from}: ${m.text}`
+        return line.length > 110 ? `${line.slice(0, 107)}…` : line
+      })
+      if (messages.length > 4) shown.push(`… and ${messages.length - 4} more`)
+      const remaining = dirs.length - index - 1
+      const options = [
+        ...(window ? [{ label: `Jump to ${window}` }] : []),
+        { label: `Discard ${messages.length} message${messages.length === 1 ? "" : "s"}`, danger: true },
+        ...(remaining > 0 ? [{ label: `Next (${remaining} more)` }] : []),
+        { label: "Close" },
+      ]
+      setModal({
+        title: `stuck mail — ${name} (${index + 1}/${dirs.length})`,
+        body: [
+          `held because: ${why}`,
+          window ? `agent window: ${window}` : "no tmux window has this directory open",
+          "",
+          ...shown,
+        ],
+        options,
+        selected: options.length - 1,
+        onPick: async (i) => {
+          setModal(null)
+          const label = options[i]?.label ?? ""
+          if (label.startsWith("Jump") && window) {
+            const ok = await jumpToWindow(window)
+            setMessage({ text: ok ? `switched to ${window} — answer the agent there` : "tmux select-window failed", ok })
+          } else if (label.startsWith("Discard")) {
+            const n = await discardMail(dir)
+            setMessage({ text: `discarded ${n} message${n === 1 ? "" : "s"} for ${name}`, ok: true })
+            setPendingMail(readPendingMail())
+            if (remaining > 0) void reviewStuckMail(dirs, index + 1)
+          } else if (label.startsWith("Next")) {
+            void reviewStuckMail(dirs, index + 1)
+          }
+        },
+      })
+    },
+    [],
   )
 
   const startOrJump = useCallback(
@@ -1006,6 +1083,11 @@ export function App() {
       else setMessage({ text: "no agent actions waiting for approval", ok: true })
       return
     }
+    if (key.name === "@" || (key as unknown as { sequence?: string }).sequence === "@") {
+      if (stuckDirs.length) void reviewStuckMail(stuckDirs, 0)
+      else setMessage({ text: "no stuck agent mail", ok: true })
+      return
+    }
     const keySeq = (key as unknown as { sequence?: string }).sequence ?? ""
     const viewKey = VIEW_BY_KEY[key.name] ?? VIEW_BY_KEY[keySeq]
     if (key.name === "tab" || viewKey) {
@@ -1389,7 +1471,7 @@ export function App() {
         <text>
           <span fg="#93c5fd">COMMAND CENTER</span>
           {approvals.length ? <span fg="#f87171">  ! {approvals.length} to approve</span> : null}
-          {stuckMail ? <span fg="#f87171">  ✉ {stuckMail} stuck</span> : null}
+          {stuckMail ? <span fg="#f87171">  @ ✉ {stuckMail} stuck</span> : null}
           <span fg={view === "central" ? "#ffffff" : "#6b7280"}>  [1] central</span>
           {agentDot("central")}
           <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [2] {projects.length} projects</span>

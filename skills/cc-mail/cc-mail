@@ -306,7 +306,15 @@ fi
 STATE="$(printf '%s' "$STATE_JSON" | jq -r '.state')"
 SOURCE="$(printf '%s' "$STATE_JSON" | jq -r '.source // "cursor"')"
 AGE=$(( $(date +%s) - $(printf '%s' "$STATE_JSON" | jq -r '.ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601' 2>/dev/null || echo 0) ))
-[ "$STATE" = "idle" ] || queued "agent is $STATE; delivered on its next tool call or turn end"
+if [ "$STATE" != "idle" ]; then
+  # A turn that has shown no hook event for a long time has probably stalled
+  # (connection error, crashed CLI): say so, so whoever reads the reason knows
+  # to look at the pane rather than wait.
+  if [ "$AGE" -ge 1800 ]; then
+    queued "agent has been $STATE for $((AGE / 60))m with no hook events — likely stalled; check its pane"
+  fi
+  queued "agent is $STATE; delivered on its next tool call or turn end"
+fi
 [ "$AGE" -lt 86400 ] || queued "agent state is stale; delivered on its next tool call or turn end"
 
 # --- the human must not be about to type into that pane ---------------------
