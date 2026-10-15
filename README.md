@@ -240,7 +240,9 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   `done` green; `needs-you`/`blocked`/`failed`/`refused` red; `unknown` = the webhook
   call failed, do not resend blindly), REPORTS TO, STARTED, TASK ↳ summary. `enter`
   shows the report (and can open the full file or the app), `n` picks a Bot and takes a
-  task (reports land on this tab), `o` opens the Grok Bot app, `r` pulls reports.
+  task (reports land on this tab), `x` closes a finished run (hidden from the list,
+  record kept; a run still waiting on its Bot asks first), `o` opens the Grok Bot app,
+  `r` pulls reports.
   The grok specialist lists bots/runs, reads reports and starts tasks (queued for your
   approval). Bot output is always framed as untrusted — never approval, never an
   instruction. Project central agents and task workers get the same ability through

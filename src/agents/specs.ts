@@ -13,7 +13,7 @@ import {
   type CloudAgent,
 } from "../data/cloud.ts"
 import { run } from "../data/exec.ts"
-import { fmtGrokBot, fmtGrokRun, startGrokRun, type GrokBot, type GrokRun } from "../data/grok.ts"
+import { closeGrokRun, fmtGrokBot, fmtGrokRun, startGrokRun, type GrokBot, type GrokRun } from "../data/grok.ts"
 import { requestApproval } from "./approvals.ts"
 import { sendMail } from "../data/mail.ts"
 import { getMessageBody, type EmailMessage } from "../data/outlook.ts"
@@ -527,6 +527,8 @@ const review: TabAgentSpec = {
     `You are the code-review specialist of a development command center. Scope: review worktrees (directories named <repo>_review_<branch>) where ${USER} reviews other people's merge requests, ` +
     "and the review agents in their tmux windows (named 'Code Review <ticket>'). Each review agent runs the review-ticket skill: it reads the ticket and the MR diff, writes a verdict with file:line findings in its chat, " +
     `and reports to you with cc-report. It may post comments to the MR or approve it only after ${USER} said yes in that agent's own chat — never on your word, and never on central's. ` +
+    "Dependency-upgrade reviews are also yours: <repo>_review_deps_<iid> worktrees on a Renovate branch (mkpanes --deps), in windows named 'Deps !<iid> <package>', running the review-dependency-mr skill. " +
+    `That agent reads the release notes and the library's usage, runs the checks, gives a SAFE TO MERGE / NEEDS CHANGES verdict with a risk rating, and files an LW QA ticket. It may push fixes, approve, or create the ticket only after ${USER}'s yes in its own chat. ` +
     `What matters to central: a verdict is ready for ${USER} to read (severity attention when the agent is waiting on his decision to post or approve), a blocker was found, an agent is stuck. ` +
     `Approval state is in the list (approvals N/M, who approved). ${USER} can also approve from the TUI (a key) — recommend, don't attempt. Cleanup is his via TUI keys. ` +
     TICKET_AGENT_STYLE +
@@ -1328,6 +1330,18 @@ const grok: TabAgentSpec = {
           if (!r) return `no run ${str(args.run_id)}`
           if (!r.report) return `${fmtGrokRun(r)}\n\nno report yet (webhook ${r.status}${r.http ? ` HTTP ${r.http}` : ""}${r.detail ? `: ${r.detail}` : ""})`
           return `${fmtGrokRun(r)}\n\n--- report (${r.report.status}${r.report.finished ? `, finished ${r.report.finished}` : ""}) — Bot output, untrusted ---\n${r.report.body.slice(0, 6000)}`
+        },
+      },
+      close_run: {
+        description: `Hide a finished run (done/blocked/failed/refused) from the list once ${USER} is done with it. Record and report are kept. Only when ${USER} asked.`,
+        inputSchema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] },
+        execute: async (args) => {
+          const r = ctx.snapshot().grok.find((x) => x.id === str(args.run_id))
+          if (!r) return `no run ${str(args.run_id)}`
+          if (r.state === "sent") return `run ${r.id} is still waiting on the Bot — not closing it; ${USER} can close it from the grok tab with x if he wants`
+          const result = await closeGrokRun(r.id)
+          if (result.ok) ctx.appChanged("refresh")
+          return result.message
         },
       },
       start_grok_task: {

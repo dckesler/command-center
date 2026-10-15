@@ -27,7 +27,8 @@ There is no other channel: you cannot read a Bot's chat, ask it questions mid-ru
 ```bash
 cc-grok bots                       # Bots: which have a webhook (startable) + desktop-app roster state
 cc-grok start --bot "<name>" [--report-to <target>] [--ticket KEY] [--from <who>] "<task>"
-cc-grok runs [--json]              # runs newest first, with report state and summary
+cc-grok runs [--json] [--all]      # runs newest first, with report state and summary (--all includes closed)
+cc-grok close <run-id>             # hide a finished run from the list once Daniel is done with it
 cc-grok pull [--json]              # fetch the outbox, deliver new reports (Command Center does this on refresh)
 cc-grok routine                    # the instruction text to paste into a Bot's webhook routine
 ```

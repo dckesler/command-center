@@ -74,7 +74,7 @@ import {
   type CloudAgent,
 } from "./data/cloud.ts"
 import { collect } from "./data/collect.ts"
-import { listGrokBots, listGrokRuns, pullGrokReports, startGrokRun, type GrokBot, type GrokRun } from "./data/grok.ts"
+import { closeGrokRun, listGrokBots, listGrokRuns, pullGrokReports, startGrokRun, type GrokBot, type GrokRun } from "./data/grok.ts"
 import { run } from "./data/exec.ts"
 import { approveMr, getMrExtras, gitlabUsername } from "./data/gitlab.ts"
 import {
@@ -1053,6 +1053,36 @@ export function App() {
     })
   }, [])
 
+  const closeGrok = useCallback(
+    (item: GrokRun) => {
+      if (item.state === "sent") {
+        setModal({
+          title: `Close run ${item.id} on ${item.bot}?`,
+          body: ["No report has arrived. Closing hides the run here; if the Bot still pushes a report it is delivered anyway."],
+          options: [{ label: "Close run", danger: true }, { label: "Keep" }],
+          selected: 1,
+          onPick: (i) => {
+            setModal(null)
+            if (i !== 0) return
+            setBusy(`closing ${item.id}…`)
+            closeGrokRun(item.id).then((r) => {
+              finishAction(r)
+              refreshGrok()
+            })
+          },
+        })
+        return
+      }
+      setBusy(`closing ${item.id}…`)
+      closeGrokRun(item.id).then((r) => {
+        finishAction(r)
+        refreshGrok()
+        setSelectedGrok((s) => Math.max(0, Math.min(s, grokRuns.length - 2)))
+      })
+    },
+    [finishAction, refreshGrok, grokRuns.length],
+  )
+
   const cancelSelectedCloud = useCallback(
     (agent: CloudAgent) => {
       setModal({
@@ -1367,6 +1397,7 @@ export function App() {
       }
       if (key.name === "n") startGrok()
       if (key.name === "return" && item) showGrokReport(item)
+      if (key.name === "x" && item) closeGrok(item)
       if (key.name === "o") run("open", ["-a", "Grok Bot"])
       return
     }
@@ -1836,7 +1867,7 @@ export function App() {
                       : view === "calendar"
                         ? "tab views   j/k move   enter join/open   o open in Outlook   ; agent   r refresh   ctrl+c quit"
                       : view === "grok"
-                        ? "tab views   j/k move   enter report   n new run   o open Grok Bot app   ; agent   r pull reports   ctrl+c quit"
+                        ? "tab views   j/k move   enter report   n new run   x close run   o open Grok Bot app   ; agent   r pull reports   ctrl+c quit"
                       : view === "cloud"
                         ? "tab views   j/k move   n start   s follow-up   x cancel run   o/enter open   ; agent   r refresh   ctrl+c quit"
                       : view === "tickets"

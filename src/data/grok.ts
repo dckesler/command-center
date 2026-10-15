@@ -177,6 +177,12 @@ export async function startGrokRun(
   return { ok: false, message: text || `cc-grok start failed for ${bot}`, id }
 }
 
+/** Hide a finished run from the list; the record and report are kept. */
+export async function closeGrokRun(id: string): Promise<GrokResult> {
+  const { ok, out, err } = await grok(["close", id])
+  return { ok, message: (out + err).trim() || (ok ? `run ${id} closed` : `could not close ${id}`) }
+}
+
 export function fmtGrokRun(r: GrokRun): string {
   const when = r.ts ? r.ts.slice(5, 16).replace("T", " ") : ""
   const head = `${r.id} ${r.bot} [${r.state}] → ${r.reportTo}${r.ticket ? ` (${r.ticket})` : ""} ${when} from ${r.from || "?"}: ${r.task.slice(0, 120)}`

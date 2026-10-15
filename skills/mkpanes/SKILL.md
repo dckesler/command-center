@@ -8,7 +8,7 @@ description: Launch a tmux dev workspace via the `mkpanes` command — resolve w
 Resolve the inputs `mkpanes` needs, validate them, then run the command. The script is the source of truth for repo aliases and behavior:
 
 - **Command:** `/Users/devadmin/.local/bin/mkpanes`
-- **Signature:** `mkpanes <repo-or-path> [-w <branch>] [--no-ticket] [--no-format] [--qa] [--review] [--claude] [--from <base-branch>]`
+- **Signature:** `mkpanes <repo-or-path> [-w <branch>] [--no-ticket] [--no-format] [--qa] [--review] [--deps <MR URL or !iid>] [--claude] [--from <base-branch>]`
 
 ## What the command does
 
@@ -22,7 +22,8 @@ Resolve the inputs `mkpanes` needs, validate them, then run the command. The scr
 - Worktree directories are `<repo>_<branch>` where `<repo>` is the alias, or the directory basename when a path was given.
 - **`--qa`** — worktree mode only: QA mode. Creates/opens the worktree (checks out the branch) but does **not** run `/start-ticket`. Instead runs `/qa-ticket <TICKET>` in the AI pane — sets Jira **Test Lead** (`customfield_11800`) to Daniel, pulls the QA steps, waits for the tester to work through them, and posts the outcome (pass or issues found) as a Jira comment when done. Assignee, status, and sprint are never touched. QA worktrees are named `<repo>_qa_<branch>` (instead of `<repo>_<branch>`) so the command center can list them in its dedicated QA tab. This holds even when the branch is already checked out in a dev worktree: QA gets its own `_qa_` directory (a second checkout of the same branch, via `git worktree add --force`), and each mode only ever reuses a directory of its own kind.
 - **`--review`** — worktree mode only: code-review mode for someone else's MR. Creates/opens a `<repo>_review_<branch>` worktree, names the tmux window `Code Review <TICKET>`, and runs `/review-ticket <TICKET>` in the AI pane — the agent reads the ticket's acceptance criteria and the MR diff, writes a verdict with file:line findings, reports to the Command Center review specialist via `cc-report`, and posts comments / approves on GitLab only after Daniel says yes in that chat. Pass `-t <TICKET>` when the branch name is not the ticket key. The command center's review tab lists these worktrees.
-- **`--claude`** — use `claude` instead of `cursor-cli` (the default) in the agent pane (top-left). All prompts (plain, `/start-ticket`, `/resume-ticket`, QA, code review) are passed the same way either way. (`--cursor` is still accepted as a no-op for backwards compatibility.)
+- **`--deps <MR URL or !iid>`** — dependency-upgrade review of a Renovate MR. Takes the MR instead of `-w` (cannot be combined with `-w`, `--qa`, or `--review`). It reads the MR with `glab` to get its source branch, creates/opens a `<repo>_review_deps_<iid>` worktree on that branch, names the tmux window `Deps !<iid> <package>`, and runs `/review-dependency-mr <MR URL>` in the AI pane. That agent checks the release notes, the library's usage, and the repo's checks, gives a verdict, and files the LW QA ticket. It skips the automatic `npm install` pane, because the agent does a frozen-lockfile install itself. A URL must belong to the repo given. The `_review_` in the name puts it on the command center's review tab.
+- **`--claude`** — use `claude` instead of `cursor-cli` (the default) in the agent pane (top-left). All prompts (plain, `/start-ticket`, `/resume-ticket`, QA, code review, dependency review) are passed the same way either way. (`--cursor` is still accepted as a no-op for backwards compatibility.)
 - **`--code-review`** — code review mode. Starts the AI with a "code reviewer" role prompt and waits for the user to provide code, diffs, or descriptions to review. Works in both plain and worktree mode; takes precedence over `--qa` and `/start-ticket`.
 
 It opens a new tmux window with: top-left `cursor-cli` (or `/start-ticket`) at 60% width, top-right `vim`, and a bottom row of shell panes; in worktree mode with a `package.json` it runs `nvm use && <install>` in a bottom pane, where the install command is detected from the lockfile (`pnpm-lock.yaml` → `pnpm install`, `yarn.lock` → `yarn`, otherwise `npm install`).
@@ -35,7 +36,7 @@ From what the user typed, extract:
 
 1. **Repo** — e.g. "lists", "node-task-worker", or a path.
 2. **Branch / ticket** — a Jira key like `LW-17124` (worktree mode) or an explicit branch name. If the user names a ticket or says "worktree", this is worktree mode. If they just say "open <repo>", it's plain mode (no `-w`).
-3. **Flags** — `--no-ticket` (they don't want /start-ticket), `--no-format` (skip formatting), `--qa` (QA mode — surface QA steps, don't touch the ticket), `--claude` (use `claude` instead of the default `cursor-cli` in the agent pane), `--code-review` (start AI in code reviewer role, wait for user input).
+3. **Flags** — `--no-ticket` (they don't want /start-ticket), `--no-format` (skip formatting), `--qa` (QA mode — surface QA steps, don't touch the ticket), `--deps <MR>` (they want a Renovate / dependency-upgrade MR reviewed; no ticket key needed, skip Step 3), `--claude` (use `claude` instead of the default `cursor-cli` in the agent pane), `--code-review` (start AI in code reviewer role, wait for user input).
 
 Only ask the user for pieces that are missing or ambiguous. Common gap: repo named but no ticket, or ticket named but no repo — ask for the missing one.
 
@@ -72,6 +73,8 @@ Show the resolved command on one line and the effect, then run it. Examples:
 > Running `mkpanes lists -w LW-17124` — creates worktree `lists_LW-17124`, opens a tmux window, and runs `/start-ticket LW-17124` in the AI pane. Proceed?
 
 > Running `mkpanes lists -w LW-17124 --qa` — creates worktree `lists_qa_LW-17124`, opens a tmux window, and runs `/qa-ticket LW-17124` in the AI pane. The ticket will not be assigned or updated. Proceed?
+
+> Running `mkpanes lists --deps !3780` — creates worktree `lists_review_deps_3780` on `renovate/dayjs-1.x`, opens window `Deps !3780 dayjs`, and runs `/review-dependency-mr` on that MR in the AI pane. Proceed?
 
 Build the command with the exact positional order — **repo first, then `-w`, then branch**, flags anywhere:
 

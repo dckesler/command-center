@@ -45,6 +45,7 @@ STATE="$CC_CONFIG_DIR/grok"
 RUNS="$STATE/runs.jsonl"
 OUTBOX="$STATE/outbox"
 DELIVERED="$STATE/delivered"
+CLOSED="$STATE/closed"
 TEXT_MAX=4000
 
 cc_cfg() { # cc_cfg <jq path> <default>   (from config.json)
@@ -62,7 +63,8 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   cc-grok start --bot <name> [--report-to <target>] [--ticket <KEY>] [--from <who>] <task>
-  cc-grok runs [--json]
+  cc-grok runs [--json] [--all]       (--all includes closed runs)
+  cc-grok close <run-id>              hide a finished run from the list (record is kept)
   cc-grok pull [--json]
   cc-grok bots
   cc-grok routine
@@ -90,13 +92,15 @@ append_run() { printf '%s\n' "$1" >> "$RUNS"; }
 
 # runs_json: every run as a JSON array, newest first, joined with its report
 # (if the outbox has one) and delivery state.
-runs_json() {
+runs_json() { # runs_json [all]
   [ -f "$RUNS" ] || { echo "[]"; return; }
-  local delivered="[]"
+  local delivered="[]" closed="[]"
   [ -f "$DELIVERED" ] && delivered="$(jq -Rsc 'split("\n") | map(select(length > 0))' "$DELIVERED")"
-  jq -Rsc --argjson delivered "$delivered" '
+  [ -f "$CLOSED" ] && closed="$(jq -Rsc 'split("\n") | map(select(length > 0))' "$CLOSED")"
+  jq -Rsc --argjson delivered "$delivered" --argjson closed "$closed" --arg all "${1:-}" '
     split("\n") | map(select(length > 0) | fromjson?) | reverse
-    | map(. + {delivered: (.id as $id | $delivered | index($id) != null)})' "$RUNS" \
+    | map(. + {delivered: (.id as $id | $delivered | index($id) != null), closed: (.id as $id | $closed | index($id) != null)})
+    | if $all == "all" then . else map(select(.closed | not)) end' "$RUNS" \
   | python3 -c "$JOIN_REPORTS_PY" "$OUTBOX"
 }
 
@@ -199,7 +203,18 @@ case "$CMD" in
     exit 0 ;;
 
   runs)
-    if [ "${1:-}" = "--json" ]; then runs_json; else runs_json | fmt_runs; fi
+    JSON=0; ALL=""
+    for a in "$@"; do case "$a" in --json) JSON=1 ;; --all) ALL=all ;; esac; done
+    if [ "$JSON" = 1 ]; then runs_json "$ALL"; else runs_json "$ALL" | fmt_runs; fi
+    exit 0 ;;
+
+  close)
+    RID="${1:-}"
+    [ -n "$RID" ] || usage
+    [ -f "$RUNS" ] && grep -q "\"id\":\"$RID\"" "$RUNS" || { echo "cc-grok: no run $RID" >&2; exit 4; }
+    if [ -f "$CLOSED" ] && grep -qx "$RID" "$CLOSED"; then echo "run $RID already closed"; exit 0; fi
+    printf '%s\n' "$RID" >> "$CLOSED"
+    echo "run $RID closed (hidden from cc-grok runs; --all still shows it)"
     exit 0 ;;
 
   routine)

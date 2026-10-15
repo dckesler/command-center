@@ -111,7 +111,7 @@ export function Grok({
       <text fg={C.dim}>
         {runs.length === 0
           ? "no runs yet — press n to send a task to a Bot (reports land here), or ask any agent to `cc-grok start`"
-          : "enter: report  n: new run  o: open Grok Bot app  r: pull reports"}
+          : "enter: report  n: new run  x: close run  o: open Grok Bot app  r: pull reports"}
       </text>
       {runs.length > 0 ? (
         <text>
