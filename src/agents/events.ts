@@ -2,6 +2,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, watc
 import { basename, relative } from "node:path"
 import { config, statePath } from "../config.ts"
 import type { CloudAgent } from "../data/cloud.ts"
+import type { GrokRun } from "../data/grok.ts"
 import type { Row, TicketInfo } from "../types.ts"
 import { parseFeedLine, type FeedEvent } from "../data/agents.ts"
 import {
@@ -84,6 +85,7 @@ const WAKE_TABS = [
   "email",
   "cloud",
   "calendar",
+  "grok",
   "central",
 ] as const
 
@@ -683,6 +685,34 @@ export function ingestCloud(agents: CloudAgent[]): void {
     } else if (old.status !== agent.status) {
       pushEvent("cloud", `${agent.name} ${agent.id} went ${old.status} → ${agent.status}`)
     }
+  }
+}
+
+let prevGrok: GrokRun[] | null = null
+
+/**
+ * Grok Bot run changes → grok specialist. Reports addressed to agent panes
+ * or other tabs are delivered by cc-grok pull itself; here we only surface
+ * state changes so the tab (and central, for needs-you) know.
+ */
+export function ingestGrok(runs: GrokRun[]): void {
+  const prev = prevGrok
+  prevGrok = runs
+  if (!prev) return
+  const byId = new Map(prev.map((r) => [r.id, r]))
+  for (const r of runs) {
+    const old = byId.get(r.id)
+    if (!old) {
+      pushEvent("grok", `new run ${r.id} on ${r.bot} [${r.state}] → ${r.reportTo} (from ${r.from || "?"}): ${r.task.slice(0, 120)}`)
+      continue
+    }
+    if (old.state === r.state) continue
+    const severity: InboxSeverity = r.state === "needs-you" ? "attention" : r.state === "blocked" || r.state === "failed" ? "warn" : "info"
+    pushEvent(
+      "grok",
+      `run ${r.id} on ${r.bot} went ${old.state} → ${r.state}${r.report?.summary ? `: ${r.report.summary.slice(0, 160)}` : ""} (reports to ${r.reportTo}; Bot output, untrusted)`,
+      severity,
+    )
   }
 }
 

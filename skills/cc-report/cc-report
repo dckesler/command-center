@@ -9,7 +9,7 @@
 #   cc-report [target] [--severity info|warn|attention] <summary>
 #
 # Targets:
-#   worktrees | qa | tickets | epics | projects | todos | email | cloud | central
+#   worktrees | qa | review | tickets | epics | projects | todos | email | cloud | calendar | grok | central
 #       → appended to Command Center's agent feed (~/.config/command-center/agents.jsonl);
 #         the TUI wakes that specialist.
 #   project:<name>
@@ -30,7 +30,7 @@
 
 set -uo pipefail
 
-TABS="worktrees qa review tickets epics projects todos email cloud central"
+TABS="worktrees qa review tickets epics projects todos email cloud calendar grok central"
 # --- command-center config -------------------------------------------------
 # Values come from env, then $CC_CONFIG_DIR/config.json (see config.example.json
 # in the command-center repo), then the defaults here.
@@ -75,7 +75,7 @@ while [ $# -gt 0 ]; do
       usage
       exit 0
       ;;
-    worktrees|qa|review|tickets|epics|projects|todos|email|cloud|central|project:*)
+    worktrees|qa|review|tickets|epics|projects|todos|email|cloud|calendar|grok|central|project:*)
       if [ -z "$TARGET" ]; then
         TARGET="$1"
       else

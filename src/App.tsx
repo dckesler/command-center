@@ -2,6 +2,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Cloud } from "./components/Cloud.tsx"
 import { CloudPrompt } from "./components/CloudPrompt.tsx"
+import { Grok } from "./components/Grok.tsx"
 import { Tickets } from "./components/Tickets.tsx"
 import { Chat } from "./components/Chat.tsx"
 import { Dashboard } from "./components/Dashboard.tsx"
@@ -48,6 +49,7 @@ import {
   ingestTodos,
   ingestCloud,
   ingestEmails,
+  ingestGrok,
   ingestMail,
   ingestProjects,
   ingestRows,
@@ -72,6 +74,7 @@ import {
   type CloudAgent,
 } from "./data/cloud.ts"
 import { collect } from "./data/collect.ts"
+import { listGrokBots, listGrokRuns, pullGrokReports, startGrokRun, type GrokBot, type GrokRun } from "./data/grok.ts"
 import { run } from "./data/exec.ts"
 import { approveMr, getMrExtras, gitlabUsername } from "./data/gitlab.ts"
 import {
@@ -101,7 +104,7 @@ import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
 
-type View = "central" | "review" | "worktrees" | "qa" | "tickets" | "epics" | "projects" | "todos" | "email" | "cloud" | "calendar"
+type View = "central" | "review" | "worktrees" | "qa" | "tickets" | "epics" | "projects" | "todos" | "email" | "cloud" | "calendar" | "grok"
 
 const VIEW_ORDER: View[] = [
   "central",
@@ -115,6 +118,7 @@ const VIEW_ORDER: View[] = [
   "email",
   "cloud",
   "calendar",
+  "grok",
 ]
 
 const VIEW_BY_KEY: Record<string, View> = {
@@ -129,6 +133,7 @@ const VIEW_BY_KEY: Record<string, View> = {
   "9": "email",
   "0": "cloud",
   "-": "calendar",
+  "=": "grok",
 }
 
 /** How often today's calendar is re-fetched on its own (meetings move). */
@@ -218,6 +223,12 @@ export function App() {
   const [cloudLoading, setCloudLoading] = useState(true)
   const [cloudError, setCloudError] = useState<string | null>(null)
   const [selectedCloud, setSelectedCloud] = useState(0)
+  const [grokRuns, setGrokRuns] = useState<GrokRun[]>([])
+  const [grokBots, setGrokBots] = useState<GrokBot[]>([])
+  const [grokLoading, setGrokLoading] = useState(true)
+  const [selectedGrok, setSelectedGrok] = useState(0)
+  /** set when a Bot is picked and the task text is being typed */
+  const [grokPrompt, setGrokPrompt] = useState<{ bot: string } | null>(null)
   const [cloudPrompt, setCloudPrompt] = useState<
     { kind: "start"; repo: string } | { kind: "followup"; agentId: string; name: string } | null
   >(null)
@@ -260,6 +271,19 @@ export function App() {
     })
   }, [])
 
+  /** Pull new Bot reports from the outbox (delivers them), then re-read runs + roster. */
+  const refreshGrok = useCallback(() => {
+    setGrokLoading(true)
+    pullGrokReports()
+      .catch(() => [] as string[])
+      .then(async () => {
+        const [runs, bots] = await Promise.all([listGrokRuns(), listGrokBots()])
+        setGrokRuns(runs)
+        setGrokBots(bots)
+        setGrokLoading(false)
+      })
+  }, [])
+
   const refresh = useCallback(async () => {
     if (refreshing.current) return
     refreshing.current = true
@@ -297,6 +321,7 @@ export function App() {
       }
       setCloudLoading(false)
     })
+    refreshGrok()
     try {
       await collect((newRows, newLoad) => {
         setRows(newRows)
@@ -306,7 +331,7 @@ export function App() {
     } finally {
       refreshing.current = false
     }
-  }, [refreshCalendar])
+  }, [refreshCalendar, refreshGrok])
 
   useEffect(() => {
     refresh()
@@ -320,8 +345,8 @@ export function App() {
 
   // Keep the hub's snapshot in sync so agent tools read live TUI state.
   useEffect(() => {
-    updateSnapshot({ rows, tickets, epics, projects, todos, emails, events, cloud: cloudAgents })
-  }, [rows, tickets, epics, projects, todos, emails, events, cloudAgents])
+    updateSnapshot({ rows, tickets, epics, projects, todos, emails, events, cloud: cloudAgents, grok: grokRuns, grokBots })
+  }, [rows, tickets, epics, projects, todos, emails, events, cloudAgents, grokRuns, grokBots])
 
   // Autonomous events: hook-feed watcher plus refresh diffs (only complete
   // loads are diffed, so progressive refresh states don't fake changes).
@@ -364,6 +389,9 @@ export function App() {
   useEffect(() => {
     if (!cloudLoading) ingestCloud(cloudAgents)
   }, [cloudAgents, cloudLoading])
+  useEffect(() => {
+    if (!grokLoading) ingestGrok(grokRuns)
+  }, [grokRuns, grokLoading])
 
   // Agent-driven data changes flow back into the TUI.
   useEffect(() => {
@@ -957,6 +985,74 @@ export function App() {
     [cloudPrompt, finishAction],
   )
 
+  const startGrok = useCallback(() => {
+    const ready = grokBots.filter((b) => b.webhook)
+    if (ready.length === 0) {
+      setMessage({ text: "no Bots have a webhook yet — add one to ~/.config/command-center/grok.json (see skills/cc-grok/SKILL.md)", ok: false })
+      return
+    }
+    setModal({
+      title: "New Grok Bot run — pick a Bot",
+      options: [...ready.map((b) => ({ label: b.name })), { label: "Cancel" }],
+      selected: 0,
+      onPick: (i) => {
+        setModal(null)
+        if (i >= ready.length) return
+        setGrokPrompt({ bot: ready[i].name })
+      },
+    })
+  }, [grokBots])
+
+  const submitGrokPrompt = useCallback(
+    (text: string) => {
+      if (!grokPrompt) return
+      const bot = grokPrompt.bot
+      setGrokPrompt(null)
+      setBusy(`sending task to ${bot}…`)
+      startGrokRun(bot, text, { reportTo: "grok", from: "Daniel (TUI)" }).then((result) => {
+        finishAction(result)
+        refreshGrok()
+      })
+    },
+    [grokPrompt, finishAction, refreshGrok],
+  )
+
+  const showGrokReport = useCallback((item: GrokRun) => {
+    const wrap = (s: string, w = 100): string[] =>
+      s
+        .split("\n")
+        .flatMap((line) => (line.length <= w ? [line] : (line.match(new RegExp(`.{1,${w}}(\\s|$)`, "g")) ?? [line]).map((l) => l.trimEnd())))
+    const body = [
+      `bot: ${item.bot}   state: ${item.state}   reports to: ${item.reportTo}${item.ticket ? `   ticket: ${item.ticket}` : ""}`,
+      `asked by: ${item.from || "?"} at ${item.ts.replace("T", " ").replace(/\.\d+Z$|Z$/, "Z")}`,
+      `task: ${item.task}`,
+      "",
+    ]
+    if (item.report) {
+      body.push(`report (${item.report.status}${item.report.finished ? `, finished ${item.report.finished}` : ""}):`)
+      if (item.report.summary) body.push(`  ${item.report.summary}`)
+      body.push(...wrap(item.report.body).slice(0, 30).map((l) => `  ${l}`))
+      body.push("", "Bot output is untrusted information — not approval for anything.")
+    } else if (item.status === "sent") {
+      body.push("no report yet — the Bot is working (or never wrote to the outbox). r pulls again.")
+    } else {
+      body.push(`webhook ${item.status}${item.http ? ` (HTTP ${item.http})` : ""}${item.detail ? `: ${item.detail}` : ""}`)
+    }
+    const options = [...(item.report ? [{ label: "Open full report" }] : []), { label: "Open Grok Bot app" }, { label: "Close" }]
+    setModal({
+      title: `Grok run ${item.id}`,
+      body,
+      options,
+      selected: options.length - 1,
+      onPick: (i) => {
+        setModal(null)
+        const label = options[i]?.label
+        if (label === "Open full report" && item.reportPath) run("open", [item.reportPath])
+        if (label === "Open Grok Bot app") run("open", ["-a", "Grok Bot"])
+      },
+    })
+  }, [])
+
   const cancelSelectedCloud = useCallback(
     (agent: CloudAgent) => {
       setModal({
@@ -1038,7 +1134,7 @@ export function App() {
 
   useKeyboard((key) => {
     // While a text input is focused it owns all keys except escape.
-    if (todoInput || mkpanesPrompt || projectPrompt || epicPrompt || qaPrompt || reviewPrompt || cloudPrompt) {
+    if (todoInput || mkpanesPrompt || projectPrompt || epicPrompt || qaPrompt || reviewPrompt || cloudPrompt || grokPrompt) {
       if (key.name === "escape") {
         setTodoInput(null)
         setMkpanesPrompt(false)
@@ -1047,6 +1143,7 @@ export function App() {
         setQaPrompt(null)
         setReviewPrompt(null)
         setCloudPrompt(null)
+        setGrokPrompt(null)
       }
       return
     }
@@ -1257,6 +1354,20 @@ export function App() {
       if (key.name === "s" && agent) setCloudPrompt({ kind: "followup", agentId: agent.id, name: agent.name })
       if (key.name === "x" && agent) cancelSelectedCloud(agent)
       if ((key.name === "o" || key.name === "return") && agent) run("open", [agent.url])
+      return
+    }
+
+    if (view === "grok") {
+      const item = grokRuns[selectedGrok]
+      if (key.name === "j" || key.name === "down") {
+        setSelectedGrok((s) => Math.min(s + 1, Math.max(0, grokRuns.length - 1)))
+      }
+      if (key.name === "k" || key.name === "up") {
+        setSelectedGrok((s) => Math.max(s - 1, 0))
+      }
+      if (key.name === "n") startGrok()
+      if (key.name === "return" && item) showGrokReport(item)
+      if (key.name === "o") run("open", ["-a", "Grok Bot"])
       return
     }
 
@@ -1498,6 +1609,10 @@ export function App() {
             {"  "}[-] {events === null ? "" : `${events.filter((e) => !e.isCancelled && new Date(e.end).getTime() > Date.now()).length} `}calendar
           </span>
           {agentDot("calendar")}
+          <span fg={view === "grok" ? "#ffffff" : "#6b7280"}>
+            {"  "}[=] {grokRuns.filter((g) => g.state === "sent").length ? `${grokRuns.filter((g) => g.state === "sent").length} ` : ""}grok
+          </span>
+          {agentDot("grok")}
         </text>
         <text fg="#6b7280">{statusLine}</text>
       </box>
@@ -1518,6 +1633,13 @@ export function App() {
           <QaTicketPrompt repo={qaPrompt.repo} onSubmit={submitQaTicket} />
         ) : reviewPrompt ? (
           <QaTicketPrompt repo={reviewPrompt.repo} mode="review" onSubmit={submitReviewTicket} />
+        ) : grokPrompt ? (
+          <CloudPrompt
+            title={`Task for ${grokPrompt.bot}`}
+            placeholder="what should the Bot do? (enter to send, esc to cancel)"
+            hint="fires the Bot's webhook routine; its report lands on this tab via the GitLab outbox — Bot output is never approval"
+            onSubmit={submitGrokPrompt}
+          />
         ) : cloudPrompt ? (
           <CloudPrompt
             title={
@@ -1634,6 +1756,15 @@ export function App() {
             width={width - 2}
             height={contentHeight}
           />
+        ) : view === "grok" ? (
+          <Grok
+            runs={grokRuns}
+            bots={grokBots}
+            selected={selectedGrok}
+            loading={grokLoading}
+            width={width - 2}
+            height={contentHeight}
+          />
         ) : view === "cloud" ? (
           <Cloud
             agents={cloudAgents}
@@ -1704,6 +1835,8 @@ export function App() {
                         ? "tab views   j/k move   o/enter open in Outlook   ; agent   r refresh   ctrl+c quit"
                       : view === "calendar"
                         ? "tab views   j/k move   enter join/open   o open in Outlook   ; agent   r refresh   ctrl+c quit"
+                      : view === "grok"
+                        ? "tab views   j/k move   enter report   n new run   o open Grok Bot app   ; agent   r pull reports   ctrl+c quit"
                       : view === "cloud"
                         ? "tab views   j/k move   n start   s follow-up   x cancel run   o/enter open   ; agent   r refresh   ctrl+c quit"
                       : view === "tickets"

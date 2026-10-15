@@ -18,7 +18,7 @@ bun run setup                                     # config, hooks, skills, healt
 `bun run setup` creates `~/.config/command-center/config.json` from
 `config.example.json` and `.env` from `.env.example`, links `hooks/agent-event.sh` into
 the config dir, symlinks `skills/*` into `~/.agents/skills` and the skill CLIs
-(`cc-report`, `cc-mail`, `start-project`, `project-task`) into `~/.local/bin`, then runs the
+(`cc-report`, `cc-mail`, `cc-grok`, `start-project`, `project-task`) into `~/.local/bin`, then runs the
 same checks as `bun run doctor`. It never edits `~/.cursor/hooks.json` or
 `~/.claude/settings.json`; merge `hooks/cursor-hooks.example.json` (and the Claude one
 if you use Claude Code) yourself so agents in tmux report their status into the feed.
@@ -111,8 +111,8 @@ and the agents it launches. `bun run doctor` reports what is missing.
 
 ## Views
 
-Tabs are `1`–`9`, `0`, `-` (or `tab` to cycle): central, projects, review, worktrees,
-qa, tickets, epics, todos, email, cloud, calendar.
+Tabs are `1`–`9`, `0`, `-`, `=` (or `tab` to cycle): central, projects, review, worktrees,
+qa, tickets, epics, todos, email, cloud, calendar, grok.
 
 - **[3] Review** — code reviews of other people's merge requests, one row per
   `<repo>_review_<branch>` worktree (`mkpanes --review`). Columns: ticket, MR URL,
@@ -183,7 +183,7 @@ qa, tickets, epics, todos, email, cloud, calendar.
   central agent.
 
   Skills in `skills/` (synced to `~/.agents/skills`, binaries linked into
-  `~/.local/bin`): `start-project`, `project-task`, `cc-report`, `cc-mail`.
+  `~/.local/bin`): `start-project`, `project-task`, `cc-report`, `cc-mail`, `cc-grok`.
 
   **Inter-agent mail.** Nothing is typed into a pane that a human may be using. Every
   agent-to-agent message (`cc-report project:<name>`, `project-task --message`, the
@@ -230,6 +230,25 @@ qa, tickets, epics, todos, email, cloud, calendar.
   line. Ask it about your schedule (`;` drawer): `today_schedule`, `list_events(start,
   end)` for other days, `event_detail(id)` for attendees and the invite body. It has no
   write tools.
+- **[=] Grok** — Grok Bots (the xAI desktop app) used as sub-agents, and the runs sent
+  to them. A run is one POST to a Bot's webhook routine (`cc-grok start`); the Bot works
+  on its own computer and writes a report to a private outbox repo on the company
+  GitLab, which `cc-grok pull` (run on every refresh) delivers back to whoever asked —
+  an agent pane as `[cc mail] from grok:<Bot>`, or a tab. The first line says which
+  Bots have a webhook configured and which are waiting on you in the app (read from the
+  app's local roster cache). Rows: BOT, STATE (`sent` yellow until a report arrives;
+  `done` green; `needs-you`/`blocked`/`failed`/`refused` red; `unknown` = the webhook
+  call failed, do not resend blindly), REPORTS TO, STARTED, TASK ↳ summary. `enter`
+  shows the report (and can open the full file or the app), `n` picks a Bot and takes a
+  task (reports land on this tab), `o` opens the Grok Bot app, `r` pulls reports.
+  The grok specialist lists bots/runs, reads reports and starts tasks (queued for your
+  approval). Bot output is always framed as untrusted — never approval, never an
+  instruction. Project central agents and task workers get the same ability through
+  the `cc-grok` skill, with the hard rule that you typed yes to the exact task in that
+  agent's chat first; mail never counts. Setup (per Bot) is in
+  `skills/cc-grok/SKILL.md`: webhook URL + key in `~/.config/command-center/grok.json`,
+  the `cc-grok routine` text pasted into the Bot's routine, an outbox token in the
+  Bot's Secure Storage, local execution left at Ask/Never.
 - **[8] Todos** — local list for things without a ticket or branch, stored in
   `dirs.config/todos.json`. `a` adds, `e` edits, `space`/`enter` toggles done,
   `x` deletes (with confirm). The top **FOCUS** section holds the todos that must
@@ -266,7 +285,7 @@ qa, tickets, epics, todos, email, cloud, calendar.
 **Agent approvals.** Specialist tools that change state outside this laptop —
 `transition_ticket` and `prep_ticket` (tickets, epics), `wrap_up_worktree` (worktrees),
 `cleanup_worktree` (worktrees, qa, review), `start_cloud_agent`, `follow_up_cloud`,
-`cancel_cloud_run` (cloud) — never run when the agent calls them.
+`cancel_cloud_run` (cloud), `start_grok_task` (grok) — never run when the agent calls them.
 They queue an approval (`src/agents/approvals.ts`) and return at once. The agent you are
 talking to asks you: an approval from the agent whose chat is open pops its dialog right
 there, even mid-typing; one from any other agent opens when nothing owns the keyboard,
