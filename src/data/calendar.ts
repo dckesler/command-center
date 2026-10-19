@@ -1,10 +1,10 @@
 import { run } from "./exec.ts"
-import { m365UserName } from "./outlook.ts"
+import { m365LoggedIn, m365UserName } from "./outlook.ts"
 
 /**
  * Outlook calendar via the CLI for Microsoft 365 (`m365`), read-only. Requires
  * a completed `m365 login` (device code) with the Calendars.Read delegated
- * permission. Uses the calendarView range query so recurring meetings are
+ * permission. Uses the Graph calendarView range query so recurring meetings are
  * expanded into their occurrences.
  */
 
@@ -94,30 +94,27 @@ export function dayBounds(date = new Date()): { start: Date; end: Date } {
   return { start, end }
 }
 
-/** null = calendar unavailable (not logged in, CLI missing, or command failed). */
+const CALENDAR_SELECT =
+  "id,subject,start,end,isAllDay,isCancelled,location,organizer,attendees,responseStatus,showAs,isOnlineMeeting,onlineMeeting,onlineMeetingUrl,webLink,bodyPreview"
+
+/**
+ * null = calendar unavailable (not logged in, CLI missing, or command failed).
+ * Goes straight to Graph's calendarView: `m365 outlook event list` reads
+ * /events, which only knows series masters, so recurring meetings never
+ * appeared. calendarView expands occurrences and exceptions in the range.
+ */
 export async function getEvents(start: Date, end: Date): Promise<CalendarEvent[] | null> {
-  const upn = await m365UserName()
-  if (!upn) return null
-  const res = await run(
-    "m365",
-    [
-      "outlook",
-      "event",
-      "list",
-      "--userName",
-      upn,
-      "--startDateTime",
-      start.toISOString(),
-      "--endDateTime",
-      end.toISOString(),
-      "--output",
-      "json",
-    ],
-    { timeoutMs: 60_000 },
-  )
+  if (!(await m365LoggedIn())) return null
+  const url =
+    "https://graph.microsoft.com/v1.0/me/calendarView" +
+    `?startDateTime=${encodeURIComponent(start.toISOString())}` +
+    `&endDateTime=${encodeURIComponent(end.toISOString())}` +
+    `&$top=100&$orderby=start/dateTime&$select=${CALENDAR_SELECT}`
+  const res = await run("m365", ["request", "--url", url, "--output", "json"], { timeoutMs: 60_000 })
   if (!res.ok) return null
   try {
-    const events = JSON.parse(res.stdout) as GraphEvent[]
+    const parsed = JSON.parse(res.stdout) as { value?: GraphEvent[] } | GraphEvent[]
+    const events = Array.isArray(parsed) ? parsed : (parsed.value ?? [])
     return events
       .map(normalize)
       .filter((e) => e.start)
