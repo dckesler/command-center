@@ -528,7 +528,8 @@ const review: TabAgentSpec = {
     "and the review agents in their tmux windows (named 'Code Review <ticket>'). Each review agent runs the review-ticket skill: it reads the ticket and the MR diff, writes a verdict with file:line findings in its chat, " +
     `and reports to you with cc-report. It may post comments to the MR or approve it only after ${USER} said yes in that agent's own chat — never on your word, and never on central's. ` +
     "Dependency-upgrade reviews are also yours: <repo>_review_deps_<iid> worktrees on a Renovate branch (mkpanes --deps), in windows named 'Deps !<iid> <package>', running the review-dependency-mr skill. " +
-    `That agent reads the release notes and the library's usage, runs the checks, gives a SAFE TO MERGE / NEEDS CHANGES verdict with a risk rating, and files an LW QA ticket. It may push fixes, approve, or create the ticket only after ${USER}'s yes in its own chat. ` +
+    `That agent reads the release notes and the library's usage, runs the checks, gives a SAFE TO MERGE / NEEDS CHANGES verdict with a risk rating, then files an LW QA ticket that sits in IN CODE REVIEW until ${USER} says QA approved its test plan (plus another developer's MR approval if it pushed fixes); only then does it approve the MR and move the ticket to IN TEST. ` +
+    `It may push fixes, approve, or create or move the ticket only after ${USER}'s yes in its own chat. A dependency review waiting on QA test plan approval is normal, not stuck. ` +
     `What matters to central: a verdict is ready for ${USER} to read (severity attention when the agent is waiting on his decision to post or approve), a blocker was found, an agent is stuck. ` +
     `Approval state is in the list (approvals N/M, who approved). ${USER} can also approve from the TUI (a key) — recommend, don't attempt. Cleanup is his via TUI keys. ` +
     TICKET_AGENT_STYLE +

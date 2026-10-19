@@ -97,7 +97,7 @@ import {
   runMkpanes,
   targetSession,
 } from "./data/tmux.ts"
-import { deleteBranch, removeWorktree } from "./data/worktrees.ts"
+import { deleteBranch, depsReviewIid, removeWorktree } from "./data/worktrees.ts"
 import { planWrapUp, runCleanup, runWrapUp } from "./data/wrapup.ts"
 import { discardMail, isMailStuck, kickMail, peekMail, readPendingMail, type PendingMail } from "./data/mail.ts"
 import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
@@ -526,8 +526,31 @@ export function App() {
       }
       // The worktree already exists: mkpanes must be told which kind it is so it
       // reuses the right checkout and starts the right skill — QA rows re-run
-      // /qa-ticket (--qa), review rows re-run /review-ticket (--review), and
+      // /qa-ticket (--qa), review rows re-run /review-ticket (--review),
+      // dependency reviews re-run /review-dependency-mr (--deps <iid>), and
       // dev rows get /resume-ticket.
+      const depsIid = row.isReview ? depsReviewIid(row.worktreePath) : null
+      if (depsIid) {
+        setModal({
+          title: `Re-open dependency review for ${row.repo} !${depsIid} (${row.branch}) via mkpanes?`,
+          options: [{ label: "Open dependency review window" }, { label: "Cancel" }],
+          selected: 0,
+          onPick: (i) => {
+            setModal(null)
+            if (i !== 0) return
+            setBusy(`opening dependency review for !${depsIid}…`)
+            targetSession()
+              .then((session) => runMkpanes([row.repo, "--deps", depsIid], session))
+              .then((result) =>
+                finishAction({
+                  ...result,
+                  message: result.ok ? `Deps !${depsIid} window opened — /review-dependency-mr running` : result.message,
+                }),
+              )
+          },
+        })
+        return
+      }
       const kind = row.isQa ? "qa" : row.isReview ? "review" : "dev"
       const verb = kind === "qa" ? "Re-open QA for" : kind === "review" ? "Re-open code review for" : "Resume"
       const pick = kind === "qa" ? "Open QA window" : kind === "review" ? "Open review window" : "Resume in tmux window"

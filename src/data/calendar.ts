@@ -1,4 +1,5 @@
 import { run } from "./exec.ts"
+import { m365UserName } from "./outlook.ts"
 
 /**
  * Outlook calendar via the CLI for Microsoft 365 (`m365`), read-only. Requires
@@ -95,12 +96,16 @@ export function dayBounds(date = new Date()): { start: Date; end: Date } {
 
 /** null = calendar unavailable (not logged in, CLI missing, or command failed). */
 export async function getEvents(start: Date, end: Date): Promise<CalendarEvent[] | null> {
+  const upn = await m365UserName()
+  if (!upn) return null
   const res = await run(
     "m365",
     [
       "outlook",
       "event",
       "list",
+      "--userName",
+      upn,
       "--startDateTime",
       start.toISOString(),
       "--endDateTime",
@@ -130,7 +135,9 @@ export function getTodayEvents(): Promise<CalendarEvent[] | null> {
 
 /** Full detail of one event for the calendar agent (attendees + plain-text body). */
 export async function getEventDetail(id: string): Promise<string | null> {
-  const res = await run("m365", ["outlook", "event", "get", "--id", id, "--output", "json"], { timeoutMs: 60_000 })
+  const upn = await m365UserName()
+  if (!upn) return null
+  const res = await run("m365", ["outlook", "event", "get", "--id", id, "--userName", upn, "--output", "json"], { timeoutMs: 60_000 })
   if (!res.ok) return null
   try {
     const raw = JSON.parse(res.stdout) as GraphEvent

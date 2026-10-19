@@ -135,6 +135,12 @@ export function worktreeKind(dir: string): WorktreeKind {
   return "dev"
 }
 
+/** MR iid of a dependency-review worktree (mkpanes --deps names them <repo>_review_deps_<iid>), else null. */
+export function depsReviewIid(dir: string): string | null {
+  const match = (dir.split("/").pop() ?? dir).match(/_review_deps_(\d+)$/)
+  return match ? match[1] : null
+}
+
 /** Tab (specialist id) that owns a worktree directory. */
 export function tabForWorktree(dir: string): "worktrees" | "qa" | "review" {
   const kind = worktreeKind(dir)

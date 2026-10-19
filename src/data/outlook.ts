@@ -38,6 +38,26 @@ export async function m365LoggedIn(): Promise<boolean> {
   return res.ok && !res.stdout.includes("Logged out")
 }
 
+let cachedUpn: string | null | undefined
+
+/**
+ * UPN of the signed-in user (`connectedAs` from `m365 status`). The event
+ * commands in current CLI versions insist on --userName even for delegated
+ * auth; mail commands do not. Cached for the process lifetime; null when
+ * logged out.
+ */
+export async function m365UserName(): Promise<string | null> {
+  if (cachedUpn !== undefined) return cachedUpn
+  const res = await run("m365", ["status", "--output", "json"])
+  try {
+    const upn = res.ok ? (JSON.parse(res.stdout) as { connectedAs?: string }).connectedAs : undefined
+    cachedUpn = typeof upn === "string" && upn.includes("@") ? upn : null
+  } catch {
+    cachedUpn = null
+  }
+  return cachedUpn
+}
+
 /** null = mail unavailable (not logged in, CLI missing, or command failed). */
 export async function getInbox(): Promise<EmailMessage[] | null> {
   const startTime = new Date(Date.now() - INBOX_DAYS * 86_400_000).toISOString()

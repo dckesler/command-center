@@ -17,7 +17,7 @@ bun run setup                                     # config, hooks, skills, healt
 
 `bun run setup` creates `~/.config/command-center/config.json` from
 `config.example.json` and `.env` from `.env.example`, links `hooks/agent-event.sh` into
-the config dir, symlinks `skills/*` into `~/.agents/skills` and the skill CLIs
+the config dir, symlinks `skills/*` into `~/.agents/skills` (each with a `~/.claude/skills` link into it) and the skill CLIs
 (`cc-report`, `cc-mail`, `cc-grok`, `start-project`, `project-task`) into `~/.local/bin`, then runs the
 same checks as `bun run doctor`. It never edits `~/.cursor/hooks.json` or
 `~/.claude/settings.json`; merge `hooks/cursor-hooks.example.json` (and the Claude one
@@ -322,7 +322,7 @@ a space. Paths like `/tmp/x` are ignored.
 ```
 src/            TUI (OpenTUI/React), data layer, hub agents and their specs
 src/config.ts   config loader (defaults ← config.json ← env)
-skills/         first-party agent skills; `bun run skills sync` links them into ~/.agents/skills
+skills/         first-party agent skills; `bun run skills sync` links them into ~/.agents/skills and ~/.claude/skills
 hooks/          agent-event.sh (Cursor/Claude hook → agents.jsonl) and example hook wiring
 scripts/        setup.ts (setup/doctor), skills.ts (skill manager)
 config.example.json, .env.example

@@ -8,8 +8,8 @@
  *                    (committed copies; skills-lock.json records their source)
  *
  * `sync` symlinks both sets into ~/.agents/skills so every agent (hub
- * specialists, cursor-cli, claude — whose ~/.claude/skills links point at
- * ~/.agents/skills) picks them up. Dangling repo links are pruned.
+ * specialists, cursor-cli, claude) picks them up, and gives each one a
+ * ~/.claude/skills link into ~/.agents/skills. Dangling repo links are pruned.
  *
  * Usage:
  *   bun scripts/skills.ts sync                     (default)
@@ -26,6 +26,7 @@ const REPO = resolve(import.meta.dir, "..")
 const FIRST_PARTY = join(REPO, "skills")
 const THIRD_PARTY = join(REPO, ".agents", "skills")
 const USER_SKILLS = join(homedir(), ".agents", "skills")
+const CLAUDE_SKILLS = join(homedir(), ".claude", "skills")
 const LOCK = join(REPO, "skills-lock.json")
 
 function skillDirs(path: string): string[] {
@@ -59,10 +60,35 @@ function linkOne(name: string, target: string): void {
   console.log(`  linked ${name} → ${target.replace(REPO, "<repo>")}`)
 }
 
+/** Claude Code reads only ~/.claude/skills, so each skill also needs a link there into ~/.agents/skills. */
+function linkClaude(name: string): void {
+  const linkPath = join(CLAUDE_SKILLS, name)
+  const target = join("..", "..", ".agents", "skills", name)
+  if (isSymlink(linkPath)) {
+    const current = readlinkSync(linkPath)
+    if (current === target || current === join(USER_SKILLS, name)) return
+    if (existsSync(linkPath)) {
+      console.log(`  skipped ~/.claude/skills/${name}: already links to ${current}`)
+      return
+    }
+    rmSync(linkPath)
+  } else if (existsSync(linkPath)) {
+    console.log(`  conflict: ~/.claude/skills/${name} is a real directory (not touching it).`)
+    return
+  }
+  symlinkSync(target, linkPath)
+  console.log(`  linked ~/.claude/skills/${name}`)
+}
+
 function sync(): void {
   mkdirSync(USER_SKILLS, { recursive: true })
+  const names = [...skillDirs(FIRST_PARTY), ...skillDirs(THIRD_PARTY)]
   for (const name of skillDirs(FIRST_PARTY)) linkOne(name, join(FIRST_PARTY, name))
   for (const name of skillDirs(THIRD_PARTY)) linkOne(name, join(THIRD_PARTY, name))
+  if (existsSync(join(homedir(), ".claude"))) {
+    mkdirSync(CLAUDE_SKILLS, { recursive: true })
+    for (const name of names) if (existsSync(join(USER_SKILLS, name))) linkClaude(name)
+  }
   // prune symlinks that point into the repo but whose target is gone
   for (const name of readdirSync(USER_SKILLS)) {
     const linkPath = join(USER_SKILLS, name)
@@ -71,6 +97,16 @@ function sync(): void {
     if (target.startsWith(REPO) && !existsSync(target)) {
       rmSync(linkPath)
       console.log(`  pruned stale link ${name}`)
+    }
+  }
+  // prune ~/.claude/skills links into ~/.agents/skills whose skill is gone
+  for (const name of existsSync(CLAUDE_SKILLS) ? readdirSync(CLAUDE_SKILLS) : []) {
+    const linkPath = join(CLAUDE_SKILLS, name)
+    if (!isSymlink(linkPath) || existsSync(linkPath)) continue
+    const target = readlinkSync(linkPath)
+    if (target === join("..", "..", ".agents", "skills", name) || target === join(USER_SKILLS, name)) {
+      rmSync(linkPath)
+      console.log(`  pruned stale link ~/.claude/skills/${name}`)
     }
   }
   console.log("sync done")
