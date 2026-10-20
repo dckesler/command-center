@@ -47,6 +47,18 @@
     "staleMinutes": 10
   },
 
+  "email": {
+    "$comment": "Inbox tab. days = how far back to read. filters = noise rules merged by name with the defaults in src/data/emailFilters.ts (which also ships disabled suggestions such as jira-comments, gitlab-mr-threads, snyk-alerts, datadog-digest, fathom-recaps). A rule hides mail when all its regexes (case-insensitive) match from / subject / body, unless `unless` matches the subject or body. Hidden mail stays in Outlook untouched; `h` on the tab shows it.",
+    "days": 7,
+    "filters": [
+      { "name": "jira-field-updates", "enabled": true },
+      { "name": "jira-digests", "enabled": true },
+      { "name": "jira-comments", "enabled": false },
+      { "name": "gitlab-mr-threads", "enabled": false },
+      { "name": "my-own-rule", "enabled": false, "from": "@example\\.com$", "subject": "newsletter", "why": "example of a custom rule" }
+    ]
+  },
+
   "todos": {
     "$comment": "Focus todos: the todos specialist pings central when a focus todo has had no progress note for focusCadenceMinutes, only inside focusHours on weekdays and never during a meeting. focusMax is a soft cap.",
     "focusCadenceMinutes": 30,

@@ -215,6 +215,13 @@ export function App() {
   const [todoInput, setTodoInput] = useState<TodoInputMode | null>(null)
   const [emails, setEmails] = useState<EmailMessage[] | null>(null)
   const [emailsLoading, setEmailsLoading] = useState(true)
+  /** email tab: include mail hidden by email.filters (dim, with the rule name) */
+  const [showHiddenEmail, setShowHiddenEmail] = useState(false)
+  const visibleEmails = useMemo(
+    () => (emails === null ? null : showHiddenEmail ? emails : emails.filter((e) => !e.hiddenBy)),
+    [emails, showHiddenEmail],
+  )
+  const hiddenEmailCount = useMemo(() => emails?.filter((e) => e.hiddenBy).length ?? 0, [emails])
   const [selectedEmail, setSelectedEmail] = useState(0)
   const [events, setEvents] = useState<CalendarEvent[] | null>(null)
   const [eventsLoading, setEventsLoading] = useState(true)
@@ -378,7 +385,7 @@ export function App() {
   )
   const stuckMail = useMemo(() => stuckDirs.reduce((n, dir) => n + (pendingMail.get(dir)?.count ?? 0), 0), [stuckDirs, pendingMail])
   useEffect(() => {
-    if (!emailsLoading && emails !== null) ingestEmails(emails)
+    if (!emailsLoading && emails !== null) ingestEmails(emails.filter((e) => !e.hiddenBy))
   }, [emails, emailsLoading])
   useEffect(() => {
     if (!eventsLoading && events !== null) ingestCalendar(events)
@@ -1426,9 +1433,13 @@ export function App() {
     }
 
     if (view === "email") {
-      const mail = emails?.[selectedEmail]
+      const mail = visibleEmails?.[selectedEmail]
       if (key.name === "j" || key.name === "down") {
-        setSelectedEmail((s) => Math.min(s + 1, Math.max(0, (emails?.length ?? 1) - 1)))
+        setSelectedEmail((s) => Math.min(s + 1, Math.max(0, (visibleEmails?.length ?? 1) - 1)))
+      }
+      if (key.name === "h") {
+        setShowHiddenEmail((v) => !v)
+        setSelectedEmail(0)
       }
       if (key.name === "k" || key.name === "up") {
         setSelectedEmail((s) => Math.max(s - 1, 0))
@@ -1654,7 +1665,7 @@ export function App() {
           <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [8] {todos.filter((t) => !t.done).length} todos</span>
           {agentDot("todos")}
           <span fg={view === "email" ? "#ffffff" : "#6b7280"}>
-            {"  "}[9] {emails === null ? "" : `${emails.filter((e) => !e.isRead).length} `}email
+            {"  "}[9] {emails === null ? "" : `${emails.filter((e) => !e.isRead && !e.hiddenBy).length} `}email
           </span>
           {agentDot("email")}
           <span fg={view === "cloud" ? "#ffffff" : "#6b7280"}>  [0] {cloudAgents.length} cloud</span>
@@ -1796,7 +1807,9 @@ export function App() {
           />
         ) : view === "email" ? (
           <Email
-            emails={emails}
+            emails={visibleEmails}
+            hiddenCount={hiddenEmailCount}
+            showHidden={showHiddenEmail}
             loading={emailsLoading}
             selected={selectedEmail}
             width={width - 2}
@@ -1886,7 +1899,7 @@ export function App() {
                           ? "enter send   esc unfocus input"
                           : "tab views   i focus input   j/k scroll   n new conversation   ctrl+c quit"
                       : view === "email"
-                        ? "tab views   j/k move   o/enter open in Outlook   ; agent   r refresh   ctrl+c quit"
+                        ? "tab views   j/k move   o/enter open in Outlook   h show/hide filtered   ; agent   r refresh   ctrl+c quit"
                       : view === "calendar"
                         ? "tab views   j/k move   enter join/open   o open in Outlook   ; agent   r refresh   ctrl+c quit"
                       : view === "grok"

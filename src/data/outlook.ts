@@ -1,3 +1,5 @@
+import { config } from "../config.ts"
+import { hiddenBy } from "./emailFilters.ts"
 import { run } from "./exec.ts"
 
 /**
@@ -15,12 +17,31 @@ export interface EmailMessage {
   isRead: boolean
   hasAttachments: boolean
   webLink: string
+  /** first line or two of the body, banner-free */
   bodyPreview: string
+  /** name of the filter rule that hides this mail; null when it shows */
+  hiddenBy: string | null
 }
 
-/** How far back the inbox table looks. */
-const INBOX_DAYS = 7
-const INBOX_LIMIT = 50
+/** Outer-mail banners Exchange prepends; stripped from preview and filter text. */
+const BANNER_RE = /^[\\\s]*\[EXTERNAL E-MAIL\][\s\S]*?know the content is safe\.\s*/i
+
+export function htmlToText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<(br|p|div|tr|li|h\d)[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n")
+    .trim()
+}
 
 interface GraphMessage {
   id?: string
@@ -31,6 +52,7 @@ interface GraphMessage {
   hasAttachments?: boolean
   webLink?: string
   bodyPreview?: string
+  body?: { content?: string; contentType?: string }
 }
 
 export async function m365LoggedIn(): Promise<boolean> {
@@ -58,33 +80,45 @@ export async function m365UserName(): Promise<string | null> {
   return cachedUpn
 }
 
-/** null = mail unavailable (not logged in, CLI missing, or command failed). */
+const INBOX_SELECT = "id,subject,from,receivedDateTime,isRead,hasAttachments,webLink,bodyPreview,body"
+
+/**
+ * null = mail unavailable (not logged in, CLI missing, or command failed).
+ * Reads Graph directly so bodies come along: the filters need them (Jira's
+ * bodyPreview is only the external-mail banner) and they make a real preview.
+ */
 export async function getInbox(): Promise<EmailMessage[] | null> {
-  const startTime = new Date(Date.now() - INBOX_DAYS * 86_400_000).toISOString()
-  const res = await run(
-    "m365",
-    ["outlook", "message", "list", "--folderName", "Inbox", "--startTime", startTime, "--output", "json"],
-    { timeoutMs: 60_000 },
-  )
+  const { days, filters } = config().email
+  const since = new Date(Date.now() - days * 86_400_000).toISOString()
+  const url =
+    "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
+    `?$filter=${encodeURIComponent(`receivedDateTime ge ${since}`)}` +
+    `&$top=300&$orderby=receivedDateTime desc&$select=${INBOX_SELECT}`
+  const res = await run("m365", ["request", "--url", url, "--output", "json"], { timeoutMs: 90_000 })
   if (!res.ok) return null
   try {
-    const messages = JSON.parse(res.stdout) as GraphMessage[]
+    const parsed = JSON.parse(res.stdout) as { value?: GraphMessage[] } | GraphMessage[]
+    const messages = Array.isArray(parsed) ? parsed : (parsed.value ?? [])
     return messages
-      .map(
-        (m): EmailMessage => ({
+      .map((m): EmailMessage => {
+        const raw = m.body?.content ?? ""
+        const text = (m.body?.contentType?.toLowerCase() === "html" ? htmlToText(raw) : raw).replace(BANNER_RE, "").trim()
+        const fromAddress = m.from?.emailAddress?.address ?? ""
+        const subject = m.subject || "(no subject)"
+        return {
           id: m.id ?? "",
-          from: m.from?.emailAddress?.name || m.from?.emailAddress?.address || "unknown",
-          fromAddress: m.from?.emailAddress?.address ?? "",
-          subject: m.subject || "(no subject)",
+          from: m.from?.emailAddress?.name || fromAddress || "unknown",
+          fromAddress,
+          subject,
           receivedAt: m.receivedDateTime ?? "",
           isRead: m.isRead ?? true,
           hasAttachments: m.hasAttachments ?? false,
           webLink: m.webLink ?? "",
-          bodyPreview: (m.bodyPreview ?? "").replace(/\s+/g, " ").trim(),
-        }),
-      )
+          bodyPreview: (text || m.bodyPreview || "").replace(/\s+/g, " ").slice(0, 400),
+          hiddenBy: hiddenBy({ fromAddress, subject, body: text.slice(0, 4000) }, filters),
+        }
+      })
       .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt))
-      .slice(0, INBOX_LIMIT)
   } catch {
     return null
   }
@@ -99,19 +133,7 @@ export async function getMessageBody(id: string): Promise<string | null> {
   try {
     const message = JSON.parse(res.stdout) as { subject?: string; body?: { content?: string; contentType?: string } }
     const content = message.body?.content ?? ""
-    const text =
-      message.body?.contentType?.toLowerCase() === "html"
-        ? content
-            .replace(/<style[\s\S]*?<\/style>/gi, "")
-            .replace(/<[^>]+>/g, " ")
-            .replace(/&nbsp;/g, " ")
-            .replace(/&amp;/g, "&")
-            .replace(/&lt;/g, "<")
-            .replace(/&gt;/g, ">")
-            .replace(/\s+\n/g, "\n")
-            .replace(/[ \t]+/g, " ")
-            .trim()
-        : content.trim()
+    const text = (message.body?.contentType?.toLowerCase() === "html" ? htmlToText(content) : content.trim()).replace(BANNER_RE, "").trim()
     return `subject: ${message.subject ?? ""}\n\n${text}`
   } catch {
     return null

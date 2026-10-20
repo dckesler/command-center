@@ -1093,6 +1093,8 @@ const email: TabAgentSpec = {
   rolePrompt:
     `You are the email specialist of a development command center. Scope: ${USER}'s Outlook work inbox (recent messages). ` +
     "You can list the inbox and fetch full message bodies. This is read-only: you cannot send, reply, move or delete mail — " +
+    "Noise filters (email.filters in config.json; defaults and suggestions in src/data/emailFilters.ts) hide mail such as Jira field-only updates; " +
+    `list_inbox omits hidden mail unless include_hidden is set. When ${USER} asks about noise, look at the hidden mail and the senders left and propose a rule (name, from/subject/body regex, unless) for him to add — you cannot change the config yourself. ` +
     `when ${USER} wants to reply, draft the text in chat for him to paste into Outlook (o opens the message there). ` +
     "Report genuinely important-looking unread mail to central (severity attention only for truly urgent items). " +
     REPLY_STYLE +
@@ -1101,19 +1103,22 @@ const email: TabAgentSpec = {
   makeTools(ctx) {
     return {
       list_inbox: {
-        description: "List recent inbox messages (id, from, subject, received, read state).",
-        inputSchema: { type: "object", properties: {} },
-        execute: () => {
-          const emails = ctx.snapshot().emails
-          if (emails === null) return "Outlook unavailable — m365 CLI is not logged in"
-          return emails.length
-            ? emails
-                .map(
-                  (e) =>
-                    `${e.isRead ? "[read]  " : "[unread]"} id=${e.id} | ${e.from} <${e.fromAddress}> | ${e.subject} | ${e.receivedAt}`,
-                )
-                .join("\n")
-            : "inbox empty (last 7 days)"
+        description: "List recent inbox messages (id, from, subject, received, read state). Mail hidden by email.filters is omitted unless include_hidden; only_hidden lists just the filtered mail with its rule name.",
+        inputSchema: {
+          type: "object",
+          properties: { include_hidden: { type: "boolean" }, only_hidden: { type: "boolean" } },
+        },
+        execute: (args) => {
+          const all = ctx.snapshot().emails
+          if (all === null) return "Outlook unavailable — m365 CLI is not logged in"
+          const emails = args.only_hidden ? all.filter((e) => e.hiddenBy) : args.include_hidden ? all : all.filter((e) => !e.hiddenBy)
+          const hidden = all.filter((e) => e.hiddenBy).length
+          const lines = emails.map(
+            (e) =>
+              `${e.isRead ? "[read]  " : "[unread]"}${e.hiddenBy ? ` [hidden:${e.hiddenBy}]` : ""} id=${e.id} | ${e.from} <${e.fromAddress}> | ${e.subject} | ${e.receivedAt}`,
+          )
+          const foot = hidden && !args.include_hidden && !args.only_hidden ? `\n(${hidden} more hidden by email.filters — include_hidden to see them)` : ""
+          return lines.length ? lines.join("\n") + foot : `no messages${foot}`
         },
       },
       read_message: {

@@ -69,7 +69,7 @@ Delegated Graph permissions the app registration needs (admin-consented):
 | Permission | Used by | Graph calls |
 |---|---|---|
 | `User.Read` | sign-in (default permission on every app registration) | — |
-| `Mail.Read` | Email tab: inbox list with `bodyPreview`, full message body on demand | `GET /me/mailFolders/inbox/messages`, `GET /me/messages/{id}` |
+| `Mail.Read` | Email tab: inbox list with bodies (for filters and previews), full message body on demand | `GET /me/mailFolders/inbox/messages`, `GET /me/messages/{id}` |
 | `Calendars.Read` | Calendar tab: today's events, event detail | `GET /me/calendarView`, `GET /me/events/{id}` |
 
 `Mail.ReadBasic` is not enough (it omits `bodyPreview`/`body`). `Mail.Send`,
@@ -100,6 +100,8 @@ Resolution order: environment variable → `config.json` → default.
 | `mail.retrySeconds` | | `20` | how often cc-mail's retrier re-attempts idle delivery of queued mail |
 | `mail.retryMinutes` | | `180` | how long the retrier keeps trying (hooks still deliver after it stops) |
 | `mail.staleMinutes` | | `10` | pending mail older than this is flagged stuck (header badge, `@` dialog, red `✉`, warn event to the owning tab) |
+| `email.days` | | `7` | how far back the Email tab reads |
+| `email.filters` | | see `src/data/emailFilters.ts` | inbox noise rules, merged by `name` with the shipped defaults (`jira-field-updates`, `jira-digests` on; `jira-comments`, `jira-snyk-tickets`, `gitlab-mr-threads`, `gitlab-pipeline-ok`, `snyk-alerts`, `datadog-digest`, `barracuda-quarantine`, `fathom-recaps`, `kronos`, `linkedin` off). A rule = case-insensitive regexes on `from` / `subject` / `body` that must all match, plus an optional `unless` that keeps the mail when it matches subject or body. Hidden mail is untouched in Outlook, left out of the tab count, agent events and `list_inbox`; `h` on the tab shows it with its rule name |
 | `todos.focusCadenceMinutes` | | `30` | how long a focus todo may go without a progress note before a focus check |
 | `todos.focusMax` | | `3` | soft cap on focus todos; the Todos view warns past it |
 | `todos.focusHours` | | `09:00-17:30` | weekday window for focus checks and the start/end-of-day announcements |

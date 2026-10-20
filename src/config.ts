@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs"
+import { DEFAULT_EMAIL_FILTERS, mergeEmailFilters, type EmailFilter } from "./data/emailFilters.ts"
 import { homedir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
 
@@ -71,6 +72,12 @@ export interface Config {
     /** pending mail older than this is "stuck": header badge, red ✉ on projects, one warn event to the owning tab */
     staleMinutes: number
   }
+  email: {
+    /** how many days back the inbox tab reads */
+    days: number
+    /** noise filters; see src/data/emailFilters.ts for the shipped defaults and suggestions */
+    filters: EmailFilter[]
+  }
   todos: {
     /** minutes a focus todo may go without a progress note before the todos specialist pings central */
     focusCadenceMinutes: number
@@ -114,6 +121,7 @@ export const DEFAULTS: Config = {
   model: "composer-2.5",
   projects: { exclude: ["command-center", "node_modules"] },
   mail: { quietSeconds: 30, retrySeconds: 20, retryMinutes: 180, staleMinutes: 10 },
+  email: { days: 7, filters: DEFAULT_EMAIL_FILTERS },
   todos: { focusCadenceMinutes: 30, focusMax: 3, focusHours: "09:00-17:30" },
   repos: {},
 }
@@ -181,6 +189,10 @@ export function config(): Config {
       retrySeconds: Number(file.mail?.retrySeconds) || DEFAULTS.mail.retrySeconds,
       retryMinutes: Number(file.mail?.retryMinutes) || DEFAULTS.mail.retryMinutes,
       staleMinutes: Number(file.mail?.staleMinutes) || DEFAULTS.mail.staleMinutes,
+    },
+    email: {
+      days: Number(file.email?.days) || DEFAULTS.email.days,
+      filters: mergeEmailFilters(file.email?.filters),
     },
     todos: {
       focusCadenceMinutes: Number(file.todos?.focusCadenceMinutes) || DEFAULTS.todos.focusCadenceMinutes,

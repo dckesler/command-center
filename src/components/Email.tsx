@@ -26,13 +26,18 @@ const PREVIEW_LINES = 4
 
 export function Email({
   emails,
+  hiddenCount,
+  showHidden,
   loading,
   selected,
   width,
   height,
 }: {
-  /** null = Outlook unavailable (m365 not logged in) */
+  /** null = Outlook unavailable (m365 not logged in); already narrowed to what should show */
   emails: EmailMessage[] | null
+  /** mail hidden by email.filters (in the list only when showHidden) */
+  hiddenCount: number
+  showHidden: boolean
   loading: boolean
   selected: number
   width: number
@@ -48,8 +53,19 @@ export function Email({
       </box>
     )
   }
+  const filterLine =
+    hiddenCount > 0
+      ? showHidden
+        ? `showing ${hiddenCount} filtered message${hiddenCount === 1 ? "" : "s"} too (h to hide) — rule names in grey; email.filters in config.json`
+        : `${hiddenCount} message${hiddenCount === 1 ? "" : "s"} hidden by email.filters (h to show)`
+      : ""
   if (emails.length === 0) {
-    return <text fg={C.dim}>{loading ? "loading inbox…" : "inbox empty (last 7 days)"}</text>
+    return (
+      <box flexDirection="column">
+        <text fg={C.dim}>{loading ? "loading inbox…" : hiddenCount ? "nothing left after filters" : "inbox empty (last 7 days)"}</text>
+        {filterLine ? <text fg={C.dim}>{filterLine}</text> : null}
+      </box>
+    )
   }
 
   const selectedMail = emails[selected]
@@ -64,7 +80,7 @@ export function Email({
     previewLines.push(previewText.slice(i, i + previewWidth))
   }
 
-  const maxVisible = Math.max(1, height - 1 - (previewLines.length ? previewLines.length + 1 : 0))
+  const maxVisible = Math.max(1, height - 1 - (filterLine ? 1 : 0) - (previewLines.length ? previewLines.length + 1 : 0))
   let start = 0
   if (emails.length > maxVisible) {
     start = Math.min(Math.max(0, selected - Math.floor(maxVisible / 2)), emails.length - maxVisible)
@@ -73,6 +89,7 @@ export function Email({
 
   return (
     <box flexDirection="column">
+      {filterLine ? <text fg={C.dim}>{filterLine}</text> : null}
       <text fg={C.header}>
         {"   "}
         {pad("FROM", fromWidth)} {pad("SUBJECT", subjectWidth)} {pad("RECEIVED", timeWidth)}
@@ -83,10 +100,13 @@ export function Email({
         return (
           <box key={mail.id} backgroundColor={isSelected ? C.selectedBg : undefined}>
             <text>
-              <span fg={isSelected ? "#ffffff" : mail.isRead ? C.dim : C.value}>
+              <span fg={isSelected ? "#ffffff" : mail.hiddenBy || mail.isRead ? C.dim : C.value}>
                 {isSelected ? "▸" : " "}
                 {mail.isRead ? "  " : "● "}
-                {pad(mail.from, fromWidth)} {pad(mail.subject, subjectWidth)}
+                {pad(mail.from, fromWidth)}{" "}
+                {mail.hiddenBy
+                  ? pad(`[${mail.hiddenBy}] ${mail.subject}`, subjectWidth)
+                  : pad(mail.subject, subjectWidth)}
               </span>
               <span fg={C.dim}>
                 {" "}

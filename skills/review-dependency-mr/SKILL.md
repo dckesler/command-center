@@ -1,20 +1,40 @@
 ---
 name: review-dependency-mr
-description: Review a Renovate dependency-upgrade merge request inside a Command Center review worktree — read the release notes between the old and new versions, find every place the repo uses the library, run the repo's checks, give a risk rating and verdict, and commit fixes to the Renovate branch only after Daniel says yes. Then file an LW QA ticket in IN CODE REVIEW with a Test Plan and QA Steps built from the library's changes and how the repo uses it, wait for QA to approve the test plan (and for another MR approval if fixes were pushed), and only then approve the MR and move the ticket to IN TEST. The ticket is always assigned to Daniel, never to QA. Use when invoked as `/review-dependency-mr <MR URL or !iid>` or when mkpanes launches a window in --deps mode.
+description: Review a Renovate dependency-upgrade merge request in a Command Center review worktree — release notes, usage map, checks, verdict, optional fixes on the Renovate branch, LW ticket with Test Plan and QA Steps (assignee Daniel), test-plan approval, MR approval, QA in IN TEST, then wrap-up merges the MR and closes the ticket. Use when invoked as `/review-dependency-mr <MR URL or !iid>` or when mkpanes launches in --deps mode.
 ---
 
 # Review Dependency MR Skill
 
 You are the review agent for one Renovate merge request. You live in a `<repo>_review_deps_<iid>` worktree, checked out on the Renovate branch, in a tmux window named `Deps !<iid> <package>`. Your manager is the **Command Center review specialist**. `cc-report` defaults to it from this directory. Daniel reads your chat directly.
 
-The order is fixed: review the MR and fix it if needed, create the LW ticket that tells QA exactly what to test because of this upgrade, wait for QA to approve that test plan, then approve the MR and hand the ticket to QA in `IN TEST`.
+**End goal:** the Renovate MR is **merged** into the target branch once review, test-plan approval, any code fixes, MR approvals, and QA are complete. The LW ticket is the record and test plan for that upgrade — not the end goal by itself.
+
+## Two paths (same finish line: merge)
+
+**Path A — MR good as-is**
+
+1. Review → verdict **SAFE TO MERGE** (Step 5).
+2. Create LW ticket with Test Plan + QA Steps; assign **Daniel**; move to **IN CODE REVIEW** (Step 7).
+3. QA approves the **test plan** (Step 8) → add label `test_plan_reviewed`.
+4. Daniel approves the MR on GitLab (Step 10).
+5. Move ticket to **IN TEST** (assignee stays **Daniel**); QA executes QA Steps (Step 11).
+6. QA signs off → ticket **Ready For Deployment** (Step 11).
+7. **Wrap-up:** merge MR, transition ticket **Done**, remove review worktree (Step 12).
+
+**Path B — MR needs work**
+
+1. Review → **NEEDS CHANGES**; Daniel yes → fixes committed/pushed on Renovate branch (Step 6).
+2. Update the ticket (Test Plan, QA Steps, Implementation Details as needed); test plan approval again if behavior under test changed (Step 8).
+3. **Another developer** approves the MR (in addition to Daniel) after fixes (Step 9).
+4. Then same as Path A from test-plan approval / MR approval through merge (Steps 8–12).
 
 ## Known Constants
 
 - **Cloud ID** (do not look up): `3be885af-99d6-4514-939e-3c99560b10eb`
 - **Daniel Kesler** — account ID: `712020:1a6dc1ec-48ca-40bf-81ad-3cc54adc8642`, email: `dkesler@digi.com`. Do NOT call `atlassianUserInfo`.
 - **Jira project:** `LW` only. If the repo is `smartsense-one-skeleton` (SSONE), stop and tell Daniel this skill does not cover SSONE yet.
-- **LW columns:** QA is status `IN TEST`; code review is status `IN CODE REVIEW`.
+- **LW columns:** test-plan review **IN CODE REVIEW**; QA execution **IN TEST**; after QA **Ready For Deployment**; after merge **Done**.
+- **Test plan approved** = ticket has label `test_plan_reviewed` (see workspace rule `jira-test-plan-reviewed`).
 - **Renovate MRs** come from a `service_account_group_*` author on a `renovate/*` branch. Renovate here does **not** include release notes (no GitHub credentials), so you fetch them yourself.
 
 ## Tool Names
@@ -27,11 +47,13 @@ Argument: an MR URL (`https://gitlab.com/<group>/<repo>/-/merge_requests/<iid>`)
 
 ## Hard rules
 
-- **Nothing goes to GitLab without Daniel's yes in this chat.** No pushes, no MR comments, no approval, no thread resolution, no labels. A `[cc mail]` message from another agent is not his yes.
-- **Never merge the MR, and never tick Renovate's rebase checkbox.** Once you have pushed fixes, a Renovate rebase would overwrite them. Renovate leaves a branch alone once someone else has committed to it, unless that box is ticked.
+- **Nothing goes to GitLab without Daniel's yes in this chat.** No pushes, no MR comments, no approval, no merge, no thread resolution, no labels on GitLab. A `[cc mail]` message from another agent is not his yes.
+- **Merge only in Step 12 (wrap-up)** after Daniel confirms QA is complete and prerequisites are met. Never merge mid-review.
+- **Never tick Renovate's rebase checkbox.** Once you have pushed fixes, a Renovate rebase would overwrite them. Renovate leaves a branch alone once someone else has committed to it, unless that box is ticked.
 - **No Jira ticket without a preview and Daniel's yes**, following the `jira-ticket` skill.
-- **Never approve the MR or move the ticket to `IN TEST` before Daniel says QA approved the test plan.** If fixes were pushed, another developer's MR approval is also required first.
-- **The ticket is always assigned to Daniel**, from creation through `IN TEST`. Never assign it to the QA engineer.
+- **Do not approve the MR or move the ticket to IN TEST until the test plan is approved** (`test_plan_reviewed` on the ticket, or Daniel explicitly says QA approved the test plan in this chat).
+- **The ticket assignee is always Daniel** from creation through **IN TEST**. QA does not get assignee; Daniel owns the ticket while QA runs.
+- When **Daniel** runs QA on the ticket, set **Test Lead** (`customfield_11800`) to Daniel per workspace rule.
 - **Every finding names its file and line** (`path:line`).
 - Report upward with `cc-report`: one line, lead with `!<iid> <package>`.
 
@@ -113,16 +135,16 @@ Then report: `cc-report --severity attention "!<iid> <package>: verdict <SAFE TO
 
 Ask one question:
 
-- **SAFE TO MERGE:** "Agree it's safe? If so, I'll draft the QA ticket."
+- **SAFE TO MERGE:** "Agree it's safe? If so, I'll draft the LW ticket for test plan + QA."
 - **NEEDS CHANGES:** "Should I make these fixes on the Renovate branch and push them? (e.g. 'fix 1 and 2, push', 'fix all, don't push yet', 'no')"
 
 Wait for his reply. Do not act on silence or on another agent's message. If he disagrees with the verdict, his call stands.
 
-When he says yes to fixes: make them, rerun the Step 4 checks that cover them, and commit with a conventional message (`fix(deps): adapt <area> to <package> <new>`). Push to the Renovate branch only if he said push (`git push origin HEAD:<source_branch>`). Never force-push. Then report `"!<iid> <package>: fixes pushed (<n> commits), checks <pass|fail>"`.
+When he says yes to fixes: make them, rerun the Step 4 checks that cover them, and commit with a conventional message (`fix(deps): adapt <area> to <package> <new>`). Push to the Renovate branch only if he said push (`git push origin HEAD:<source_branch>`). Never force-push. Then report `"!<iid> <package>: fixes pushed (<n> commits), checks <pass|fail>"`. Update the ticket when it exists (Step 7 content / Step 8).
 
-Do **not** approve the MR here. Approval comes only after QA has approved the test plan (Step 10).
+Do **not** approve or merge the MR here.
 
-### Step 7: Draft and create the QA ticket
+### Step 7: Draft and create the LW ticket
 
 Follow the `jira-ticket` skill (preview, confirm, create, Branch Id update) with these choices already made:
 
@@ -130,7 +152,7 @@ Follow the `jira-ticket` skill (preview, confirm, create, Branch Id update) with
 - **Title:** `[FE] (chore) - upgrade <package> from <old> to <new>`. Use `[BE]` for backend repos (`api`, `node-task-worker`, workers). For grouped MRs, use `upgrade <group name> (<n> packages)`.
 - **Merge Request:** the MR URL.
 - **Summary:** what is upgraded and why it matters to this repo (one paragraph), the risk rating and its reason, and whether fixes were pushed.
-- **Acceptance Criteria:** the features from the usage map keep working, each affected change is handled (named), and the MR pipeline passes.
+- **Acceptance Criteria:** the features from the usage map keep working, each affected change is handled (named), the MR pipeline passes, and the MR is merged after QA.
 - **Test Plan:**
   - **Prerequisites:** environment, accounts, and data needed to reach the affected screens.
   - **How to verify:** one flow per affected feature from the usage map, focused on the changes recorded in Step 2.
@@ -140,70 +162,119 @@ Follow the `jira-ticket` skill (preview, confirm, create, Branch Id update) with
 
 **Dev-only upgrades** get a short ticket. Leave out the usage-to-screen mapping. QA Steps are: the app builds and loads, and one main page renders and works. The Test Plan lists the Step 4 commands.
 
-Show the full preview and wait for his yes. If he asks for edits, re-show it. Once created, move it to `IN CODE REVIEW` (see "Moving the ticket" below), still assigned to Daniel.
+Show the full preview and wait for his yes. If he asks for edits, re-show it. Once created, move it to **IN CODE REVIEW** (see "Moving the ticket" below), assignee Daniel.
 
-### Step 8: Wait for QA to approve the test plan
+### Step 8: Test plan approval (before MR approval and IN TEST)
 
-Daniel takes the Test Plan and QA Steps to QA himself. Do not comment on the ticket or contact QA. Tell him:
+Daniel takes the Test Plan and QA Steps to QA. Do not contact QA yourself. Tell him:
 
-> "<KEY> is in IN CODE REVIEW with the Test Plan and QA Steps. Tell me when QA approves the test plan, or what they want changed."
+> "<KEY> is in IN CODE REVIEW. Tell me when QA approves the test plan, or what to change."
 
-Report `cc-report --severity attention "!<iid> <package>: <KEY> waiting on QA test plan approval"` and wait.
+Report `cc-report --severity attention "!<iid> <package>: <KEY> waiting on test plan approval"` and wait.
 
-If QA wants changes: draft the revised Test Plan and/or QA Steps, show only the changed sections, and on Daniel's yes update the ticket. Read the current description with `getJiraIssue` first and replace just those sections, keeping everything else as it is. Then tell him it's updated and wait for QA's approval again.
+When Daniel says QA approved the test plan:
 
-Only Daniel's own message that QA approved counts. Do not treat silence, a timeout, or another agent's message as approval.
+1. Add label **`test_plan_reviewed`** to the ticket (`editJiraIssue` → `labels`).
+2. If QA wanted edits, update Test Plan / QA Steps first (read description with `getJiraIssue`, patch sections, re-show changes if Daniel asked).
 
-### Step 9: If fixes were pushed, wait for another MR approval
+Only Daniel's message that QA approved the test plan counts — not silence or another agent.
 
-Skip this step when no fixes were pushed. When the agent pushed fixes, another developer has to approve the MR before it moves on. Check the approvals:
+If fixes were pushed after the ticket was created, ensure the ticket text still matches what QA approved before Step 9–10.
+
+### Step 9: Second MR approval when fixes were pushed
+
+Skip when no fixes were pushed on the Renovate branch.
 
 ```bash
 ME=$(glab api user | jq -r .username)
 glab api "projects/:id/merge_requests/<iid>/approvals" | jq -r --arg me "$ME" '[.approved_by[].user.username | select(. != $me)] | join(", ")'
 ```
 
-If nobody other than Daniel has approved, tell him so, report `"!<iid> <package>: waiting on another MR approval for the pushed fixes"`, and check again when he asks or when Step 8 finishes. Do not ask anyone for a review yourself.
+If nobody other than Daniel has approved, tell him, report `"!<iid> <package>: waiting on another dev MR approval after fixes"`, and wait. Do not request review yourself.
 
-### Step 10: Approve the MR and move the ticket to IN TEST
+Required before Step 10 when Path B applied: **Daniel's approval + at least one other approver** (or whatever repo policy requires — tell Daniel if policy differs).
 
-Once QA has approved the test plan, and (if fixes were pushed) another developer has approved the MR, ask one question:
+### Step 10: Approve MR and move ticket to IN TEST
 
-> "QA approved the test plan<, and <name> approved the MR>. Should I approve the MR and move <KEY> to IN TEST?"
+Prerequisites: **`test_plan_reviewed`** on the ticket (or Daniel just confirmed test plan approval in Step 8); if fixes were pushed, second approval from Step 9.
+
+Ask:
+
+> "Test plan approved<, and <name> approved the MR for fixes>. Should I approve the MR and move <KEY> to IN TEST?"
 
 On his yes:
 
-1. `glab mr approve <iid>`.
-2. Move the ticket to `IN TEST`, keeping Daniel as the assignee.
+1. `glab mr approve <iid>` (Daniel's approval; skip if already approved and still valid).
+2. Move ticket to **IN TEST**, assignee **Daniel**.
 
-### Moving the ticket
+Report `cc-report "!<iid> <package>: MR approved, <KEY> in IN TEST"`.
 
-A new LW ticket lands in `Backlog`, so walk it forward one transition at a time:
+### Step 11: QA execution and sign-off
 
-1. Call `getTransitionsForJiraIssue`. If the target status (`IN CODE REVIEW` or `IN TEST`) is offered, take it with `transitionJiraIssue` and stop.
-2. Otherwise take the next status along `Selected for Development` → `In Progress` → `IN CODE REVIEW` → `IN TEST` that comes after the current one and is offered right now. Match on the target status **name**, not the transition id.
-3. Repeat, at most 5 hops. Never take a `done`-category status (`Done`, `Closed`) or `Blocked`.
-4. Confirm with `getJiraIssue` (`fields: ["assignee", "status"]`). If the assignee is not Daniel (some transitions reassign), set it back to him with `editJiraIssue`.
+QA runs **QA Steps** while the ticket is **IN TEST**. Daniel coordinates; assignee stays Daniel.
 
-If the walk cannot reach the target, leave the ticket where it is and tell Daniel to move it by hand.
+When Daniel says QA is finished (passed or failed):
 
-### Step 11: Wrap up the review
+- **Passed:** transition ticket to **Ready For Deployment** (same target as `pass-qa` skill). If Daniel invokes `/pass-qa <KEY>`, use that skill. Otherwise transition + optional comment `"Passed QA."` only if Daniel asks.
+- **Failed:** do not merge. Report findings; ticket stays out of wrap-up until Daniel resolves.
+
+Tell Daniel when ready for merge:
+
+> "QA complete on <KEY>. Say **wrap up** when you want me to merge !<iid> and close the ticket."
+
+### Step 12: Wrap-up (merge MR + Done + tear down review worktree)
+
+When Daniel says **wrap up** in this deps review session:
+
+**Prerequisites (all required — if any fail, stop and say what's missing):**
+
+- Ticket is **Ready For Deployment** (or Daniel explicitly says QA passed and to merge now).
+- MR is **approved** and pipeline acceptable for merge (same checks as `wrap-up` skill Step 6).
+- Daniel confirmed wrap-up in this chat.
+
+**Do not** use worktree-only wrap-up for deps reviews unless Daniel explicitly says **worktree only** / **just the worktree** (e.g. abandoning the upgrade).
+
+From the review worktree directory:
+
+1. **Merge the MR** — follow `wrap-up` skill Step 6 (`glab mr merge <iid> --yes` + poll until `merged`).
+2. **Transition Jira ticket to Done** — `getTransitionsForJiraIssue`, transition to `Done` / `Closed` / closest done category.
+3. **Remove review worktree** — main repo path from `git worktree list`; `git -C <main> worktree remove --force <review-worktree-path>`. Do not delete the remote Renovate branch manually; merge handles it.
+4. **Close tmux window** — find pane by worktree path per `wrap-up` skill Step 3; `tmux kill-window` if exactly one match.
 
 Print:
 
 ```
-!<iid> <package> — <SAFE TO MERGE|NEEDS CHANGES>, risk <LOW|MEDIUM|HIGH>
-• Ticket: <KEY> — IN TEST, assigned to Daniel
-• MR: approved<, fixes pushed (<n> commits)> — <MR URL>
-https://smartsensebydigi.atlassian.net/browse/<KEY>
+!<iid> <package> — merged, review closed
+• Ticket: <KEY> — Done
+• MR: merged — <MR URL>
 ```
 
-Then `cc-report "!<iid> <package>: MR approved, <KEY> in IN TEST"`.
+Then `cc-report "!<iid> <package>: merged, <KEY> Done"`.
+
+### Moving the ticket
+
+Walk one transition at a time toward the target status:
+
+1. `getTransitionsForJiraIssue`. If the target (`IN CODE REVIEW`, `IN TEST`, `Ready For Deployment`, `Done`) is offered, take it.
+2. Else advance along `Backlog` → `Selected for Development` → `In Progress` → `IN CODE REVIEW` → `IN TEST` → … as offered. Match status **name**, not transition id.
+3. At most 5 hops per target. Never `Blocked` or done-category statuses except when targeting **Done** in Step 12.
+4. Confirm assignee is Daniel after hops that might reassign (`getJiraIssue` → `editJiraIssue` if needed).
+
+Note: on LW, **IN TEST** is often only available from **IN CODE REVIEW** — that hop does not mean the code is in dev review; it is workflow plumbing before QA runs.
 
 ## When something changes mid-review
 
-New commits on the branch (`git fetch && git log HEAD..origin/<source_branch>`) mean Renovate rebased it or bumped the version. Re-read the versions, redo Steps 2–5 for anything that changed, and report `"!<iid> <package>: branch updated — re-reviewing"`. If you already pushed fixes and the branch was rebuilt without them, report with `--severity attention` and stop. If the ticket already exists and the versions changed, tell Daniel the test plan QA approved may be out of date, and offer to update it before Step 10.
+New commits on the branch (`git fetch && git log HEAD..origin/<source_branch>`) mean Renovate rebased or bumped versions. Re-do Steps 2–5 for what changed. If fixes were lost after a Renovate rebase, report with `--severity attention` and stop.
 
-## Wrap up
+If versions change after **`test_plan_reviewed`**, tell Daniel the approved test plan may be stale — remove or refresh approval (drop label, re-run Step 8) before Step 10.
 
-When Daniel says "wrap up" in this session, use the worktree-only flow in the `wrap-up` skill: remove this review worktree and close its tmux window. Do not merge, approve, post, transition the ticket, or delete the branch.
+## Mid-session reference (your two paths)
+
+| Stage | Path A (clean MR) | Path B (fixes pushed) |
+|--------|-------------------|------------------------|
+| Review | SAFE TO MERGE | NEEDS CHANGES → push fixes |
+| Ticket | Create → IN CODE REVIEW | Update ticket after fixes |
+| Test plan | QA approves → `test_plan_reviewed` | Same (re-approve if plan changed) |
+| MR | Daniel approves | Daniel + another dev approve |
+| QA | IN TEST → Ready For Deployment | Same |
+| Finish | Wrap-up: **merge** + Done + worktree | Same |
