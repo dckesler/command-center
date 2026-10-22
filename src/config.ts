@@ -44,8 +44,8 @@ export interface Config {
     /** path to the mkpanes script (worktree launcher, repo alias registry) */
     mkpanes: string
     editor: string
-    /** terminal app used by start-project for new OS windows */
-    terminal: "alacritty" | "terminal" | "none"
+    /** how start-project shows a project: switch = one terminal window, switch the tmux client to the project's session (two-row status line); alacritty | terminal = a new OS window per project; none = leave it detached */
+    terminal: "switch" | "alacritty" | "terminal" | "none"
     /** tmux session that gets new ticket windows; null = the session we run in / first */
     tmuxSession: string | null
   }
@@ -113,7 +113,7 @@ export const DEFAULTS: Config = {
     projectModel: "claude-opus-5-5-high",
     mkpanes: join(HOME, ".local", "bin", "mkpanes"),
     editor: "vim",
-    terminal: "alacritty",
+    terminal: "switch",
     tmuxSession: null,
   },
   // No Jira site by default: browse links and REST transitions are disabled until set.

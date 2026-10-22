@@ -73,9 +73,36 @@ export async function windowForDir(dir: string): Promise<string | null> {
   return fallback
 }
 
+/**
+ * Bring a window on screen. switch-client also changes the session when the
+ * window lives in another project; select-window is the fallback for callers
+ * running outside tmux (no client to switch).
+ */
 export async function jumpToWindow(target: string): Promise<boolean> {
+  const sw = await run("tmux", ["switch-client", "-t", target])
+  if (sw.ok) return true
   const res = await run("tmux", ["select-window", "-t", target])
   return res.ok
+}
+
+function ccFlagBin(): string {
+  const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "skills", "cc-flag", "cc-flag")
+  if (existsSync(repo)) return repo
+  return join(homedir(), ".local", "bin", "cc-flag")
+}
+
+/**
+ * Mark a tmux window (and its session) in the status line as needing Daniel —
+ * see skills/cc-flag. `info` is a no-op; marks clear when he looks.
+ */
+export function flagTmux(level: "attention" | "warn" | "info" | "clear", target: { dir?: string; window?: string } = {}): void {
+  if (level === "info") return
+  const args: string[] = [level]
+  if (target.dir) args.push("--dir", target.dir)
+  else if (target.window) args.push("--window", target.window)
+  else if (process.env.TMUX_PANE) args.push("--window", process.env.TMUX_PANE)
+  else return
+  void run(ccFlagBin(), args, { timeoutMs: 5_000 })
 }
 
 export async function killWindow(target: string): Promise<boolean> {

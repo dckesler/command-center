@@ -21,6 +21,7 @@ import type { EmailMessage } from "../data/outlook.ts"
 import { fmtEvent, fmtMinutes, fmtRange, isNow, minutesUntil, type CalendarEvent } from "../data/calendar.ts"
 import { isProjectDir, projectRootOf, type Project } from "../data/projects.ts"
 import { ccMailBin, isMailStuck, mailWaitMinutes, type PendingMail } from "../data/mail.ts"
+import { flagTmux } from "../data/tmux.ts"
 import { tabForWorktree } from "../data/worktrees.ts"
 import {
   FOCUS_CADENCE_MS,
@@ -129,6 +130,7 @@ export function pushEvent(
   extra?: { dir?: string; persist?: boolean; inboxSummary?: string },
 ): void {
   const stamped = line.startsWith("[") ? line : `[${formatClock()}] ${line}`
+  if (extra?.dir && severity !== "info") flagTmux(severity, { dir: extra.dir })
   let inboxId: string | null = null
   if (extra?.persist !== false) {
     inboxId = appendInbox({

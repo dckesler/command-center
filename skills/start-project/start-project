@@ -227,13 +227,30 @@ fi
 # show it in its own terminal window
 
 RESULT=""
-if [ "$ATTACH" = "1" ]; then
+if [ "$ATTACH" = "1" ] && [ "$TERMINAL_APP" = "switch" ]; then
+  # One terminal window, projects as tmux sessions: move the client there.
+  # Inside tmux the caller's own client switches; outside, the first client.
+  if [ -n "${TMUX:-}" ] && "$TMUX_BIN" switch-client -t "=$SESSION" 2>/dev/null; then
+    RESULT="switched to $NAME"
+  else
+    CLIENT="$("$TMUX_BIN" list-clients -F '#{client_activity} #{client_name}' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2)"
+    if [ -n "$CLIENT" ] && "$TMUX_BIN" switch-client -c "$CLIENT" -t "=$SESSION" 2>/dev/null; then
+      RESULT="switched to $NAME"
+    else
+      RESULT="session $SESSION ready — no tmux client to switch (attach with: tmux attach -t =$SESSION)"
+    fi
+  fi
+  if [ "$STARTED" = "1" ]; then
+    RESULT="$([ "$MODE" = "new" ] && echo started || echo resumed) $NAME — $RESULT"
+  fi
+elif [ "$ATTACH" = "1" ]; then
   if [ -n "$("$TMUX_BIN" list-clients -t "=$SESSION" 2>/dev/null)" ]; then
     RESULT="$NAME is already open in its own window"
   else
     OPENED=0
     # commands.terminal: alacritty (IPC into the running instance, else a fresh
-    # one), terminal (macOS Terminal.app), none (just leave the session detached).
+    # one), terminal (macOS Terminal.app), none (just leave the session detached);
+    # switch (handled above) keeps one window and switches the tmux client.
     case "$TERMINAL_APP" in
       alacritty)
         if command -v alacritty >/dev/null 2>&1 \

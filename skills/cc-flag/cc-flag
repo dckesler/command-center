@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# cc-flag — mark a tmux window (tab) and its session (project tab) as needing
+# Daniel's attention. The two-row tmux status line renders the marks:
+#   row 0: one tab per session (project), coloured by the session's @cc_flag
+#   row 1: that session's windows, coloured by the window's @tab_color
+# tmux hooks clear a window's mark when it is selected and a session's mark
+# when a client switches to it, so nothing here needs to clear anything.
+#
+#   cc-flag <attention|warn|info|clear> [--window <tmux target>] [--dir <path>]
+#
+# Default target: the caller's own window ($TMUX_PANE). --dir finds the window
+# whose agent pane (@agent_pane) or any pane has that cwd. `info` is a no-op so
+# callers can pass a severity straight through. A mark is skipped when the
+# window is already on screen (its session is a client's current session and
+# it is that session's current window) — Daniel is looking at it.
+#
+# attention beats warn: a session already red stays red when a warn arrives.
+set -euo pipefail
+
+usage() {
+  echo "usage: cc-flag <attention|warn|info|clear> [--window <target>] [--dir <path>]" >&2
+  exit 1
+}
+
+LEVEL="${1:-}"; shift || true
+[ -n "$LEVEL" ] || usage
+TARGET=""; DIR=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --window) TARGET="${2:-}"; shift 2 ;;
+    --dir) DIR="${2:-}"; shift 2 ;;
+    -h|--help) usage ;;
+    *) usage ;;
+  esac
+done
+
+command -v tmux >/dev/null 2>&1 || exit 0
+tmux list-sessions >/dev/null 2>&1 || exit 0
+
+case "$LEVEL" in
+  attention) COLOR="colour196" ;;
+  warn) COLOR="colour220" ;;
+  info) exit 0 ;;
+  clear) COLOR="" ;;
+  *) usage ;;
+esac
+
+# Resolve the window target.
+if [ -n "$DIR" ]; then
+  DIR_REAL="$(cd "$DIR" 2>/dev/null && pwd -P || printf '%s' "$DIR")"
+  TARGET="$(tmux list-panes -a -F '#{pane_id}	#{session_name}:#{window_index}	#{pane_current_path}	#{@agent_pane}' 2>/dev/null \
+    | awk -F'\t' -v d="$DIR" -v r="$DIR_REAL" '
+        ($3 == d || $3 == r) { if ($4 == $1) { print $2; exit } ; if (!fb) fb = $2 }
+        END { if (fb) print fb }' | head -1)"
+  [ -n "$TARGET" ] || { echo "cc-flag: no tmux window for $DIR" >&2; exit 0; }
+elif [ -z "$TARGET" ]; then
+  [ -n "${TMUX_PANE:-}" ] || exit 0
+  TARGET="$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}:#{window_index}' 2>/dev/null || true)"
+  [ -n "$TARGET" ] || exit 0
+fi
+
+SESSION="$(tmux display-message -p -t "$TARGET" '#{session_name}' 2>/dev/null || true)"
+[ -n "$SESSION" ] || { echo "cc-flag: no tmux window $TARGET" >&2; exit 0; }
+
+if [ "$LEVEL" = "clear" ]; then
+  tmux set-option -w -t "$TARGET" @tab_color "" 2>/dev/null || true
+  tmux set-option -t "$SESSION" @cc_flag "" 2>/dev/null || true
+  exit 0
+fi
+
+# On screen right now? Then Daniel sees it; no mark.
+WIN_ACTIVE="$(tmux display-message -p -t "$TARGET" '#{window_active}')"
+if [ "$WIN_ACTIVE" = "1" ] && tmux list-clients -F '#{client_session}' 2>/dev/null | grep -qx -- "$SESSION"; then
+  exit 0
+fi
+
+tmux set-option -w -t "$TARGET" @tab_color "$COLOR"
+CUR="$(tmux show-option -qv -t "$SESSION" @cc_flag 2>/dev/null || true)"
+# Do not downgrade a red session to yellow; do mark it if the client is elsewhere.
+if [ "$CUR" != "colour196" ] || [ "$COLOR" = "colour196" ]; then
+  if ! tmux list-clients -F '#{client_session}' 2>/dev/null | grep -qx -- "$SESSION"; then
+    tmux set-option -t "$SESSION" @cc_flag "$COLOR"
+  fi
+fi

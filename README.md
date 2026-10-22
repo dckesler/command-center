@@ -52,7 +52,7 @@ bun start
 | `glab` (optional) | MRs, CI, merge on the worktrees tab | `brew install glab`, `glab auth login` |
 | `acli` (optional) | tickets and epics tabs | Atlassian CLI, `acli jira auth login` |
 | `m365` (optional) | Email and Calendar tabs | `npm i -g @pnp/cli-microsoft365`, see below |
-| Alacritty (optional) | new OS windows for projects (`commands.terminal`) | or set `"terminal": "terminal"` / `"none"` |
+| Alacritty (optional) | only with `commands.terminal: alacritty` (one OS window per project); the default `switch` works in any terminal | |
 | `mkpanes` (optional) | worktree launcher + repo alias registry | your own script; or fill `repos` in config |
 
 ### Email / Calendar tabs and Microsoft 365
@@ -90,7 +90,7 @@ Resolution order: environment variable → `config.json` → default.
 | `commands.projectModel` | `CC_PROJECT_MODEL` | `claude-opus-5-5-high` | Cursor CLI model for each project's central agent (`cursor-cli --list-models`); `""` = CLI default; only applied when `commands.agent` is the Cursor CLI |
 | `commands.mkpanes` | `MKPANES_BIN` | `~/.local/bin/mkpanes` | worktree launcher; parsed for repo aliases when `repos` is empty |
 | `commands.editor` | | `vim` | opened in the left pane of project/task windows |
-| `commands.terminal` | | `alacritty` | `alacritty` \| `terminal` \| `none` for new project windows |
+| `commands.terminal` | | `switch` | `switch` = one terminal window, projects are tmux sessions the client switches between (see *Tabs* below); `alacritty` \| `terminal` = a new OS window per project; `none` = leave the session detached |
 | `commands.tmuxSession` | | `null` | pin the session that receives ticket windows |
 | `jira.baseUrl` | `JIRA_BASE_URL` | `""` | Jira site; empty disables links and transitions |
 | `jira.cloudId`, `jira.sprintField` | | `""`, `customfield_10007` | Atlassian MCP cloud id; sprint custom field |
@@ -155,9 +155,10 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   `~/projects/<name>/PROJECT.md` from the answers and starts the project session (same
   as `s`). `esc` cancels at any step. `s` runs the `start-project` skill: the
   project gets its own tmux session (named after the project, window `central`,
-  mkpanes-style panes) shown in a new terminal window (`commands.terminal`) — not a
-  window of the work session — with `commands.agent` running as the project's
-  **central agent**. An existing session is re-attached instead. `e` links/clears the
+  mkpanes-style panes) — not a window of the work session — with `commands.agent`
+  running as the project's **central agent**; the tmux client switches to it
+  (`commands.terminal: switch`) or it opens in a new OS window. An existing session is
+  switched to instead. `e` links/clears the
   epic (writes the `**Epic:**` line), `o` opens the folder, `t` opens `PROJECT.md`.
 
   `enter` expands a project: header (status, updated, session, central agent state,
@@ -319,12 +320,39 @@ a space. Paths like `/tmp/x` are ignored.
   `threads` (unresolved discussions), `conflicts`, `rebase`, `ci`, `changes`, `draft`.
 - **TMUX** — `session:index` of the tmux window whose name matches the ticket/branch.
 
+## Tabs: one window, projects × tabs
+
+Everything runs in one terminal window and one tmux client. `tmux/command-center.tmux`
+turns the tmux status line into two rows: the top row is one tab per tmux session (the
+work session shows as *command center*, each project as itself), the bottom row is the
+current session's windows. Install it by sourcing it at the end of your tmux config
+(`~/.tmux.conf.user` if your `.tmux.conf` sources that):
+
+```
+source-file ~/projects/command-center/tmux/command-center.tmux
+```
+
+Keys: `prefix Tab` / `prefix BTab` next / previous project, `prefix 0` back to Command
+Center, `prefix S` project picker, `prefix 1-9` windows as usual. Jumping from a
+Command Center row (`s`, task tabs, the `@` dialog) uses `switch-client`, so it crosses
+sessions.
+
+Marks: `cc-flag <attention|warn> [--window <target> | --dir <path>]` (`skills/cc-flag`)
+colours a window tab red or yellow and its project tab too; a mark on something
+already on screen is skipped, and marks clear themselves when you select the window
+or switch to the session. Who sets them: `cc-report --severity warn|attention` marks
+the reporting agent's own tab; Command Center marks a worktree/project tab when it
+raises a warn/attention event about that directory (stuck mail, Grok `needs-you`,
+ticket-agent events), and marks its own tab when an approval is waiting or mail is
+stuck. `cc-flag info` is a no-op so callers can pass severities straight through.
+
 ## Layout
 
 ```
 src/            TUI (OpenTUI/React), data layer, hub agents and their specs
 src/config.ts   config loader (defaults ← config.json ← env)
 skills/         first-party agent skills; `bun run skills sync` links them into ~/.agents/skills and ~/.claude/skills
+tmux/           command-center.tmux — two-row status line (projects / tabs) and keys; source it from your tmux config
 hooks/          agent-event.sh (Cursor/Claude hook → agents.jsonl) and example hook wiring
 scripts/        setup.ts (setup/doctor), skills.ts (skill manager)
 config.example.json, .env.example

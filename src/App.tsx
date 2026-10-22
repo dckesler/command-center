@@ -89,6 +89,7 @@ import {
 import { parseRepoMap } from "./data/repos.ts"
 import {
   createTicketPrompt,
+  flagTmux,
   jumpToWindow,
   launchWork,
   windowForDir,
@@ -384,6 +385,13 @@ export function App() {
     [pendingMail],
   )
   const stuckMail = useMemo(() => stuckDirs.reduce((n, dir) => n + (pendingMail.get(dir)?.count ?? 0), 0), [stuckDirs, pendingMail])
+  // Things only this tab can resolve mark the Command Center tab in the tmux status line.
+  useEffect(() => {
+    if (approvals.length > 0) flagTmux("attention")
+  }, [approvals.length])
+  useEffect(() => {
+    if (stuckMail > 0) flagTmux("warn")
+  }, [stuckMail])
   useEffect(() => {
     if (!emailsLoading && emails !== null) ingestEmails(emails.filter((e) => !e.hiddenBy))
   }, [emails, emailsLoading])

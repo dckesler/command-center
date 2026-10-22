@@ -160,6 +160,15 @@ cc_mail() {
   "$bin" "$@"
 }
 
+# Mark the caller's tab (and its project tab) in the tmux status line when the
+# report needs Daniel. Window marks clear themselves when he looks.
+if [ "$SEVERITY" != "info" ] && [ -n "${TMUX_PANE:-}" ]; then
+  FLAG_BIN="$(command -v cc-flag 2>/dev/null || true)"
+  [ -n "$FLAG_BIN" ] || { [ -x "$HOME/.local/bin/cc-flag" ] && FLAG_BIN="$HOME/.local/bin/cc-flag"; }
+  [ -n "$FLAG_BIN" ] || { [ -x "$(dirname "$0")/../cc-flag/cc-flag" ] && FLAG_BIN="$(dirname "$0")/../cc-flag/cc-flag"; }
+  [ -n "$FLAG_BIN" ] && "$FLAG_BIN" "$SEVERITY" >/dev/null 2>&1 || true
+fi
+
 # ---------------------------------------------------------------------------
 # project:<name> → project inbox (log) + cc-mail to the central agent
 
