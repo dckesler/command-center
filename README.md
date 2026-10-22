@@ -323,19 +323,22 @@ a space. Paths like `/tmp/x` are ignored.
 ## Tabs: one window, projects × tabs
 
 Everything runs in one terminal window and one tmux client. `tmux/command-center.tmux`
-turns the tmux status line into two rows at the top of the screen: the first row is one
-tab per tmux session (the work session shows as *command center*, each project as
-itself), the second is the current session's windows. Install it by sourcing it at the end of your tmux config
-(`~/.tmux.conf.user` if your `.tmux.conf` sources that):
+puts the tmux status line at the top of the screen: a row of numbered project tabs (one
+per tmux session — `0 COMMAND CENTER`, then each project in the order it was opened), a
+blank gap, then the current project's windows. `tmux/cc-session` does the numbering
+(stored as `@idx`/`@label` on each session; hooks renumber on create/close/rename).
+Install it by sourcing it at the end of your tmux config (`~/.tmux.conf.user` if your
+`.tmux.conf` sources that):
 
 ```
 source-file ~/projects/command-center/tmux/command-center.tmux
 ```
 
-Keys: `prefix Tab` / `prefix BTab` next / previous project, `prefix 0` back to Command
-Center, `prefix S` project picker, `prefix 1-9` windows as usual. Jumping from a
-Command Center row (`s`, task tabs, the `@` dialog) uses `switch-client`, so it crosses
-sessions.
+Keys: `Alt-0..9` project by number (no prefix; `Alt-0` is Command Center), `prefix 1-9`
+windows as usual, `prefix Tab` / `prefix BTab` next / previous project, `prefix S`
+project picker. Alt needs the terminal to send Option as Meta (Alacritty `[window]
+option_as_alt = "Both"`, Ghostty `macos-option-as-alt = true`). Jumping from a Command
+Center row (`s`, task tabs, the `@` dialog) uses `switch-client`, so it crosses sessions.
 
 Marks: `cc-flag <attention|warn> [--window <target> | --dir <path>]` (`skills/cc-flag`)
 colours a window tab red or yellow and its project tab too; a mark on something
@@ -352,7 +355,7 @@ stuck. `cc-flag info` is a no-op so callers can pass severities straight through
 src/            TUI (OpenTUI/React), data layer, hub agents and their specs
 src/config.ts   config loader (defaults ← config.json ← env)
 skills/         first-party agent skills; `bun run skills sync` links them into ~/.agents/skills and ~/.claude/skills
-tmux/           command-center.tmux — two-row status line (projects / tabs) and keys; source it from your tmux config
+tmux/           command-center.tmux — top status rows (numbered projects / gap / tabs) and keys; cc-session numbers sessions
 hooks/          agent-event.sh (Cursor/Claude hook → agents.jsonl) and example hook wiring
 scripts/        setup.ts (setup/doctor), skills.ts (skill manager)
 config.example.json, .env.example

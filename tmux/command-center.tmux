@@ -1,35 +1,54 @@
-# Command Center two-row status line at the top of the screen: projects on the
-# first row, this project's tabs on the second (tmux draws all status rows on
-# one edge, so the two can't be split between top and bottom).
+# Command Center status line, at the top of the screen:
+#
+#   row 0   0 COMMAND CENTER   1 FACTORY-DESIGN-ENGINE   2 PARITY-SKILL …   one tab per session
+#   row 1   (blank spacer)
+#   row 2   1 central  2 parity-skill-tag-spec …                           that session's windows
+#
 # Source from ~/.tmux.conf (or ~/.tmux.conf.user) *after* your own status
 # settings — it overrides status, status-format and the window-status formats.
 #
-#   row 0  ❐ command center │ factory-design-engine │ parity-skill …   one tab per tmux session
-#   row 1  1: central  2: parity-skill-tag-spec …                       that session's windows
+# Sessions are numbered by tmux/cc-session (0 = the Command Center work
+# session, then 1..N in creation order — the order the row draws them, and
+# numbers don't shift when a new project opens) and stored in each session's
+# @idx/@label; hooks renumber whenever a session is created, closed or renamed.
 #
 # Marks come from `cc-flag` (skills/cc-flag): a window's @tab_color and a
 # session's @cc_flag hold a colour (colour196 attention, colour220 warn). They
 # clear themselves when you look: selecting a window clears its mark, switching
 # a client to a session clears the session's.
 #
-# Keys (prefix = whatever you use):
-#   prefix Tab / BTab   next / previous project
-#   prefix 0            command center (session 0)
-#   prefix S            project picker (choose-tree, sessions collapsed)
+# Keys:
+#   Alt-0 … Alt-9       session by number, no prefix (0 = Command Center)
 #   prefix 1-9          windows, as before
+#   prefix Tab / BTab   next / previous session
+#   prefix S            session picker (choose-tree, sessions collapsed)
+#
+# Alt needs the terminal to send Option as Meta: Alacritty `[window]
+# option_as_alt = "Both"`, Ghostty `macos-option-as-alt = true`.
 
-set -g status 2
+set -gF @cc_tmux_dir "#{d:current_file}"
+
+set -g status 3
 set -g status-position top
 set -g status-interval 5
 
+# --- session numbering --------------------------------------------------------
+run-shell -b "#{@cc_tmux_dir}/cc-session index"
+set-hook -g session-created "run-shell -b '#{@cc_tmux_dir}/cc-session index'"
+set-hook -g session-closed  "run-shell -b '#{@cc_tmux_dir}/cc-session index'"
+set-hook -g session-renamed "run-shell -b '#{@cc_tmux_dir}/cc-session index'"
+
 # --- row 0: sessions as project tabs ---------------------------------------
 # #{S:…} iterates sessions; #{client_session} is the one on screen.
-set -g status-format[0] "#[fg=colour245,bg=colour234] ❐ #{S:#{?#{==:#{session_name},#{client_session}},#[fg=black#,bg=colour39#,bold] #{?#{==:#{session_name},0},command center,#{session_name}} #[default#,bg=colour234] ,#{?#{@cc_flag},#[fg=colour16#,bg=#{@cc_flag}#,bold],#[fg=colour250#,bg=colour238]} #{?#{==:#{session_name},0},command center,#{session_name}} #[default#,bg=colour234] }}#[align=right#,fg=colour245] %H:%M "
+set -g status-format[0] "#[fg=colour245,bg=colour234]  #{S:#{?#{==:#{session_name},#{client_session}},#[fg=colour24#,bg=colour39#,bold] #{@idx} #[fg=black] #{@label} ,#{?#{@cc_flag},#[fg=colour52#,bg=#{@cc_flag}#,bold] #{@idx} #[fg=colour16] #{@label} ,#[fg=colour245#,bg=colour237#,bold] #{@idx} #[fg=colour252] #{@label} }}#[default#,bg=colour234]  }#[align=right#,fg=colour245] %H:%M  "
 
-# --- row 1: this session's windows -------------------------------------------
-set -g window-status-format "#[fg=#{?#{@tab_color},colour16,colour235},bg=#{?#{@tab_color},#{@tab_color},colour252},bold] #I #W #[default,bg=colour234]"
+# --- row 1: gap ---------------------------------------------------------------
+set -g status-format[1] "#[fill=default]"
+
+# --- row 2: this session's windows -------------------------------------------
+set -g window-status-format "#[fg=#{?#{@tab_color},colour16,colour245},bg=#{?#{@tab_color},#{@tab_color},colour236}] #I #W #[default,bg=colour234]"
 set -g window-status-current-format "#[fg=black,bg=colour39,bold] #{?window_zoomed_flag,#[fg=colour226]🔍 ,}#I: #W #[default,bg=colour234]"
-set -g status-format[1] "#[bg=colour234] #{W:#{E:window-status-format} ,#{E:window-status-current-format} }"
+set -g status-format[2] "#[bg=colour234] #{W:#{E:window-status-format} ,#{E:window-status-current-format} }"
 
 # --- marks clear when looked at ---------------------------------------------
 # select-window, switch-client -t sess:win and last-window all land here;
@@ -41,10 +60,24 @@ set-hook -g client-session-changed "set-option @cc_flag '' ; set-window-option @
 set-hook -g client-attached "set-option @cc_flag '' ; set-window-option @tab_color ''"
 
 # --- keyboard -----------------------------------------------------------------
-# Not -r: a repeatable Tab keeps the prefix table open for repeat-time, so a
-# quick second "prefix Tab" sends the prefix key itself into that table
-# (last-window, if you bind it) and the Tab leaks to the pane.
-bind Tab switch-client -n
-bind BTab switch-client -p
+# Alt-N: the session numbered N. run-shell expands #{client_name} for the
+# client that pressed the key, so the switch lands on that client.
+bind -n M-0 run-shell "#{@cc_tmux_dir}/cc-session go 0 '#{client_name}'"
+bind -n M-1 run-shell "#{@cc_tmux_dir}/cc-session go 1 '#{client_name}'"
+bind -n M-2 run-shell "#{@cc_tmux_dir}/cc-session go 2 '#{client_name}'"
+bind -n M-3 run-shell "#{@cc_tmux_dir}/cc-session go 3 '#{client_name}'"
+bind -n M-4 run-shell "#{@cc_tmux_dir}/cc-session go 4 '#{client_name}'"
+bind -n M-5 run-shell "#{@cc_tmux_dir}/cc-session go 5 '#{client_name}'"
+bind -n M-6 run-shell "#{@cc_tmux_dir}/cc-session go 6 '#{client_name}'"
+bind -n M-7 run-shell "#{@cc_tmux_dir}/cc-session go 7 '#{client_name}'"
+bind -n M-8 run-shell "#{@cc_tmux_dir}/cc-session go 8 '#{client_name}'"
+bind -n M-9 run-shell "#{@cc_tmux_dir}/cc-session go 9 '#{client_name}'"
+
+# Tab/BTab walk the numbers (switch-client -n/-p walk sessions by *name*,
+# which isn't the order the row shows). Not -r: a repeatable Tab keeps the
+# prefix table open for repeat-time, so a quick second "prefix Tab" sends the
+# prefix key itself into that table (last-window, if you bind it).
+bind Tab  run-shell "#{@cc_tmux_dir}/cc-session next '#{session_id}' '#{client_name}'"
+bind BTab run-shell "#{@cc_tmux_dir}/cc-session prev '#{session_id}' '#{client_name}'"
 bind 0 switch-client -t =0
 bind S choose-tree -Zs
