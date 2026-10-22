@@ -1,8 +1,11 @@
-# Command Center status line, at the top of the screen:
+# Command Center status line, at the bottom of the screen:
 #
-#   row 0   0 COMMAND CENTER   1 FACTORY-DESIGN-ENGINE   2 PARITY-SKILL …   one tab per session
+#   row 0   1 central  2 parity-skill-tag-spec …                           this session's windows
 #   row 1   (blank spacer)
-#   row 2   1 central  2 parity-skill-tag-spec …                           that session's windows
+#   row 2   0 COMMAND CENTER   1 FACTORY-DESIGN-ENGINE   2 PARITY-SKILL …   one tab per session
+#
+# (set status-position top to flip the block to the top; the row order is
+# windows / gap / sessions either way, swap the status-format indexes to change it.)
 #
 # Source from ~/.tmux.conf (or ~/.tmux.conf.user) *after* your own status
 # settings — it overrides status, status-format and the window-status formats.
@@ -29,7 +32,7 @@
 set -gF @cc_tmux_dir "#{d:current_file}"
 
 set -g status 3
-set -g status-position top
+set -g status-position bottom
 set -g status-interval 5
 
 # --- session numbering --------------------------------------------------------
@@ -38,17 +41,17 @@ set-hook -g session-created "run-shell -b '#{@cc_tmux_dir}/cc-session index'"
 set-hook -g session-closed  "run-shell -b '#{@cc_tmux_dir}/cc-session index'"
 set-hook -g session-renamed "run-shell -b '#{@cc_tmux_dir}/cc-session index'"
 
-# --- row 0: sessions as project tabs ---------------------------------------
+# --- row 2: sessions as project tabs ---------------------------------------
 # #{S:…} iterates sessions; #{client_session} is the one on screen.
-set -g status-format[0] "#[fg=colour245,bg=colour234]  #{S:#{?#{==:#{session_name},#{client_session}},#[fg=colour24#,bg=colour39#,bold] #{@idx} #[fg=black] #{@label} ,#{?#{@cc_flag},#[fg=colour52#,bg=#{@cc_flag}#,bold] #{@idx} #[fg=colour16] #{@label} ,#[fg=colour245#,bg=colour237#,bold] #{@idx} #[fg=colour252] #{@label} }}#[default#,bg=colour234]  }#[align=right#,fg=colour245] %H:%M  "
+set -g status-format[2] "#[fg=colour245,bg=colour234]  #{S:#{?#{==:#{session_name},#{client_session}},#[fg=colour24#,bg=colour39#,bold] #{@idx} #[fg=black] #{@label} ,#{?#{@cc_flag},#[fg=colour52#,bg=#{@cc_flag}#,bold] #{@idx} #[fg=colour16] #{@label} ,#[fg=colour245#,bg=colour237#,bold] #{@idx} #[fg=colour252] #{@label} }}#[default#,bg=colour234]  }#[align=right#,fg=colour245] %H:%M  "
 
 # --- row 1: gap ---------------------------------------------------------------
 set -g status-format[1] "#[fill=default]"
 
-# --- row 2: this session's windows -------------------------------------------
+# --- row 0: this session's windows -------------------------------------------
 set -g window-status-format "#[fg=#{?#{@tab_color},colour16,colour245},bg=#{?#{@tab_color},#{@tab_color},colour236}] #I #W #[default,bg=colour234]"
 set -g window-status-current-format "#[fg=black,bg=colour39,bold] #{?window_zoomed_flag,#[fg=colour226]🔍 ,}#I: #W #[default,bg=colour234]"
-set -g status-format[2] "#[bg=colour234] #{W:#{E:window-status-format} ,#{E:window-status-current-format} }"
+set -g status-format[0] "#[bg=colour234] #{W:#{E:window-status-format} ,#{E:window-status-current-format} }"
 
 # --- marks clear when looked at ---------------------------------------------
 # select-window, switch-client -t sess:win and last-window all land here;

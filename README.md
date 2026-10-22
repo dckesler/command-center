@@ -323,9 +323,10 @@ a space. Paths like `/tmp/x` are ignored.
 ## Tabs: one window, projects × tabs
 
 Everything runs in one terminal window and one tmux client. `tmux/command-center.tmux`
-puts the tmux status line at the top of the screen: a row of numbered project tabs (one
-per tmux session — `0 COMMAND CENTER`, then each project in the order it was opened), a
-blank gap, then the current project's windows. `tmux/cc-session` does the numbering
+puts the tmux status line at the bottom of the screen: the current project's windows, a
+blank gap, then a row of numbered project tabs along the bottom edge (one per tmux
+session — `0 COMMAND CENTER`, then each project in the order it was opened). Set
+`status-position top` to flip the block. `tmux/cc-session` does the numbering
 (stored as `@idx`/`@label` on each session; hooks renumber on create/close/rename).
 Install it by sourcing it at the end of your tmux config (`~/.tmux.conf.user` if your
 `.tmux.conf` sources that):
