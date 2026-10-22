@@ -21,12 +21,15 @@
 # a client to a session clears the session's.
 #
 # Keys:
-#   Alt-0 … Alt-9       session by number, no prefix (0 = Command Center)
+#   Ctrl-s 0 … 9        session by number (0 = Command Center)
+#   Ctrl-s Tab / BTab   next / previous session
+#   Ctrl-s Ctrl-s       send a real Ctrl-s to the pane
+#   Alt-0 … Alt-9       session by number, no prefix
 #   prefix 1-9          windows, as before
 #   prefix Tab / BTab   next / previous session
 #   prefix S            session picker (choose-tree, sessions collapsed)
 #
-# Alt needs the terminal to send Option as Meta: Alacritty `[window]
+# Alt-N needs the terminal to send Option as Meta: Alacritty `[window]
 # option_as_alt = "Both"`, Ghostty `macos-option-as-alt = true`.
 
 set -gF @cc_tmux_dir "#{d:current_file}"
@@ -63,17 +66,33 @@ set-hook -g client-session-changed "set-option @cc_flag '' ; set-window-option @
 set-hook -g client-attached "set-option @cc_flag '' ; set-window-option @tab_color ''"
 
 # --- keyboard -----------------------------------------------------------------
-# Alt-N: the session numbered N. run-shell expands #{client_name} for the
-# client that pressed the key, so the switch lands on that client.
+# Ctrl-s is a second prefix for sessions: it opens the "session" key table,
+# where a digit picks a session and Tab/BTab step. Any other key just drops
+# back out. Ctrl-s Ctrl-s sends a literal Ctrl-s to the pane for apps that
+# want it. Alt-N (no prefix) does the same if the terminal sends Option as Meta.
+bind -n C-s switch-client -T session
+bind -T session C-s send-keys C-s
+bind -T session Tab  run-shell "#{@cc_tmux_dir}/cc-session next '#{session_id}' '#{client_name}'"
+bind -T session BTab run-shell "#{@cc_tmux_dir}/cc-session prev '#{session_id}' '#{client_name}'"
+bind -T session 0 run-shell "#{@cc_tmux_dir}/cc-session go 0 '#{client_name}'"
 bind -n M-0 run-shell "#{@cc_tmux_dir}/cc-session go 0 '#{client_name}'"
+bind -T session 1 run-shell "#{@cc_tmux_dir}/cc-session go 1 '#{client_name}'"
 bind -n M-1 run-shell "#{@cc_tmux_dir}/cc-session go 1 '#{client_name}'"
+bind -T session 2 run-shell "#{@cc_tmux_dir}/cc-session go 2 '#{client_name}'"
 bind -n M-2 run-shell "#{@cc_tmux_dir}/cc-session go 2 '#{client_name}'"
+bind -T session 3 run-shell "#{@cc_tmux_dir}/cc-session go 3 '#{client_name}'"
 bind -n M-3 run-shell "#{@cc_tmux_dir}/cc-session go 3 '#{client_name}'"
+bind -T session 4 run-shell "#{@cc_tmux_dir}/cc-session go 4 '#{client_name}'"
 bind -n M-4 run-shell "#{@cc_tmux_dir}/cc-session go 4 '#{client_name}'"
+bind -T session 5 run-shell "#{@cc_tmux_dir}/cc-session go 5 '#{client_name}'"
 bind -n M-5 run-shell "#{@cc_tmux_dir}/cc-session go 5 '#{client_name}'"
+bind -T session 6 run-shell "#{@cc_tmux_dir}/cc-session go 6 '#{client_name}'"
 bind -n M-6 run-shell "#{@cc_tmux_dir}/cc-session go 6 '#{client_name}'"
+bind -T session 7 run-shell "#{@cc_tmux_dir}/cc-session go 7 '#{client_name}'"
 bind -n M-7 run-shell "#{@cc_tmux_dir}/cc-session go 7 '#{client_name}'"
+bind -T session 8 run-shell "#{@cc_tmux_dir}/cc-session go 8 '#{client_name}'"
 bind -n M-8 run-shell "#{@cc_tmux_dir}/cc-session go 8 '#{client_name}'"
+bind -T session 9 run-shell "#{@cc_tmux_dir}/cc-session go 9 '#{client_name}'"
 bind -n M-9 run-shell "#{@cc_tmux_dir}/cc-session go 9 '#{client_name}'"
 
 # Tab/BTab walk the numbers (switch-client -n/-p walk sessions by *name*,
