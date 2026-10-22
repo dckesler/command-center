@@ -323,9 +323,9 @@ a space. Paths like `/tmp/x` are ignored.
 ## Tabs: one window, projects × tabs
 
 Everything runs in one terminal window and one tmux client. `tmux/command-center.tmux`
-turns the tmux status line into two rows: the top row is one tab per tmux session (the
-work session shows as *command center*, each project as itself), the bottom row is the
-current session's windows. Install it by sourcing it at the end of your tmux config
+turns the tmux status line into two rows at the top of the screen: the first row is one
+tab per tmux session (the work session shows as *command center*, each project as
+itself), the second is the current session's windows. Install it by sourcing it at the end of your tmux config
 (`~/.tmux.conf.user` if your `.tmux.conf` sources that):
 
 ```

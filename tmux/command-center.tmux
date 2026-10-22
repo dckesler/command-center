@@ -1,4 +1,6 @@
-# Command Center two-row status line: projects on top, this project's tabs below.
+# Command Center two-row status line at the top of the screen: projects on the
+# first row, this project's tabs on the second (tmux draws all status rows on
+# one edge, so the two can't be split between top and bottom).
 # Source from ~/.tmux.conf (or ~/.tmux.conf.user) *after* your own status
 # settings — it overrides status, status-format and the window-status formats.
 #
@@ -17,6 +19,7 @@
 #   prefix 1-9          windows, as before
 
 set -g status 2
+set -g status-position top
 set -g status-interval 5
 
 # --- row 0: sessions as project tabs ---------------------------------------
@@ -38,7 +41,10 @@ set-hook -g client-session-changed "set-option @cc_flag '' ; set-window-option @
 set-hook -g client-attached "set-option @cc_flag '' ; set-window-option @tab_color ''"
 
 # --- keyboard -----------------------------------------------------------------
-bind -r Tab switch-client -n
-bind -r BTab switch-client -p
+# Not -r: a repeatable Tab keeps the prefix table open for repeat-time, so a
+# quick second "prefix Tab" sends the prefix key itself into that table
+# (last-window, if you bind it) and the Tab leaks to the pane.
+bind Tab switch-client -n
+bind BTab switch-client -p
 bind 0 switch-client -t =0
 bind S choose-tree -Zs
