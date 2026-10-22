@@ -1,6 +1,7 @@
 /**
- * Inbox noise filters. Each rule is a set of case-insensitive regexes; a mail
- * is hidden by the first enabled rule whose given fields all match, unless
+ * Inbox noise filters. Each rule is a set of case-insensitive, multiline
+ * (^ = line start) regexes; a mail is hidden by the first enabled rule whose
+ * given fields all match, unless
  * the rule's `unless` pattern matches its subject or body. Hidden mail stays
  * in the data (the tab can show it with `h`, the specialist with
  * include_hidden) — nothing is moved or deleted in Outlook.
@@ -56,10 +57,25 @@ export const DEFAULT_EMAIL_FILTERS: EmailFilter[] = [
   {
     name: "gitlab-mr-threads",
     enabled: false,
-    why: "GitLab MR discussion threads (the review tab tracks open MRs) — approvals, merges, failed pipelines and mentions still show",
+    why: "GitLab MR discussion threads (the review tab tracks open MRs) — the MR being approved, merged or conflicted, failed pipelines, mentions and review requests still show",
     from: "^gitlab@",
     subject: "^Re: ",
-    unless: "approved|merged|pipeline failed|failed pipeline|mentioned you|was assigned|requested review",
+    // anchored to GitLab's own event line so a comment that merely says "approved" does not keep the mail
+    unless: "^Merge request (!\\d+ )?(was (approved|merged)|can no longer be merged)|^Pipeline .*failed|mentioned you in|requested (a )?review|assigned you|was assigned to you",
+  },
+  {
+    name: "gitlab-mr-approved",
+    enabled: false,
+    why: "'Merge request was approved' notices (the review tab shows approvals)",
+    from: "^gitlab@",
+    body: "^Merge request was approved",
+  },
+  {
+    name: "gitlab-mr-merged",
+    enabled: false,
+    why: "'Merge request !N was merged' notices",
+    from: "^gitlab@",
+    body: "^Merge request !\\d+ was merged",
   },
   {
     name: "gitlab-pipeline-ok",
@@ -124,7 +140,7 @@ export function mergeEmailFilters(user: unknown): EmailFilter[] {
 function re(pattern: string | undefined): RegExp | null {
   if (!pattern) return null
   try {
-    return new RegExp(pattern, "i")
+    return new RegExp(pattern, "im")
   } catch {
     return null
   }
