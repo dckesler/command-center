@@ -20,7 +20,7 @@
     "agent": "cursor-cli",
     "projectModel": "claude-opus-5-5-high",
     "mkpanes": "~/.local/bin/mkpanes",
-    "editor": "vim",
+    "editor": "",
     "terminal": "switch",
     "tmuxSession": null
   },

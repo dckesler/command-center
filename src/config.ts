@@ -43,6 +43,7 @@ export interface Config {
     projectModel: string
     /** path to the mkpanes script (worktree launcher, repo alias registry) */
     mkpanes: string
+    /** editor started in the left pane of project/task windows; "" or "none" = leave it a shell */
     editor: string
     /** how start-project shows a project: switch = one terminal window, switch the tmux client to the project's session (two-row status line); alacritty | terminal = a new OS window per project; none = leave it detached */
     terminal: "switch" | "alacritty" | "terminal" | "none"
@@ -112,7 +113,7 @@ export const DEFAULTS: Config = {
     agent: "cursor-cli",
     projectModel: "claude-opus-5-5-high",
     mkpanes: join(HOME, ".local", "bin", "mkpanes"),
-    editor: "vim",
+    editor: "",
     terminal: "switch",
     tmuxSession: null,
   },

@@ -15,7 +15,7 @@
 #   --epic        Jira epic key for the **Epic:** line of a fresh PROJECT.md
 #
 # Layout of the session's "central" window (mirrors mkpanes):
-#   pane 1 vim (top-left)   pane 2 central agent (top-right)   panes 3-5 shells (bottom)
+#   pane 1 shell (top-left; commands.editor opens there if set)   pane 2 central agent (top-right)   panes 3-5 shells (bottom)
 #
 # Reporting chain this sets up:
 #   task-tab workers ──cc-report project:<name>──▶ central agent (this window)
@@ -44,7 +44,7 @@ AGENT_CMD="${CC_AGENT_CMD:-$(cc_cfg .commands.agent cursor-cli)}"
 # strongest model). Only applied to the Cursor CLI, whose slugs these are;
 # set commands.projectModel to "" to use the CLI's own default.
 PROJECT_MODEL="${CC_PROJECT_MODEL-$(cc_cfg .commands.projectModel claude-opus-5-5-high)}"
-EDITOR_CMD="$(cc_cfg .commands.editor vim)"
+EDITOR_CMD="$(cc_cfg .commands.editor "")"   # empty/none: leave pane 1 as a shell
 TERMINAL_APP="$(cc_cfg .commands.terminal alacritty)"
 RESERVED="command-center node_modules"
 MODE="auto"
@@ -218,7 +218,9 @@ if ! "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
     cursor-cli|agent|cursor-agent|*/cursor-agent|*/agent) [ -n "$PROJECT_MODEL" ] && MODEL_FLAG="--model '$PROJECT_MODEL' " ;;
   esac
   "$TMUX_BIN" send-keys -t "$AGENT_PANE" "$AGENT_CMD ${MODEL_FLAG}\"\$(cat '$PROMPT_FILE')\"" Enter
-  "$TMUX_BIN" send-keys -t "$WIN_ID.1" "$EDITOR_CMD PROJECT.md" Enter
+  if [ -n "$EDITOR_CMD" ] && [ "$EDITOR_CMD" != "none" ]; then
+    "$TMUX_BIN" send-keys -t "$WIN_ID.1" "$EDITOR_CMD PROJECT.md" Enter
+  fi
   "$TMUX_BIN" select-pane -t "$AGENT_PANE"
   STARTED=1
 fi

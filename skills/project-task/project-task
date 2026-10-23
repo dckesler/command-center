@@ -22,7 +22,7 @@
 #                     without --ticket/--branch: <project>-<title-slug>.
 #   --from <base>     branch off <base> instead of the repo default (new branches only)
 #
-# Layout (mirrors mkpanes): pane 1 vim, pane 2 worker agent, panes 3-5 shells.
+# Layout (mirrors mkpanes): pane 1 shell (commands.editor opens there if set), pane 2 worker agent, panes 3-5 shells.
 #
 # Reporting chain: worker ──cc-report project:<name>──▶ central agent (window "central").
 
@@ -44,7 +44,7 @@ cc_cfg() { # cc_cfg <jq path> <default>
 PROJECTS_DIR="${CC_PROJECTS_DIR:-$(cc_cfg .dirs.projects "$HOME/projects")}"
 MKPANES="${MKPANES_BIN:-$(cc_cfg .commands.mkpanes "$HOME/.local/bin/mkpanes")}"
 AGENT_CMD="${CC_AGENT_CMD:-$(cc_cfg .commands.agent cursor-cli)}"
-EDITOR_CMD="$(cc_cfg .commands.editor vim)"
+EDITOR_CMD="$(cc_cfg .commands.editor "")"   # empty/none: leave pane 1 as a shell
 PROJECT=""
 SUBDIR=""
 REPO=""
@@ -267,7 +267,9 @@ EOF
   # send-keys types into an interactive zsh, so the cursor-cli alias resolves.
   # AGENT_CMD: config commands.agent, or CC_AGENT_CMD (e.g. claude, or echo for tests).
   "$TMUX_BIN" send-keys -t "$WIN_ID.2" "$AGENT_CMD \"\$(cat '$PROMPT_FILE')\"" Enter
-  "$TMUX_BIN" send-keys -t "$WIN_ID.1" "$EDITOR_CMD" Enter
+  if [ -n "$EDITOR_CMD" ] && [ "$EDITOR_CMD" != "none" ]; then
+    "$TMUX_BIN" send-keys -t "$WIN_ID.1" "$EDITOR_CMD" Enter
+  fi
   KIND="project dir"
 fi
 

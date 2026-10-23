@@ -26,7 +26,7 @@ Resolve the inputs `mkpanes` needs, validate them, then run the command. The scr
 - **`--claude`** — use `claude` instead of `cursor-cli` (the default) in the agent pane (top-left). All prompts (plain, `/start-ticket`, `/resume-ticket`, QA, code review, dependency review) are passed the same way either way. (`--cursor` is still accepted as a no-op for backwards compatibility.)
 - **`--code-review`** — code review mode. Starts the AI with a "code reviewer" role prompt and waits for the user to provide code, diffs, or descriptions to review. Works in both plain and worktree mode; takes precedence over `--qa` and `/start-ticket`.
 
-It opens a new tmux window with: top-left `cursor-cli` (or `/start-ticket`) at 60% width, top-right `vim`, and a bottom row of shell panes; in worktree mode with a `package.json` it runs `nvm use && <install>` in a bottom pane, where the install command is detected from the lockfile (`pnpm-lock.yaml` → `pnpm install`, `yarn.lock` → `yarn`, otherwise `npm install`).
+It opens a new tmux window with: top-left `cursor-cli` (or `/start-ticket`) at 60% width, top-right an empty shell (no editor is started), and a bottom row of shell panes; in worktree mode with a `package.json` it runs `nvm use && <install>` in a bottom pane, where the install command is detected from the lockfile (`pnpm-lock.yaml` → `pnpm install`, `yarn.lock` → `yarn`, otherwise `npm install`).
 
 The default scenario is **starting a ticket worktree**: `mkpanes <repo> -w <TICKET>`.
 
@@ -88,7 +88,7 @@ or for plain mode:
 mkpanes <repo>
 ```
 
-Run it with the Bash tool. The command returns once the window is set up (it does not block on the spawned `cursor-cli`/`vim`). Report the new tmux window / worktree path back to the user.
+Run it with the Bash tool. The command returns once the window is set up (it does not block on the spawned `cursor-cli`). Report the new tmux window / worktree path back to the user.
 
 ## Notes
 
