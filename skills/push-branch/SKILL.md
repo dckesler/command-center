@@ -1,11 +1,13 @@
 ---
 name: push-branch
-description: Push the current branch to origin and create a GitLab merge request using glab (or push follow-up commits to the branch's existing MR). Commits any outstanding changes first, syncs AGENTS.md, runs pre/post-push hooks, creates the MR if none exists, and links it to the Jira ticket. Always hands off to /babysit-branch afterwards to poll CI and triage review comments. Use when the user asks to push a branch, create an MR, open a merge request, or push fixes to an MR.
+description: Push the current branch to origin and create a GitLab merge request using glab (or push follow-up commits to the branch's existing MR). Commits any outstanding changes first (calling out the message without waiting for confirmation), syncs AGENTS.md, runs pre/post-push hooks, creates the MR if none exists, and links it to the Jira ticket. Runs unattended; always hands off to /babysit-branch afterwards to poll CI and triage review comments. Use when the user asks to push a branch, create an MR, open a merge request, or push fixes to an MR.
 ---
 
 # Push Branch Skill
 
 Commit any outstanding changes, push the current branch to origin, create a GitLab MR with an auto-derived title (or reuse the branch's existing open MR), link the MR to the Jira ticket, then hand off to `/babysit-branch` to poll CI and triage review comments.
+
+**Nothing here waits on Daniel.** The commit message, AGENTS.md additions, hook results and the MR link are called out in the chat as information and the skill keeps going. The only stop is a hook failure you cannot fix within the branch's own changes (Steps 0 and 3b); then also run `cc-report --severity attention "<KEY>: needs you — <why>"` when `cc-report` is on `PATH` and `$TMUX_PANE` is set, so his tab lights up.
 
 **Every push ends in `/babysit-branch`.** This holds for the first push that opens the MR and for every follow-up push (review fixes, CI fixes, "one more thing" commits). A new SHA means a new pipeline and a new round of review — the branch is not babysat until that round is done too.
 
@@ -45,9 +47,9 @@ Before anything else, make sure the work is committed using our standard commit 
      | `smartsense-one-skeleton` | `<type>: <description> (<TICKET>)` | `fix: rebuild charts when the theme changes (SSONE-328)` |
      | *(all others)* | `<TICKET> (<type>) - <description>` | `LW-92 (feat) - rename Store ID fields to Brand Store Id on web` |
 
-     Detect the repo from the `origin` remote or the working directory. If the branch has no ticket key, omit the ticket portion and ask the user to confirm the message.
-   - **Show the user the proposed commit message and wait for confirmation** (they may tweak the type or wording). Do not commit without confirmation.
-4. On confirmation, stage everything, run the pre-commit hook (if present), then commit.
+     Detect the repo from the `origin` remote or the working directory. If the branch has no ticket key, omit the ticket portion.
+   - **Call out the commit message** in one line (`Committing as: <message>`) and continue. Do not wait for confirmation — Daniel can amend the wording later if he wants to.
+4. Stage everything, run the pre-commit hook (if present), then commit.
 
    Stage changes:
    ```bash
@@ -64,11 +66,11 @@ Before anything else, make sure the work is committed using our standard commit 
      fi
    fi
    ```
-   - If the hook **exits non-zero**: show its full output to the user, stop, and ask them to fix the issues before retrying. Do not commit.
+   - If the hook **exits non-zero**: read its output. When the cause is in this branch's own changes and mechanical (formatting, lint, a type error, a test the change broke), fix it, re-stage and re-run the hook — up to three times. Otherwise show the output, say what you tried, and stop (see *Nothing here waits on Daniel* above for how to flag it). Do not commit over a failing hook and never bypass it.
    - If the hook passes, is absent, or is not executable: proceed to commit.
 
    ```bash
-   git commit -m "<the message confirmed above>"
+   git commit -m "<the message called out above>"
    ```
    Then continue to Step 1.
 
@@ -82,7 +84,7 @@ Run as a single Bash call:
 git branch --show-current; git remote get-url origin; git status
 ```
 
-- If the working tree is **still** not clean after Step 0 (e.g. the user declined to commit), stop and tell the user there are uncommitted changes before proceeding.
+- If the working tree is **still** not clean after Step 0 (a hook failure you could not fix), stop — Step 0 has already said why.
 - Parse the repo slug from the remote URL in `OWNER/REPO` or `GROUP/NAMESPACE/REPO` format for use with `-R`.
 
 ## Step 2: Derive the MR Title
@@ -98,7 +100,7 @@ branch=$(git branch --show-current) && git log --oneline -20 | grep -m1 "$branch
 ```
 
 - If a match is found, use that commit message as the MR title.
-- If no match is found, ask the user: "What should the MR title be?"
+- If no match is found, derive one from the branch's diff against the target branch, in the same per-repo format. Do not ask.
 
 Pass it explicitly with `-t` in Step 5 — do not rely on `glab` inferring a title
 from the branch or commits.
@@ -116,8 +118,8 @@ The working tree is clean by this point (Step 1 halts otherwise), so every prior
    - **This conversation** — conventions, commands, gotchas, new scripts/directories, or architecture decisions that came up while doing the work.
 3. Compare against the current `AGENTS.md` and identify **durable, project-level** facts that are missing — e.g. new build/test/lint commands, a new directory's purpose, naming or structural conventions, non-obvious gotchas. **Exclude** transient or task-specific notes; keep `AGENTS.md` lean.
 4. If nothing meaningful is missing, skip the commit and continue to Step 4.
-5. If there are additions, draft them, then **show the user the proposed `AGENTS.md` changes and wait for explicit approval.** Do not commit without approval.
-6. On approval, apply the edit and commit it on its own:
+5. If there are additions, apply them, call out what was added (one line per fact), and commit on its own. When in doubt whether a fact is durable, leave it out — a missed note is cheap, a noisy `AGENTS.md` is not.
+6. Commit:
    ```bash
    git add AGENTS.md && git commit -m "AGENTS.md updates"
    ```
@@ -143,9 +145,7 @@ Before pushing, check for and run the pre-push hook explicitly. This surfaces ho
      | .git/hooks/pre-push origin "$remote_url"
    ```
    - **Exits 0** → tell the user "✅ pre-push hook passed." Proceed to Step 4.
-   - **Exits non-zero** → show the hook's full output, stop, and tell the user the pre-push hook failed. Ask: "Would you like to fix the issue and retry, or push anyway without the hook (requires your explicit approval)?"
-     - To retry: wait for the user to resolve the issue, then re-run from Step 3b.
-     - To skip: use `git push --no-verify -u origin <branch>` in Step 4 instead of the normal push (only on explicit user approval).
+   - **Exits non-zero** → read the output. When the cause is in this branch's own changes and mechanical (same rule as the pre-commit hook), fix it, commit the fix in the Step 0 format, and re-run from Step 3b — up to three times. If it still fails, or the cause is outside the branch, show the output, say what you tried, and stop (flag it per *Nothing here waits on Daniel*). Never push with `--no-verify` unless Daniel explicitly says to.
 
 ## Step 4: Push the Branch
 

@@ -1,6 +1,6 @@
 ---
 name: start-ticket
-description: Prepare a Jira ticket to begin work on it in the SmartSense Atlassian workspace — fetch the ticket, ensure it is formatted to our standard, assigned to Daniel, set to In Progress, and placed in the current sprint. When running inside tmux, rename this pane's window tab to `<ticket>: <few words>`. Then investigate the work, ask until the approach is executable, present a plan for approval, and start implementing only after Daniel approves. Use when starting work on a branch/ticket, when invoked as `/start-ticket <ticket-or-branch>` (optionally with `--no-format` to skip the formatting check), or when the user says "start this ticket", "get this ticket ready", "prep my ticket", or mkpanes launches a worktree. Updates anything that isn't already correct.
+description: Prepare a Jira ticket to begin work on it in the SmartSense Atlassian workspace — fetch the ticket, ensure it is formatted to our standard, assigned to Daniel, set to In Progress, and placed in the current sprint. When running inside tmux, rename this pane's window tab to `<ticket>: <few words>`. Then investigate the work, ask only when something genuinely needs Daniel, call out the plan, implement it without waiting for approval, and hand off to /push-branch when the work is done. Use when starting work on a branch/ticket, when invoked as `/start-ticket <ticket-or-branch>` (optionally with `--no-format` to skip the formatting check), or when the user says "start this ticket", "get this ticket ready", "prep my ticket", or mkpanes launches a worktree. Updates anything that isn't already correct.
 ---
 
 # Start Ticket Skill
@@ -12,9 +12,9 @@ Prepare a Jira ticket so Daniel can start working on it, then plan and execute t
 3. **Assigned to Daniel**
 4. **In Progress**
 5. **In the current sprint**
-6. **Planned** — investigate until the approach is executable, ask when unsure, present a plan, wait for approval, then implement
+6. **Planned and done** — investigate until the approach is executable, ask only when genuinely unsure, call out the plan, implement it, then hand off to `/push-branch`
 
-Update whatever isn't already correct on the ticket. Use the Atlassian MCP server only for Jira, targeting the SmartSense workspace. After the ticket is ready, use the current repo to plan and (only after approval) do the work.
+Update whatever isn't already correct on the ticket. Use the Atlassian MCP server only for Jira, targeting the SmartSense workspace. After the ticket is ready, use the current repo to plan and do the work, then hand off to `/push-branch`, which opens the MR and hands on to `/babysit-branch`. Daniel hears from this chain at two kinds of moment only: when the MR is ready for his review, and when a question comes up that only he can answer.
 
 ## Known Constants
 
@@ -26,6 +26,15 @@ Update whatever isn't already correct on the ticket. Use the Atlassian MCP serve
 ## Tool Names
 
 This skill refers to MCP tools by short name (e.g. `getJiraIssue`, `editJiraIssue`). Some agent runtimes expose the same tools under a longer qualified or deferred name (e.g. `mcp__claude_ai_Atlassian__getJiraIssue`, loaded via a tool-search/discovery step before first use). If your runtime works that way, resolve/load the qualified equivalent and use that — the short names below always refer to the same underlying Atlassian operation.
+
+## When you need Daniel
+
+Daniel is not watching this pane. Two things reach him; nothing else does:
+
+- **A question only he can answer** — the Step 6 list, a required ticket section nobody can fill but him, or an execution surprise that changes product behaviour or scope. Ask it in one message (batch everything you need), and when `cc-report` is on `PATH` and `$TMUX_PANE` is set also run `cc-report --severity attention "<KEY>: needs you — <question in a few words>"` so his tab lights up. Then wait.
+- **The MR is ready for review** — `/babysit-branch` sends that one at the end of the chain.
+
+Plans, ticket edits, commit messages and progress are called out in the chat as information. Do not phrase them as questions and do not wait for a reply.
 
 ## Input
 
@@ -88,9 +97,8 @@ If the ticket already matches, skip to Step 3.
 If it doesn't match:
 
 1. Rebuild the title and description into the correct template, **reusing the existing ticket content** — map whatever is already there into the right sections (e.g. an existing goal into Summary; existing repro / QA Testing Steps / Test Cases into QA Steps; old Technical Details into Implementation Details; any "why" from Business Context into Summary). Auto-detect platform/type from the content. Keep `## Branch Id:` set to the ticket key and leave `## Merge Request` empty.
-2. For any **required** section that the existing ticket doesn't provide, **ask Daniel** for it. Use "None" / "N/A" for genuinely inapplicable fields rather than asking. Do not invent acceptance criteria, repro steps, or agent implementation instructions.
-3. Show a short preview of the reformatted title + description and ask Daniel to confirm before editing.
-4. On confirmation, apply with `editJiraIssue` (`summary` + `description`).
+2. For any **required** section that the existing ticket doesn't provide and that only Daniel can supply (acceptance criteria, repro steps, the "why"), **ask Daniel** for it per *When you need Daniel*. Use "None" / "N/A" for genuinely inapplicable fields rather than asking. Implementation Details is not one of these — leave it as a placeholder and fill it from your own Step 6 investigation. Do not invent acceptance criteria or repro steps.
+3. Apply with `editJiraIssue` (`summary` + `description`) and call out in a few lines what moved where (old title → new title; which existing text landed in which section). Do not wait for confirmation — it is his own content rearranged, and the Step 5 report shows the result.
 
 ### Step 2.5: Check for a Universal Test Plan Agent comment
 
@@ -107,7 +115,7 @@ Compare against the ticket's current **QA Steps** section (post Step 2, if that 
 - **If QA Steps is missing or thin** (just restates the AC, no edge/negative cases): draft additional bullets from the agent's edge/negative cases to merge in. Reuse its wording; don't invent beyond what it suggests.
 - **If QA Steps already covers this ground**: no change needed.
 
-Never overwrite existing QA Steps — only append what's missing. Show Daniel a short preview of any proposed additions and get confirmation before applying (can be combined with the Step 2 preview/confirmation if both are happening in the same run). Apply via `editJiraIssue` on `description`.
+Never overwrite existing QA Steps — only append what's missing. Apply via `editJiraIssue` on `description` (fold it into the Step 2 edit when both happen) and call out in one line how many bullets were added. No confirmation.
 
 If the comment's domain routing looks wrong for this ticket (e.g. labeled `MOBILE` for a web-only change), mention it to Daniel and suggest adding the `wrong_domain_universal` label — but don't add it automatically.
 
@@ -166,13 +174,15 @@ Do **not** edit application code in this step. Ticket edits from Steps 2–4 are
    - Repro / environment / flag / permission is needed to be sure
    - The ticket looks larger than one MR or the next slice is unclear
 
-   Ask specific questions. Do not invent acceptance criteria, product behavior, or a "probably this file" guess. If blocked, say what was searched and what is still unknown, then wait.
+   Ask specific questions, all in one message, per *When you need Daniel*. Do not invent acceptance criteria, product behavior, or a "probably this file" guess. If blocked, say what was searched and what is still unknown, then wait.
+
+   Routine judgment calls are yours, not his: which of two equivalent files, a name, where a test lives, following the nearest existing pattern. Make them and note them in the plan's **Risks** line.
 
 5. **Only draft a plan once** you can name the files/areas to change, the concrete steps, and how you will know it worked. If you cannot, keep asking — do not paper over gaps with a vague plan.
 
-### Step 7: Present the plan and wait for approval
+### Step 7: Call out the plan and continue
 
-Show a short plan and **stop**. Do not start implementing, scaffolding, or "just the first file."
+Print the plan, then go straight to Step 8. Do not ask for approval and do not wait.
 
 ```
 ## Plan — LW-XXXXX
@@ -182,17 +192,25 @@ Show a short plan and **stop**. Do not start implementing, scaffolding, or "just
 1. ...
 2. ...
 **Checks:** tests / QA path that prove the ACs
-**Risks:** leftovers, shared-lib blast radius, open questions (should be none or already answered)
-Approve this plan to start, or say what to change.
+**Risks:** leftovers, shared-lib blast radius, judgment calls made (open questions should be none — they were asked in Step 6)
+Starting now — reply here if you want it changed.
 ```
 
-Wait for an explicit approve (e.g. "go", "lgtm", "do it", "approved"). A clarifying answer to an earlier question is **not** approval — incorporate it and re-show the plan if it changed.
+Daniel can still steer: if a message from him arrives while you work (a change of approach, a scope cut), fold it in, re-print the plan and carry on. Fill the ticket's **Implementation Details** from this plan now if Step 2 left it as a placeholder.
 
-If Daniel revises the plan, update it and ask again. Do not start on an unapproved revision.
+### Step 8: Execute the plan
 
-### Step 8: Execute the approved plan
+Implement the plan as called out. Follow repo conventions (`AGENTS.md`, existing patterns). Do not expand scope. Run the checks the plan named (typecheck / lint / affected tests) and fix what they find.
 
-After approval, implement only what was approved. Follow repo conventions (`AGENTS.md`, existing patterns). Do not expand scope. If execution hits something the plan did not cover, **stop and ask** — do not improvise a new approach mid-flight.
+If execution hits something the plan did not cover:
+- a routine detail (an extra call site, a helper to extract, a fixture to add) → do it and mention it in the hand-off note;
+- something that changes product behaviour, API shape or scope, or reaches into a shared library beyond the ticket → **stop and ask** per *When you need Daniel*. Do not improvise a new approach mid-flight.
+
+### Step 9: Hand off to /push-branch
+
+When the plan's checks pass and the working tree holds only the ticket's changes, write a two-line note (what changed, how it was verified) and run the `push-branch` skill. It calls out the commit message, pushes, opens the MR, links it on the ticket and hands on to `/babysit-branch`, which watches CI and review until the MR is ready and then notifies Daniel. Do not ask whether to push.
+
+Do not hand off while blocked on a question, when a check fails for a reason you cannot fix within the ticket's scope, or when the diff contains anything outside the plan that you have not called out.
 
 ## Critical Rules
 
@@ -200,9 +218,9 @@ After approval, implement only what was approved. Follow repo conventions (`AGEN
 - Use the hardcoded cloud ID and Daniel's account ID — do not call `getAccessibleAtlassianResources` or `atlassianUserInfo`.
 - The `jira-ticket` skill is the source of truth for title/description format — read it rather than hardcoding the template here.
 - Never overwrite existing ticket content with placeholders; reuse what's there and ask for anything genuinely missing.
-- Always preview and confirm before reformatting the title/description.
+- Call out ticket reformatting, QA Steps additions and the plan as information; never wait for confirmation on them.
 - Set the sprint via `customfield_10007` with the numeric sprint ID.
 - Only change fields that aren't already correct.
-- After ticket prep: investigate, then ask, then plan, then wait. Never start implementation until Daniel approves the plan.
-- Do not guess product behavior or the change site. If unsure, ask.
-- Do not treat ticket-prep confirmation or answers to clarifying questions as plan approval.
+- After ticket prep: investigate, ask only what only Daniel can answer, call out the plan, implement, hand off to `/push-branch`.
+- Do not guess product behavior or the change site. If unsure, ask — once, with everything batched, and light up the tab with `cc-report --severity attention`.
+- A message from Daniel mid-run is steering, not a gate — fold it in and keep going.

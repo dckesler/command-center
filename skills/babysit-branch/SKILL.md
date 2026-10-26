@@ -1,11 +1,24 @@
 ---
 name: babysit-branch
-description: Get a GitLab MR merge-ready — resolve conflicts with the target branch, poll the CI/CD pipeline until it reaches a terminal state (updating from the target branch when a failure looks unrelated), then collect unresolved MR review comments (any author, including CodeAnt and humans), triage them autonomously — fix the ones worth fixing in the working tree, close the rest with a reason — summarize, and ask whether to run /push-branch. Loops back to CI polling after every push to the MR and ends only when the MR is mergeable. Can be invoked standalone on any branch that already has an open MR, or handed off from /push-branch. Use when the user asks to watch CI, babysit a branch, or wait for review comments, and ALWAYS after pushing new commits to a branch that has an open MR.
+description: Get a GitLab MR merge-ready — resolve conflicts with the target branch, poll the CI/CD pipeline until it reaches a terminal state (updating from the target branch when a failure looks unrelated), then collect unresolved MR review comments (any author, including CodeAnt and humans), triage them autonomously — fix the ones worth fixing in the working tree, close the rest with a reason — push the fixes with /push-branch without asking, and loop back to CI polling after every push until CI is green on the current HEAD with no open threads — then notify Daniel that the MR is ready for his review. Asks only when a decision genuinely needs him. Can be invoked standalone on any branch that already has an open MR, or handed off from /push-branch. Use when the user asks to watch CI, babysit a branch, or wait for review comments, and ALWAYS after pushing new commits to a branch that has an open MR.
 ---
 
 # Babysit Branch Skill
 
-Poll the CI/CD pipeline on the current branch's open GitLab MR until it reaches a terminal state. If the pipeline passes, move the Jira ticket to Code Review. Then wait for review comments to settle, collect unresolved discussions from **any author** (humans and bots), and **triage them yourself**: fix every comment that is worth fixing, close the rest with a reason, summarize what you did, and ask the user whether to run `/push-branch`. The user is consulted at exactly two points — after a CI failure diagnosis, and after the fix summary — never for per-comment decisions.
+Poll the CI/CD pipeline on the current branch's open GitLab MR until it reaches a terminal state. If the pipeline passes, move the Jira ticket to Code Review. Then wait for review comments to settle, collect unresolved discussions from **any author** (humans and bots), and **triage them yourself**: fix every comment that is worth fixing, close the rest with a reason, summarize what you did, and push the fixes with `/push-branch` — which lands back here for the new pipeline. Keep looping until CI is green on the current `HEAD` and no thread is open, then tell Daniel the MR is ready for his review.
+
+Daniel is not watching. He hears from this skill at exactly two kinds of moment: **the MR is ready** (Step 5), and **a question only he can answer** — a conflict where both sides are intentional (Step 1a), a CI failure you cannot fix within the MR's scope (Step 1c), a reviewer question about product intent (Step 4). Everything else — which comments to fix, whether to push, whether to update from the target branch, whether to retry a flaky job — is your call. Never ask "ready to push?" or "fix or continue?".
+
+## Notifying Daniel
+
+When you reach Step 5 or stop on a question, say it in the chat **and**, when `cc-report` is on `PATH` and `$TMUX_PANE` is set, run one of:
+
+```bash
+cc-report --severity attention "<KEY>: MR ready for review — <MR URL>"
+cc-report --severity attention "<KEY>: needs you — <the question in a few words>"
+```
+
+`cc-report` picks the destination itself (the project's central agent, or Command Center's worktrees tab) and marks this tmux tab, so Daniel sees it without watching the pane. Status lines ("pipeline running", "2 fixed, 1 closed") stay in the chat — do not report them.
 
 **Standing rule — any push restarts polling.** Whenever new commits land on a branch with an open MR (via `/push-branch`, a manual `git push`, or a fix you committed yourself), re-enter this skill at **Step 1** for the new `HEAD` SHA. A push means a new pipeline and a fresh round of bot/human review; never treat the MR as babysat because an earlier SHA was.
 
@@ -15,17 +28,20 @@ This skill is re-entered on every `ScheduleWakeup` fire. **Determine which phase
 
 - MR info not yet captured and not handed from `/push-branch` → **Step 0** (derive MR info).
 - MR info known, CI pipeline not yet terminal → **Step 1** (CI polling).
-- CI pipeline failed and failure diagnosis shown, waiting on user decision → act on **Step 1c**'s fix-or-continue prompt when they reply.
+- CI pipeline failed, not yet diagnosed → **Step 1c** (diagnose and act: fix / update / retry / escalate). Escalated and waiting on Daniel → act on his answer when it arrives (a fix → `/push-branch`; "carry on" → Step 2).
 - CI pipeline reached a terminal state (non-failed), review comments not yet listed → **Step 2** (review-comment polling).
-- CI pipeline failed, user chose "continue" → **Step 2** (review-comment polling).
+- CI failure escalated and Daniel said to carry on → **Step 2** (review-comment polling).
 - Review comments collected, triage not yet done → **Step 3** (collect) then **Step 4** (fix / close autonomously). No wakeups during triage; it runs straight through.
-- Fix summary shown, waiting on the user's "ready for `/push-branch`?" answer → act on **Step 4b** when they reply. Do not schedule wakeups while waiting on the user.
+- Triage done with fixes sitting in the working tree → `/push-branch` (Step 4a hands off itself; if you are here, the push has not happened — run it now).
+- Blocked on a question for Daniel with no pipeline in flight → do not schedule wakeups; wait. If a pipeline **is** in flight while a question is open (Step 4a's left-open items after a push), keep polling and act on the answer whenever it arrives (Step 4b).
 - MR has conflicts with its target branch (Step 1a found `has_conflicts: true`) and they are not yet resolved → **Step 1a**. If you already asked the user how to resolve a genuine intent conflict, wait for their answer.
 - New commits were pushed to the MR since the last CI poll (a `/push-branch` handoff after triage, a manual push, or `git rev-parse HEAD` no longer matches the SHA you last polled) → **Step 1** for the **new** `HEAD` SHA. Reset `REVIEW_POLLS` to 0 and record the push time as `SINCE` (see Step 2).
 
 Always reuse the MR IID, MR URL, and repo slug captured earlier in the conversation rather than re-deriving them.
 
-**Loop:** CI → review comments → autonomous triage → summary + "ready for `/push-branch`?" → push → back to CI. Do not print Step 5 links until that loop has nothing left to do: CI terminal on the current `HEAD`, no conflicts with the target branch, no unresolved comments, and no fixes sitting unpushed in the working tree.
+**Loop:** CI → review comments → autonomous triage → summary → `/push-branch` → back to CI. Do not print Step 5 until that loop has nothing left to do: CI terminal on the current `HEAD`, no conflicts with the target branch, no unresolved comments, and no fixes sitting unpushed in the working tree.
+
+Track `ROUNDS` — pushes this skill has caused for this MR. After **5** rounds without reaching Step 5, stop and escalate per *Notifying Daniel*: something is oscillating (a bot re-flagging your fix, a test that fails differently each run) and another round will not fix it.
 
 ## Step 0: Derive MR Info (standalone entry only)
 
@@ -57,7 +73,7 @@ glab mr view <MR_IID> -R <repo-slug> --output json \
 - `has_conflicts` is `true` → resolve them now, before CI runs on a commit that cannot merge:
   1. `git fetch origin <target_branch>` and `git merge origin/<target_branch>` (match the repo's habit — use `git rebase origin/<target_branch>` only if the repo's MRs are normally rebased and the branch is not shared).
   2. For each conflicted file, read both sides and the surrounding code. Keep the intent of **both** the branch and the target: a target-side rename or signature change applies to the branch's new code too; a branch-side fix is not dropped because the target touched the same lines.
-  3. If the two sides want incompatible things (both changed the same behaviour on purpose), `git merge --abort`, show the conflicting hunks with one line on what each side intends, and ask the user which wins. **Do not schedule a wakeup** — wait for the answer.
+  3. If the two sides want incompatible things (both changed the same behaviour on purpose), `git merge --abort`, show the conflicting hunks with one line on what each side intends, and ask Daniel which wins per *Notifying Daniel*. **Do not schedule a wakeup** — wait for the answer.
   4. After resolving, run the repo's checks on the touched files, then continue to `/push-branch` — this is a push, so it hands back here at Step 1 for the new `HEAD`.
 
 ## Step 1: Poll CI/CD Pipeline Status
@@ -130,7 +146,7 @@ This runs **once**, immediately after a `failed` terminal state is detected. Ski
    ```
    If the trace is empty or the API call fails (e.g. the job has no log), note "No log available for `<job_name>`."
 
-4. **Present a concise failure summary** to the user:
+4. **Write a concise failure summary** in the chat (information, not a question):
    - List each failed job by `<stage> / <job_name>`.
    - Under each job, show the last ~20 meaningful lines of its log (strip ANSI escape codes with `sed 's/\x1b\[[0-9;]*m//g'` if they appear). Truncate long lines at 200 chars. Focus on error lines — lines containing `error`, `Error`, `ERROR`, `FAILED`, `fatal`, `exit code`, or `npm ERR!` are most useful; include the surrounding 3 lines of context.
    - If there are more than 3 failed jobs, note "… and N more failed jobs. See the pipeline in GitLab for the full list." but do not fetch logs for the extras.
@@ -139,12 +155,13 @@ This runs **once**, immediately after a `failed` terminal state is detected. Ski
    ```bash
    git fetch -q origin <target_branch> && git rev-list --count HEAD..origin/<target_branch>
    ```
-   A non-zero count means the branch is behind. Say so in the summary and offer to merge the latest target branch and re-run (the **Update** option below) instead of guessing at a fix.
+   A non-zero count means the branch is behind. Say so in the summary.
 
-6. After presenting the summary, ask the user: "Would you like to fix the issue and push a new commit, update from `<target_branch>` and re-run, or should I continue to review comments?"
-   - **Fix** — if the cause is clear from the log (lint, type error, a test you can see is wrong, a missing import), make the fix yourself in the working tree and show the diff; otherwise wait for the user to make the change. Then run `/push-branch` (Step 0 commits the fixes; it pushes to the same branch and MR — no second MR) which hands back to this skill at Step 1 for the new pipeline.
-   - **Update** — `git merge origin/<target_branch>` (resolve conflicts per Step 1a), then `/push-branch`. The new pipeline tells you whether the failure was really unrelated.
-   - **Continue** — proceed to Step 2 without re-pushing.
+6. **Act — do not ask.** Take the first option that fits:
+   - **Fix** — the failure is this MR's and the cause is clear from the log (lint, type error, a test the change broke, a missing import, a snapshot the change legitimately altered). Fix it in the working tree, run the failing check locally when you can, show the diff, and run `/push-branch` (Step 0 commits with the standard message; same branch, same MR — never a second MR). It hands back here at Step 1 for the new pipeline.
+   - **Update** — the failure looks unrelated and the branch is behind its target. `git merge origin/<target_branch>` (conflicts per Step 1a), then `/push-branch`. The new pipeline tells you whether it was really unrelated.
+   - **Retry** — the failure looks unrelated, the branch is current, and the log reads like infrastructure or flake (runner lost, network timeout, a test the MR did not touch that passed on the previous pipeline). Retry each failed job once — `glab api -X POST "projects/:id/jobs/<JOB_ID>/retry"` — and go back to Step 1 polling. One retry per SHA; a second identical failure is not flake.
+   - **Escalate** — none of the above fits: the cause is unclear, a real fix would break the scope rule below, the same job has failed after two fix rounds, or the retry failed again. Say what failed, what you tried and what you think it needs, then stop per *Notifying Daniel*. When Daniel answers, do what he says (a fix → `/push-branch`; "carry on" → Step 2).
 
    **Scope rule for any CI fix you make yourself.** Fix the code this MR changed. Never edit `.gitlab-ci.yml`, CI scripts, lint/type/test configuration, thresholds, timeouts or retry counts to make a failure pass; never skip, delete or `.only` a test to get green; never change code outside the MR's scope. If a genuine fix would require any of those, do not do it — report what you found and why it needs a human decision, then ask.
 
@@ -268,9 +285,9 @@ glab api -X PUT "projects/:id/merge_requests/<MR_IID>/discussions/<DISCUSSION_ID
 
 Resolve fixed threads now (before the push) so the user's summary and GitLab agree; the fix itself reaches the MR on the next push.
 
-**Do not commit and do not push here.** Leave the fixes in the working tree — `/push-branch` Step 0 will show the commit message for confirmation and push.
+**Do not commit and do not push here.** Leave the fixes in the working tree — Step 4a hands off to `/push-branch`, whose Step 0 commits them with the standard message and pushes.
 
-### Step 4a: Summarize and Ask
+### Step 4a: Summarize and Push
 
 Print one summary with three groups (omit empty groups):
 
@@ -289,20 +306,17 @@ Left open (needs you)
 3. <author> — <file:line> — <the question, verbatim or near>
 ```
 
-Then, if anything was fixed, ask plainly:
+Then act on it without asking:
 
-> "Fixes are in the working tree (uncommitted). Ready to go back to `/push-branch`?"
+- **Anything fixed** → run `/push-branch` now. It commits (calling out the message), pushes to the same branch and MR (never a second MR), and hands back here at **Step 1** for the new `HEAD`. Reset `REVIEW_POLLS` to 0 and increment `ROUNDS`.
+- **Nothing fixed, nothing left open** → Step 5.
+- **Items left open** → these are questions only Daniel can answer. They are already in the summary under *Left open*; send one `cc-report --severity attention "<KEY>: needs you — <N> review question(s) on !<IID>"` per *Notifying Daniel*. If a push also happened, keep polling CI as normal; if not, do not schedule a wakeup — wait. When his answers arrive, handle them per Step 4b.
 
-If nothing was fixed (all closed), skip the question; continue to Step 5 if nothing is left open, or stop and ask the user about the left-open items if there are any.
+### Step 4b: Messages from Daniel mid-loop
 
-**Do not schedule a wakeup here.** Wait for the user's reply.
-
-### Step 4b: Act on the Reply
-
-- **Yes / go / push** → run `/push-branch`. It commits (with confirmation of the message), pushes to the same branch and MR (never a second MR), and hands back to this skill at **Step 1** for the new `HEAD`. Reset `REVIEW_POLLS` to 0.
-- **Changes requested** (the user disagrees with a fix or a close) → apply what they asked: revert or adjust the fix, or un-resolve and re-open a thread with `glab api -X PUT "...?resolved=false"` and a reply. Re-print the summary and ask again.
-- **Answers to left-open items** → fold them in as fixes or closes per their answer, update the summary, and ask again if a push is now needed.
-- **Not now** → stop. Say the fixes remain uncommitted in the working tree and that running `/push-branch` later will resume the loop.
+- **Answers to left-open items** → fold each in as a fix or a close per Step 4; push via `/push-branch` if code changed.
+- **Disagrees with a fix or a close** → revert or adjust the fix, or re-open the thread with `glab api -X PUT "...?resolved=false"` and a reply saying why; push if code changed.
+- **Stop / not now** → stop. Say what is uncommitted in the working tree and that running `/push-branch` later resumes the loop.
 
 ## Step 5: Final Output — MR URL and Jira Ticket URL
 
@@ -315,9 +329,9 @@ glab mr view <MR_IID> -R <repo-slug> --output json \
 
 - `has_conflicts: true` → back to **Step 1a**.
 - `blocking_discussions_resolved: false` → a thread was opened or re-opened since triage; back to **Step 3**.
-- `detailed_merge_status` of `not_approved` (or anything else that needs a person) is **not** yours to fix — name it in the final line so the user knows what is still outstanding.
+- `detailed_merge_status` of `not_approved` (or anything else that needs a person) is **not** yours to fix — name it in the final line so Daniel knows what is still outstanding.
 
-Then print:
+This is the moment Daniel is meant to hear from this skill. Print the block below **and** send `cc-report --severity attention "<KEY>: MR ready for review — <MR URL>"` per *Notifying Daniel*.
 
 - **MR URL** — the GitLab merge request URL captured in Step 0 or handed from `/push-branch`
 - **Jira ticket URL** — derive the ticket key from the branch name using the pattern `[A-Z]+-[0-9]+` (e.g., `LW-17033`) and format the URL as:
@@ -325,7 +339,7 @@ Then print:
 
 Example output:
 ```
-✅ Pipeline passed for `LW-17033`. Review comments triaged (2 fixed, 1 closed). Mergeable; waiting on approval.
+✅ `LW-17033` is ready for your review — pipeline green, 2 review threads fixed, 1 closed, 0 open. Mergeable once approved.
 
 🔗 MR: https://gitlab.com/smartsense4/lists/-/merge_requests/3577
 🎟  Jira: https://smartsensebydigi.atlassian.net/browse/LW-17033

@@ -202,7 +202,7 @@ if [ -n "$REPO" ]; then
   fi
 
   if [ -n "$TICKET" ]; then
-    TICKET_STEPS="This task is Jira ticket $TICKET on branch $TICKET. Begin with the start-ticket skill (the equivalent of /start-ticket $TICKET): fetch and format the ticket, assign it to Daniel, set it In Progress, investigate, and present a plan — implement only after Daniel approves in this chat. When implementation is complete, use the push-branch skill to open the MR and babysit-branch to watch CI and review comments. Report to the central agent at these points: started, plan ready for approval (--severity attention), MR opened (include the MR link), pipeline green or red, review comments needing decisions, done."
+    TICKET_STEPS="This task is Jira ticket $TICKET on branch $TICKET. Begin with the start-ticket skill (the equivalent of /start-ticket $TICKET): fetch and format the ticket, assign it to Daniel, set it In Progress, investigate, call out a plan and implement it — do not wait for approval; ask only when something genuinely needs Daniel. When implementation is complete, hand off to the push-branch skill (it opens the MR and hands on to babysit-branch, which loops on CI and review comments until the MR is green with no open threads). Report to the central agent at these points: started, plan (info), MR opened (include the MR link), MR ready for Daniel's review (--severity attention), and any question only Daniel can answer (--severity attention)."
   else
     TICKET_STEPS="This task has no Jira ticket. You are on branch $BRANCH. Commit as you go with clear messages. When the work is done, report with --severity attention asking whether to open an MR (push-branch skill) or whether a ticket should be created first (jira-ticket skill) — do not push without that answer."
   fi
