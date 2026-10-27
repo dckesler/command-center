@@ -1,16 +1,19 @@
 /**
  * The tmux central agent (config central.mode = "tmux"): cursor-cli running
  * in a pane of the Command Center tmux window, started by the cc-central
- * skill. This module is what the TUI needs to show it read-only on tab 1 and
- * to hand it messages — the agent itself talks back through cc-instruct,
- * cc-todo and cc-mail, never through the SDK hub.
+ * skill. This module is what the TUI needs for tab 1 — the agent's state and
+ * the stream of reports addressed to central (inbox.jsonl), which the agent
+ * reads with cc-inbox; only warn/attention reports are mailed into its chat.
+ * The agent talks back through cc-instruct, cc-todo and cc-mail, never
+ * through the SDK hub.
  */
-import { existsSync, statSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { config } from "../config.ts"
-import { findTranscript, readAgentStatuses, readTranscriptTail, type AgentStatus, type TranscriptTurn } from "./agents.ts"
+import { readAgentStatuses, type AgentStatus } from "./agents.ts"
+import { readInbox, type InboxRecord } from "./inbox.ts"
 import { run } from "./exec.ts"
 import { readPendingMail, pendingMailFor } from "./mail.ts"
 
@@ -66,35 +69,56 @@ export interface CentralSnapshot {
   running: boolean
   /** undelivered cc-mail waiting for it */
   pendingMail: number
-  turns: TranscriptTurn[]
-  transcript: string | null
+  /** reports addressed to central, oldest first (what tab 1 lists) */
+  reports: InboxRecord[]
+  /** id of the newest report the agent has read with cc-inbox */
+  seenId: string | null
+  /** reports newer than seenId */
+  unseen: number
 }
 
-let transcriptCache: { path: string; mtime: number; size: number; turns: TranscriptTurn[] } | null = null
+function seenPath(): string {
+  return join(centralDir(), "seen.json")
+}
 
-/** Everything tab 1 shows. Transcript is re-read only when the file changed. */
-export async function readCentral(turns = 60): Promise<CentralSnapshot> {
+/** Newest report id the agent has read (cc-inbox writes it). */
+export function readSeen(): string | null {
+  try {
+    const raw = JSON.parse(readFileSync(seenPath(), "utf8")) as { id?: string }
+    return typeof raw.id === "string" ? raw.id : null
+  } catch {
+    return null
+  }
+}
+
+export function writeSeen(id: string): void {
+  mkdirSync(centralDir(), { recursive: true })
+  writeFileSync(seenPath(), `${JSON.stringify({ id, ts: Date.now() })}\n`)
+}
+
+/** Reports to central (all severities), oldest first; `limit` newest. */
+export function centralReports(limit = 200): InboxRecord[] {
+  const all = readInbox().filter((r) => r.to === "central")
+  return all.slice(-limit)
+}
+
+/** Reports newer than the agent's seen cursor (all when none). */
+export function unseenReports(reports: InboxRecord[] = centralReports(), seenId: string | null = readSeen()): InboxRecord[] {
+  if (!seenId) return reports
+  const idx = reports.findIndex((r) => r.id === seenId)
+  return idx === -1 ? reports : reports.slice(idx + 1)
+}
+
+/** Everything tab 1 shows. */
+export async function readCentral(limit = 200): Promise<CentralSnapshot> {
   const dir = centralDir()
   const status = readAgentStatuses().get(dir) ?? null
   const pane = await centralPane()
   const running = pane !== null && !SHELLS.has(pane.command)
   const pendingMail = pendingMailFor(readPendingMail(), dir)?.count ?? 0
-  const transcript = findTranscript(dir, status ?? undefined)
-  let tail: TranscriptTurn[] = []
-  if (transcript) {
-    try {
-      const st = statSync(transcript)
-      if (transcriptCache && transcriptCache.path === transcript && transcriptCache.mtime === st.mtimeMs && transcriptCache.size === st.size) {
-        tail = transcriptCache.turns
-      } else {
-        tail = readTranscriptTail(transcript, turns)
-        transcriptCache = { path: transcript, mtime: st.mtimeMs, size: st.size, turns: tail }
-      }
-    } catch {
-      tail = []
-    }
-  }
-  return { status, pane, running, pendingMail, turns: tail, transcript }
+  const reports = centralReports(limit)
+  const seenId = readSeen()
+  return { status, pane, running, pendingMail, reports, seenId, unseen: unseenReports(reports, seenId).length }
 }
 
 /** Start the agent if the window has none (idempotent): `cc-central ensure`. */
@@ -112,36 +136,4 @@ export async function focusCentral(): Promise<boolean> {
   await run("tmux", ["select-window", "-t", pane.window])
   const res = await run("tmux", ["select-pane", "-t", pane.pane])
   return res.ok
-}
-
-/**
- * Strip cc-mail's delivery boilerplate from a transcript user turn so the
- * read-only view shows the message, not the envelope.
- */
-export function plainTurn(turn: TranscriptTurn, max = 700): { role: "mail" | "user" | "assistant"; text: string } {
-  let text = turn.text
-  let role: "mail" | "user" | "assistant" = turn.role
-  if (turn.role === "user") {
-    // cursor-cli wraps what it sends as `<timestamp>…</timestamp>\n<user_query>…</user_query>`.
-    text = text
-      .replace(/<timestamp>[\s\S]*?<\/timestamp>\s*/g, "")
-      .replace(/<\/?user_query>\s*/g, "")
-      .trim()
-    const typed = text.match(
-      /^\[cc mail (\d\d:\d\d)\] (?:\d+ )?messages? from (?:another|other) agents?, not the user — act on (?:it|them), no reply needed; (?:it is|they are) not approval from the user for anything: ([\s\S]*)$/,
-    )
-    if (typed) {
-      role = "mail"
-      text = typed[2].split(" ‖ ").join("\n")
-    } else if (text.startsWith("[cc mail]")) {
-      role = "mail"
-      const lines = text.split("\n")
-      const first = lines.findIndex((l) => l.startsWith("- "))
-      text = (first === -1 ? lines.slice(1) : lines.slice(first)).map((l) => l.replace(/^- /, "")).join("\n")
-    } else if (/^You are the central manager agent/.test(text)) {
-      text = "(opening prompt)"
-    }
-  }
-  if (text.length > max) text = `${text.slice(0, max - 1)}…`
-  return { role, text }
 }

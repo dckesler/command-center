@@ -470,6 +470,14 @@ function deliverInbox(): void {
   // Embedded: flushed when the SDK agent goes idle. tmux: cc-mail decides
   // (hook mid-turn, follow-up at turn end, or a nudge when idle).
   if (!CENTRAL_TMUX && (central.running || central.queue.length > 0)) return
+  if (CENTRAL_TMUX) {
+    // Only warn/attention interrupt the central's chat. Info reports stay on the
+    // dashboard's central tab (inbox.jsonl) and the agent reads them with cc-inbox.
+    const urgent = inbox.filter((r) => r.severity === "warn" || r.severity === "attention")
+    inbox.length = 0
+    inbox.push(...urgent)
+    if (inbox.length === 0) return
+  }
   const hasAttention = inbox.some((r) => r.severity === "attention")
   if (!hasAttention && !deliveryRateOk()) {
     if (!deliveryTimer) {
@@ -495,16 +503,16 @@ function deliverInbox(): void {
 let mailChain: Promise<unknown> = Promise.resolve()
 
 /**
- * One cc-mail message per report so each keeps its sender and severity; only
- * the last one may wake an idle agent, which then receives every pending
- * message in a single nudge. Sends are chained so batches never interleave.
+ * One cc-mail message per warn/attention report so each keeps its sender and
+ * severity; only the last one may wake an idle agent, which then receives every
+ * pending message in a single nudge. Sends are chained so batches never interleave.
  */
 function mailBatchToCentral(batch: Report[]): Promise<void> {
   const job = mailChain.then(async () => {
     const dir = centralDir()
     for (let i = 0; i < batch.length; i++) {
       const r = batch[i]
-      const severity = r.severity === "warn" || r.severity === "attention" ? r.severity : "info"
+      const severity = r.severity === "attention" ? "attention" : "warn"
       const res = await sendMail({ dir }, r.summary, { from: r.from, severity, noWake: i < batch.length - 1 })
       if (!res.ok) console.warn(`central mail failed: ${res.message}`)
     }

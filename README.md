@@ -89,7 +89,7 @@ Resolution order: environment variable → `config.json` → default.
 | `commands.agent` | `CC_AGENT_CMD` | `cursor-cli` | command typed into tmux panes to start an agent (alias OK) |
 | `commands.projectModel` | `CC_PROJECT_MODEL` | `claude-opus-5-5-high` | Cursor CLI model for each project's central agent (`cursor-cli --list-models`); `""` = CLI default; only applied when `commands.agent` is the Cursor CLI |
 | `central.mode` | `CC_CENTRAL_MODE` | `tmux` | `tmux` = the central manager is a Cursor CLI session in the pane right of the dashboard (`cc-central`), tab 1 read-only; `embedded` = Cursor SDK agent inside the TUI with a typed chat on tab 1 |
-| `central.dir` | `CC_CENTRAL_DIR` | `~/.config/command-center/central` | the tmux central's working dir and `cc-mail` mailbox (`prompt.txt`, `LOG.md`) |
+| `central.dir` | `CC_CENTRAL_DIR` | `~/.config/command-center/central` | the tmux central's working dir and `cc-mail` mailbox (`prompt.txt`, `LOG.md`, `seen.json`) |
 | `central.model` | `CC_CENTRAL_MODEL` | `""` | Cursor CLI model for the tmux central; `""` = `commands.projectModel` |
 | `commands.mkpanes` | `MKPANES_BIN` | `~/.local/bin/mkpanes` | worktree launcher; parsed for repo aliases when `repos` is empty |
 | `commands.editor` | | `""` | editor to open in a spare pane of project/task windows (e.g. `vim`; project windows use a bottom pane since the top-left runs `cc-dash`); empty or `none` = no editor |
@@ -110,7 +110,7 @@ Resolution order: environment variable → `config.json` → default.
 | `todos.focusHours` | | `09:00-17:30` | weekday window for focus checks and the start/end-of-day announcements |
 | `repos` | | `{}` | alias → path; overrides the mkpanes registry when non-empty |
 
-The shell skills (`cc-report`, `cc-mail`, `cc-central`, `cc-instruct`, `cc-todo`,
+The shell skills (`cc-report`, `cc-mail`, `cc-central`, `cc-instruct`, `cc-inbox`, `cc-todo`,
 `start-project`, `project-task`) and
 `hooks/agent-event.sh` read the same file with `jq`, so one config drives both the TUI
 and the agents it launches. `bun run doctor` reports what is missing.
@@ -127,12 +127,16 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   `prompt.txt`, `LOG.md`) on `central.model` (falls back to `commands.projectModel`).
   On start the TUI runs `cc-central ensure`, which reuses the pane marked
   `@cc_role=command-center`, else a shell pane right of the TUI on its row, else splits
-  the TUI in half, and launches the agent with the manager prompt. The tab is **read-only**: it
-  shows the agent's own transcript (mail envelopes collapsed to `✉ from: text`), state,
-  pane id and queued mail; `enter`/`i` switch the tmux client to its pane, `j`/`k`
-  scroll, `g` latest. Specialist reports (`report_to_central`, `cc-report central …`,
-  central-bound TUI events) reach it as `cc-mail`; it steers everything else with
-  `cc-instruct` — `cc-instruct list` (hub specialists + every agent pane in tmux),
+  the TUI in half, and launches the agent with the manager prompt. The tab is the
+  **report stream**: every report addressed to central (`report_to_central`,
+  `cc-report central …`, central-bound TUI events — all appended to `inbox.jsonl`), with
+  `!!` attention / `!` warn marks, the agent's state, pane id and queued mail on top;
+  reports the agent has already read are dimmed. `enter`/`i` switch the tmux client to
+  its pane, `j`/`k` scroll, `g` latest. The agent's chat stays yours: only **warn and
+  attention** reports are pushed into it as `cc-mail` (stuck agents, approvals waiting,
+  focus checks); info reports it reads with `cc-inbox` (unread-then-mark, `--peek`,
+  `--all -n N`, `--count`) on start, before answering you, and before acting. It steers
+  everything else with `cc-instruct` — `cc-instruct list` (hub specialists + every agent pane in tmux),
   `cc-instruct <specialist> "<text>"` (the specialist's reply returns as a report),
   `cc-instruct project:<name> …` / `window:` / `pane:` / `dir:` (cc-mail to a project
   central, ticket or task agent) — and keeps the focus-todo loop with `cc-todo`
@@ -399,7 +403,7 @@ stuck. `cc-flag info` is a no-op so callers can pass severities straight through
 ```
 src/            TUI (OpenTUI/React), data layer, hub agents and their specs
 src/dash/       cc-dash — the per-project dashboard TUI (own entrypoint, reuses the data layer)
-src/cli/        bun entrypoints behind shell skills (todo.ts ← cc-todo)
+src/cli/        bun entrypoints behind shell skills (todo.ts ← cc-todo, inbox.ts ← cc-inbox)
 src/config.ts   config loader (defaults ← config.json ← env)
 skills/         first-party agent skills; `bun run skills sync` links them into ~/.agents/skills and ~/.claude/skills
 tmux/           command-center.tmux — top status rows (numbered projects / gap / tabs) and keys; cc-session numbers sessions
@@ -411,7 +415,7 @@ config.example.json, .env.example
 State written at runtime lives only in `dirs.config` (default `~/.config/command-center`):
 `agents.jsonl` (hook feed), `inbox.jsonl` + `cursors.json` (durable specialist inbox),
 `mail/` (inter-agent mailboxes), `todos.json`, `focus-day.json`, `hub.json` (specialist
-status snapshot read by `cc-instruct`), `central/` (the tmux central's prompt and log),
+status snapshot read by `cc-instruct`), `central/` (the tmux central's prompt, log and `seen.json` read cursor),
 `tui.log`, `dash.log`. Nothing is written inside the repo.
 
 Personal constants baked into some skill docs (`skills/*/SKILL.md` "Known constants":

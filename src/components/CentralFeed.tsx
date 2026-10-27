@@ -1,11 +1,12 @@
-import { plainTurn, type CentralSnapshot } from "../data/central.ts"
+import type { CentralSnapshot } from "../data/central.ts"
+import { formatClock } from "../data/inbox.ts"
 
 const C = {
   dim: "#6b7280",
   header: "#93c5fd",
   value: "#e5e7eb",
-  mail: "#a1a1aa",
-  user: "#93c5fd",
+  seen: "#71717a",
+  from: "#93c5fd",
   yellow: "#facc15",
   red: "#f87171",
   green: "#4ade80",
@@ -44,9 +45,11 @@ function age(iso: string | undefined, now: number): string {
 }
 
 /**
- * Tab 1 when the central manager runs as cursor-cli in a tmux pane: a
- * read-only view of its conversation (mail in, what it said), plus where it
- * is and whether it is running. Daniel talks to it in the pane itself.
+ * Tab 1 when the central manager runs as cursor-cli in a tmux pane: the
+ * stream of reports addressed to central (every severity — only warn and
+ * attention are also mailed into the agent's chat), plus where the agent is
+ * and whether it is running. Reports the agent has already read with cc-inbox
+ * are dimmed. Daniel talks to the agent in its pane, not here.
  */
 export function CentralFeed({
   snapshot,
@@ -76,13 +79,17 @@ export function CentralFeed({
   }
 
   const all: { text: string; color: string }[] = []
-  for (const turn of snapshot?.turns ?? []) {
-    const t = plainTurn(turn)
-    const prefix = t.role === "mail" ? "✉ " : t.role === "user" ? "❯ " : ""
-    const color = t.role === "mail" ? C.mail : t.role === "user" ? C.user : C.value
-    for (const line of wrap(prefix + t.text, textWidth)) all.push({ text: line, color })
-    all.push({ text: "", color: C.dim })
-  }
+  const reports = snapshot?.reports ?? []
+  const seenIdx = snapshot?.seenId ? reports.findIndex((r) => r.id === snapshot.seenId) : -1
+  reports.forEach((r, i) => {
+    const seen = i <= seenIdx
+    const mark = r.severity === "attention" ? "!! " : r.severity === "warn" ? " ! " : "   "
+    const color = seen ? C.seen : r.severity === "attention" ? C.red : r.severity === "warn" ? C.yellow : C.value
+    const head = `${formatClock(r.ts)} ${mark}${r.from}: `
+    const indent = 9 // under "HH:MM !! "
+    const lines = wrap(head + r.summary, textWidth - indent)
+    lines.forEach((line, j) => all.push({ text: j === 0 ? line : `${" ".repeat(indent)}${line}`, color }))
+  })
 
   const bodyHeight = Math.max(1, height - 2)
   const maxScroll = Math.max(0, all.length - bodyHeight)
@@ -94,16 +101,14 @@ export function CentralFeed({
     <box flexDirection="column">
       <text fg={headline.color}>{headline.text}</text>
       <text fg={C.dim}>
-        {snapshot?.transcript
-          ? `read-only — this is the agent's own chat; enter or i puts you in its pane${offset ? `   ↑${offset}` : ""}`
-          : "read-only — no transcript yet; it appears after the agent's first turn"}
+        {`reports to central — ${reports.length}${snapshot?.unseen ? `, ${snapshot.unseen} unread by the agent` : ""} · !! attention, ! warn (mailed to it); the rest it reads with cc-inbox · enter/i → its pane${offset ? `   ↑${offset}` : ""}`}
       </text>
       <box flexDirection="column" height={bodyHeight}>
         {visible.length === 0 ? (
           <text fg={C.dim}>
             {snapshot?.running
-              ? "waiting for the agent's first turn…"
-              : "the central manager is cursor-cli in the pane below this one; specialists report to it through cc-mail and it steers them with cc-instruct"}
+              ? "no reports yet — specialists' report_to_central and cc-report central land here"
+              : "the central manager is cursor-cli in the pane beside this one; specialists' reports land here and it steers them with cc-instruct"}
           </text>
         ) : (
           visible.map((line, i) => (

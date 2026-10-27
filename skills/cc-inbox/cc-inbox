@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# cc-inbox — the central manager's report stream from the shell (see src/cli/inbox.ts).
+# Used by the tmux central agent: unread reports (default, marks them read), --peek, --all [-n N], --count, --mark.
+#
+#   cc-inbox [--peek | --all [-n N] | --count | --mark]
+set -euo pipefail
+
+# Resolve the command-center checkout from this script's real location
+# (~/.local/bin/cc-inbox is a symlink into the repo).
+SELF="$0"
+while [ -L "$SELF" ]; do
+  DIR="$(cd "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$DIR/$SELF" ;; esac
+done
+REPO="$(cd "$(dirname "$SELF")/../.." && pwd)"
+
+BUN="$(command -v bun || true)"
+for c in "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+  [ -n "$BUN" ] && break
+  [ -x "$c" ] && BUN="$c"
+done
+if [ -z "$BUN" ]; then
+  echo "cc-inbox: bun not found" >&2
+  exit 1
+fi
+
+exec "$BUN" run "$REPO/src/cli/inbox.ts" "$@"
