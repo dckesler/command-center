@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# cc-instruct — the central agent's hand on every other agent in the system.
+#
+#   cc-instruct list                         every agent: hub specialists (TUI tabs) + tmux agent panes, with state
+#   cc-instruct status <agent>               one agent's state and (for specialists) last report
+#   cc-instruct <agent> [--severity info|warn|attention] <text…>
+#
+#   <agent> is one of
+#     review | worktrees | qa | tickets | epics | projects | todos | email | cloud | calendar | grok
+#         → a Command Center hub specialist (Cursor SDK agent inside the TUI). The
+#           instruction is appended to the agent feed; the TUI runs the specialist
+#           with it and its reply comes back to you as a report (cc mail).
+#     project:<name>
+#         → the central agent of ~/projects/<name> (its "central" window), via cc-mail.
+#     <session>:<window>  |  window:<tmux target>  |  pane:%N  |  dir:<path>
+#         → any other agent pane (task tab, ticket worktree, review window), via cc-mail.
+#
+# Everything through cc-mail is delivered the safe way: as context after the
+# agent's next tool call, as its next turn when it finishes, or typed into its
+# pane only when it is idle and nobody is typing there. Nothing here can answer
+# a permission prompt or a menu — those are Daniel's.
+#
+# Always exits 0 (usage errors exit 1) so a failed instruction cannot block an agent.
+
+set -uo pipefail
+
+TABS="review worktrees qa tickets epics projects todos email cloud calendar grok"
+TEXT_MAX=1200
+
+# --- command-center config -------------------------------------------------
+CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/command-center}"
+cc_cfg() { # cc_cfg <jq path> <default>
+  local v=""
+  if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
+    v="$(jq -r "$1 // empty" "$CC_CONFIG_DIR/config.json" 2>/dev/null || true)"
+  fi
+  v="${v:-$2}"
+  case "$v" in "~/"*) v="$HOME/${v#\~/}" ;; '$HOME/'*) v="$HOME/${v#\$HOME/}" ;; esac
+  printf '%s' "$v"
+}
+FEED="$CC_CONFIG_DIR/agents.jsonl"
+HUB="$CC_CONFIG_DIR/hub.json"
+PROJ_DIR="${CC_PROJECTS_DIR:-$(cc_cfg .dirs.projects "$HOME/projects")}"
+CENTRAL_DIR="$(cc_cfg .central.dir "$CC_CONFIG_DIR/central")"
+AGENT_CMDS='^(node|cursor-agent|agent|claude|bun)$'
+
+usage() {
+  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' >&2
+  exit 1
+}
+
+command -v jq >/dev/null 2>&1 || { echo "cc-instruct: jq is required" >&2; exit 0; }
+
+# The Command Center checkout (this script's real location): its own dev
+# session is never a target — that is Daniel's work on the TUI itself.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  D="$(cd "$(dirname "$SELF")" && pwd)"; SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$D/$SELF" ;; esac
+done
+REPO="$(cd "$(dirname "$SELF")/../.." 2>/dev/null && pwd -P || true)"
+
+canon() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+session_name() { printf '%s' "$1" | tr ':.' '--'; }
+
+cc_mail() {
+  local bin
+  bin="$(command -v cc-mail 2>/dev/null || true)"
+  [ -n "$bin" ] || { [ -x "$HOME/.local/bin/cc-mail" ] && bin="$HOME/.local/bin/cc-mail"; }
+  [ -n "$bin" ] || { [ -x "$(dirname "$SELF")/../cc-mail/cc-mail" ] && bin="$(dirname "$SELF")/../cc-mail/cc-mail"; }
+  [ -n "$bin" ] || { echo "cc-instruct: cc-mail not found" >&2; return 1; }
+  "$bin" "$@"
+}
+
+# Who is instructing: "central" from the Command Center window, else the window name.
+sender() {
+  local role name
+  if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
+    role="$(tmux show-option -wqv -t "$TMUX_PANE" @cc_role 2>/dev/null || true)"
+    [ "$role" = "command-center" ] && { printf 'central'; return; }
+    name="$(tmux display-message -p -t "$TMUX_PANE" '#W' 2>/dev/null || true)"
+    [ -n "$name" ] && { printf '%s' "$name"; return; }
+  fi
+  printf '%s' "$(basename "$(pwd)")"
+}
+
+# dir<TAB>state<TAB>ts for the latest state event per directory (24h window)
+feed_states() {
+  [ -f "$FEED" ] || return 0
+  tail -n 4000 "$FEED" 2>/dev/null \
+    | jq -Rr 'fromjson? | select(.state != null) | "\(.dir)\t\(.state)\t\(.ts)"' 2>/dev/null \
+    | awk -F'\t' '{ s[$1]=$2; t[$1]=$3 } END { for (d in s) print d "\t" s[d] "\t" t[d] }'
+}
+
+age_of() { # age_of <iso ts> → "3m" / "2h" / "1d"
+  local then now diff
+  then="$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$(printf '%s' "$1" | sed -E 's/\.[0-9]+Z$/Z/')" +%s 2>/dev/null || echo 0)"
+  now="$(date +%s)"; diff=$(( now - then ))
+  if [ "$then" = 0 ]; then printf '?'
+  elif [ "$diff" -lt 3600 ]; then printf '%dm' $(( diff / 60 ))
+  elif [ "$diff" -lt 86400 ]; then printf '%dh' $(( diff / 3600 ))
+  else printf '%dd' $(( diff / 86400 )); fi
+}
+
+list_specialists() {
+  echo "hub specialists — Command Center TUI tabs (cc-instruct <id> \"…\"; reply arrives as a report):"
+  if [ ! -f "$HUB" ]; then
+    echo "  (no hub.json — the Command Center TUI is not running; instructions queue in the feed until it starts)"
+    return
+  fi
+  local pid
+  pid="$(jq -r '.pid // empty' "$HUB" 2>/dev/null || true)"
+  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+    echo "  (TUI process $pid is gone — instructions queue in the feed until it starts again)"
+  fi
+  jq -r '.agents[] | "  \(.id | . + "            " | .[:12]) \(if .busy then "busy" elif .live then "idle" else "asleep" end | . + "       " | .[:7]) \(if .queued > 0 then "\(.queued) queued  " else "" end)\(if .lastReport then "last: " + .lastReport else "" end)"' "$HUB" 2>/dev/null
+  echo "  (asleep = no session yet; a specialist starts on its first event or instruction — that is normal, not a fault)"
+}
+
+list_tmux() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  echo
+  echo "tmux agents (cc-instruct <session>:<window> \"…\", or project:<name> for a project's central):"
+  local states
+  states="$(feed_states)"
+  local me=""
+  [ -n "${TMUX_PANE:-}" ] && me="$TMUX_PANE"
+  printf '  %-34s %-6s %-10s %-5s %s\n' "WINDOW" "PANE" "STATE" "AGE" "WHO / DIR"
+  while IFS=$'\t' read -r target wname pid pcmd ppath apane role; do
+    [ -n "$target" ] || continue
+    # an agent pane: registered on its window, or running an agent CLI
+    if [ "$apane" = "$pid" ] || printf '%s' "$pcmd" | grep -Eq "$AGENT_CMDS"; then :; else continue; fi
+    [ -n "$apane" ] && [ "$apane" != "$pid" ] && continue   # a non-agent pane of a window that has an agent pane
+    local cp who state ts age tag=""
+    cp="$(canon "$ppath")"
+    [ "$pid" = "$me" ] && continue
+    if [ "$role" = "command-center" ] && [ "$cp" = "$(canon "$CENTRAL_DIR")" ]; then continue; fi  # that is you
+    if [ -n "$REPO" ] && [ "$cp" = "$REPO" ] && [ "$pcmd" = "bun" ]; then continue; fi          # the TUI itself
+    state="$(printf '%s\n' "$states" | awk -F'\t' -v d="$cp" -v r="$ppath" '$1==d || $1==r { print $2; exit }')"
+    ts="$(printf '%s\n' "$states" | awk -F'\t' -v d="$cp" -v r="$ppath" '$1==d || $1==r { print $3; exit }')"
+    age=""; [ -n "$ts" ] && age="$(age_of "$ts")"
+    printf '%s' "$pcmd" | grep -Eq "$AGENT_CMDS" || state="${state:-quit}"
+    case "$role" in
+      central) who="central agent of project ${target%%:*}" ;;
+      task) who="task worker — $cp" ;;
+      *) who="$cp" ;;
+    esac
+    if [ -n "$REPO" ] && [ "$cp" = "$REPO" ]; then tag="  [protected: Command Center dev session — never message]"; fi
+    printf '  %-34s %-6s %-10s %-5s %s%s\n' "$(printf '%s %s' "$target" "$wname" | cut -c1-34)" "$pid" "${state:-unknown}" "$age" "$who" "$tag"
+  done < <(tmux list-panes -a -F $'#{session_name}:#{window_index}\t#{window_name}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{@agent_pane}\t#{@cc_role}' 2>/dev/null)
+}
+
+# --- args ------------------------------------------------------------------
+[ $# -ge 1 ] || usage
+CMD="$1"; shift
+
+case "$CMD" in
+  list) list_specialists; list_tmux; exit 0 ;;
+  status)
+    [ $# -ge 1 ] || usage
+    case " $TABS " in
+      *" $1 "*)
+        [ -f "$HUB" ] || { echo "$1: TUI not running (no hub.json)"; exit 0; }
+        jq -r --arg id "$1" '.agents[] | select(.id == $id) | "\(.id): \(if .busy then "busy" elif .live then "idle" else "down (starts on first message)" end), \(.queued) queued\nlast report: \(.lastReport // "(none)")"' "$HUB"
+        exit 0 ;;
+      *) list_tmux | grep -F -- "$1" || echo "no tmux agent matching \"$1\""; exit 0 ;;
+    esac ;;
+  -h|--help|help) usage ;;
+esac
+
+TARGET="$CMD"
+SEVERITY="info"
+TEXT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --severity) SEVERITY="${2:-}"; shift 2 ;;
+    *) TEXT="${TEXT:+$TEXT }$1"; shift ;;
+  esac
+done
+case "$SEVERITY" in info|warn|attention) ;; *) SEVERITY="info" ;; esac
+TEXT="$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '\n\r' '  ' | sed 's/[[:space:]][[:space:]]*/ /g')"
+[ -n "$TEXT" ] || usage
+[ "${#TEXT}" -gt "$TEXT_MAX" ] && TEXT="${TEXT:0:$TEXT_MAX}"
+FROM="$(sender)"
+
+# --- hub specialist → agent feed -------------------------------------------
+case " $TABS " in
+  *" $TARGET "*)
+    mkdir -p "$CC_CONFIG_DIR" 2>/dev/null || exit 0
+    LINE="$(jq -nc --arg dir "$(pwd -P)" --arg to "$TARGET" --arg from "$FROM" --arg text "$TEXT" \
+      '{ts: (now | todate), source: "cc-instruct", dir: $dir, session: "", event: "instruct", to: $to, from: $from, text: $text}')" || exit 0
+    printf '%s\n' "$LINE" >> "$FEED"
+    NOTE=""
+    if [ -f "$HUB" ]; then
+      PID="$(jq -r '.pid // empty' "$HUB" 2>/dev/null || true)"
+      [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null && NOTE=" — the TUI is not running; it runs this when it starts"
+    else
+      NOTE=" — no TUI seen yet; it runs this when it starts"
+    fi
+    echo "instructed $TARGET specialist from $FROM: $TEXT${NOTE}. Its reply arrives as a report."
+    exit 0 ;;
+esac
+
+# --- everything else → cc-mail ---------------------------------------------
+case "$TARGET" in
+  central) echo "cc-instruct: central is you — nothing sent" >&2; exit 0 ;;
+  project:*)
+    NAME="${TARGET#project:}"
+    SESSION="$(session_name "$NAME")"
+    [ -d "$PROJ_DIR/$NAME" ] || { echo "cc-instruct: no project directory $PROJ_DIR/$NAME" >&2; exit 0; }
+    if tmux has-session -t "=$SESSION" 2>/dev/null; then
+      MAIL_ARGS=(--window "=$SESSION:central")
+    else
+      MAIL_ARGS=(--dir "$PROJ_DIR/$NAME")
+    fi ;;
+  window:*) MAIL_ARGS=(--window "${TARGET#window:}") ;;
+  pane:*) MAIL_ARGS=(--pane "${TARGET#pane:}") ;;
+  dir:*) MAIL_ARGS=(--dir "${TARGET#dir:}") ;;
+  %*) MAIL_ARGS=(--pane "$TARGET") ;;
+  /*|~/*) MAIL_ARGS=(--dir "$TARGET") ;;
+  *:*) MAIL_ARGS=(--window "$TARGET") ;;
+  *) echo "cc-instruct: unknown agent \"$TARGET\" — $TABS, project:<name>, <session>:<window>, pane:%N, dir:<path>" >&2; exit 1 ;;
+esac
+
+# Refuse the Command Center's own dev session and your own pane.
+if command -v tmux >/dev/null 2>&1; then
+  case "${MAIL_ARGS[0]}" in
+    --window) PANE_DIR="$(tmux display-message -p -t "$(tmux show-option -wqv -t "${MAIL_ARGS[1]}" @agent_pane 2>/dev/null || printf '%s' "${MAIL_ARGS[1]}")" '#{pane_current_path}' 2>/dev/null || true)" ;;
+    --pane) PANE_DIR="$(tmux display-message -p -t "${MAIL_ARGS[1]}" '#{pane_current_path}' 2>/dev/null || true)" ;;
+    --dir) PANE_DIR="${MAIL_ARGS[1]}" ;;
+  esac
+  PANE_DIR="$(canon "${PANE_DIR:-}")"
+  if [ -n "$REPO" ] && [ "$PANE_DIR" = "$REPO" ]; then
+    echo "cc-instruct: refusing — that is the Command Center dev session (Daniel's own work on the TUI), not an agent to steer" >&2
+    exit 0
+  fi
+  if [ "$PANE_DIR" = "$(canon "$CENTRAL_DIR")" ]; then
+    echo "cc-instruct: refusing — that is your own pane" >&2
+    exit 0
+  fi
+fi
+
+RESULT="$(cc_mail send "${MAIL_ARGS[@]}" --from "$FROM" --severity "$SEVERITY" "$TEXT" 2>&1)" || exit 0
+echo "${RESULT:-sent}"
+exit 0

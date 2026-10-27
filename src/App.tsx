@@ -5,6 +5,7 @@ import { CloudPrompt } from "./components/CloudPrompt.tsx"
 import { Grok } from "./components/Grok.tsx"
 import { Tickets } from "./components/Tickets.tsx"
 import { Chat } from "./components/Chat.tsx"
+import { CentralFeed } from "./components/CentralFeed.tsx"
 import { Dashboard } from "./components/Dashboard.tsx"
 import { Reviews } from "./components/Reviews.tsx"
 import { DetailPanel } from "./components/DetailPanel.tsx"
@@ -101,9 +102,18 @@ import {
 import { deleteBranch, depsReviewIid, removeWorktree } from "./data/worktrees.ts"
 import { planWrapUp, runCleanup, runWrapUp } from "./data/wrapup.ts"
 import { discardMail, isMailStuck, kickMail, peekMail, readPendingMail, type PendingMail } from "./data/mail.ts"
+import { centralMode, ensureCentral, focusCentral, readCentral, type CentralSnapshot } from "./data/central.ts"
+import { statePath } from "./config.ts"
+import { watch } from "node:fs"
 import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
+
+/** central.mode = tmux: the manager is cursor-cli in a pane; tab 1 only watches it. */
+const CENTRAL_TMUX = centralMode() === "tmux"
+/** How often tab 1 re-reads the tmux central's transcript/state while shown / in the background. */
+const CENTRAL_REFRESH_MS = 3_000
+const CENTRAL_IDLE_REFRESH_MS = 20_000
 
 type View = "central" | "review" | "worktrees" | "qa" | "tickets" | "epics" | "projects" | "todos" | "email" | "cloud" | "calendar" | "grok"
 
@@ -258,6 +268,50 @@ export function App() {
   const [approvals, setApprovals] = useState<PendingApproval[]>(() => listApprovals())
   useEffect(() => onApprovalsChange(() => setApprovals(listApprovals())), [])
   const refreshing = useRef(false)
+
+  // tmux central: make sure the agent runs in this window, then keep tab 1's
+  // read-only view of its conversation current.
+  const [centralSnap, setCentralSnap] = useState<CentralSnapshot | null>(null)
+  const refreshCentral = useCallback(() => {
+    if (!CENTRAL_TMUX) return
+    readCentral().then(setCentralSnap)
+  }, [])
+  useEffect(() => {
+    if (!CENTRAL_TMUX) return
+    if (process.env.TMUX_PANE) {
+      ensureCentral().then((result) => {
+        if (!result.message.startsWith("running")) setMessage({ text: result.message, ok: result.ok })
+        refreshCentral()
+      })
+    } else {
+      refreshCentral()
+    }
+  }, [refreshCentral])
+  useEffect(() => {
+    if (!CENTRAL_TMUX) return
+    refreshCentral()
+    const interval = setInterval(refreshCentral, view === "central" ? CENTRAL_REFRESH_MS : CENTRAL_IDLE_REFRESH_MS)
+    return () => clearInterval(interval)
+  }, [view, refreshCentral])
+
+  // cc-todo (the tmux central's todo CLI) and the TUI share todos.json; pick
+  // up edits made outside this process.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      const watcher = watch(statePath(), (_event, filename) => {
+        if (filename !== "todos.json") return
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(() => setTodos(sortTodos(loadTodos())), 300)
+      })
+      return () => {
+        watcher.close()
+        if (timer) clearTimeout(timer)
+      }
+    } catch {
+      return undefined
+    }
+  }, [])
 
   const openDetail = useCallback((row: Row) => {
     setDetailRow(row)
@@ -1178,9 +1232,10 @@ export function App() {
   // dialog right there, even while he is typing to it. Approvals from any other
   // agent open only when nothing owns the keyboard; otherwise the header shows
   // "! N" and ! opens the queue — and opening that agent's chat opens them too.
-  const talkingTo = view === "central" ? "central" : drawerOpen ? view : null
+  // With a tmux central, tab 1 has no chat: nothing is "talking to" an agent there.
+  const talkingTo = view === "central" ? (CENTRAL_TMUX ? null : "central") : drawerOpen ? view : null
   const blocked = overlayActive || busy !== null || todoInput !== null
-  const typingElsewhere = (view === "central" && chatFocused) || (drawerVisible && drawerFocused)
+  const typingElsewhere = (view === "central" && !CENTRAL_TMUX && chatFocused) || (drawerVisible && drawerFocused)
   const seenApprovals = useRef(0)
   useEffect(() => {
     deferredApprovals.current.clear()
@@ -1330,7 +1385,31 @@ export function App() {
       if (key.name === "c" && ticket) changeStatus(ticket.key, ticket.status)
       return
     }
-    if (key.name === "r") refresh()
+    if (key.name === "r") {
+      refresh()
+      refreshCentral()
+    }
+
+    if (view === "central" && CENTRAL_TMUX) {
+      // Read-only view of the pane agent: enter/i/a go to its pane (starting it first if needed).
+      if (key.name === "i" || key.name === "return" || key.name === "a") {
+        const running = centralSnap?.running ?? false
+        setBusy(running ? "switching to the central agent's pane…" : "starting the central agent…")
+        ;(running ? Promise.resolve({ ok: true, message: "" }) : ensureCentral())
+          .then(async (started) => {
+            const focused = await focusCentral()
+            setBusy(null)
+            refreshCentral()
+            if (!started.ok) setMessage({ text: started.message, ok: false })
+            else if (!focused) setMessage({ text: "no central agent pane in tmux — run cc-central ensure in the Command Center window", ok: false })
+            else setMessage({ text: started.message || "cursor is in the central agent's pane", ok: true })
+          })
+      }
+      if (key.name === "j" || key.name === "down") setChatScroll((s) => Math.max(0, s - 1))
+      if (key.name === "k" || key.name === "up") setChatScroll((s) => s + 1)
+      if (key.name === "g") setChatScroll(0)
+      return
+    }
 
     if (view === "central") {
       // Focused chat is handled earlier; here the input is unfocused.
@@ -1630,7 +1709,7 @@ export function App() {
 
   /** Busy / unread indicator for a tab's agent. */
   const agentDot = (id: string) =>
-    agentBusy(id) ? (
+    agentBusy(id) || (id === "central" && CENTRAL_TMUX && centralSnap?.status?.state === "working") ? (
       <span fg="#facc15"> ⚙</span>
     ) : getStore(id).unread ? (
       <span fg="#4ade80"> ●</span>
@@ -1803,6 +1882,8 @@ export function App() {
             width={width - 2}
             height={contentHeight}
           />
+        ) : view === "central" && CENTRAL_TMUX ? (
+          <CentralFeed snapshot={centralSnap} scroll={chatScroll} width={width - 2} height={height - 4} />
         ) : view === "central" ? (
           <Chat
             agentId="central"
@@ -1902,6 +1983,8 @@ export function App() {
                       ? todoInput
                         ? "enter save   esc cancel"
                         : `tab views   j/k move   a add   e edit   f focus   n add note   N all notes   space/enter toggle   v ${showCompletedTodos ? "hide" : "show"} completed   x delete   ; agent   ctrl+c quit`
+                      : view === "central" && CENTRAL_TMUX
+                        ? "tab views   enter/i go to the agent's pane   j/k scroll   g latest   r refresh   ctrl+c quit"
                       : view === "central"
                         ? chatFocused
                           ? "enter send   esc unfocus input"

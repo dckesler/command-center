@@ -1,10 +1,13 @@
+import { mkdirSync, renameSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { Agent, CursorAgentError, type SDKCustomTool } from "@cursor/sdk"
 import { TAB_AGENT_SPECS, type HubContext, type Snapshot, type TabAgentSpec } from "./specs.ts"
 import { ackInbox, appendInbox, formatCatchUp, formatClock, unreadInbox } from "../data/inbox.ts"
 import { parseSlash } from "../data/skills.ts"
-import { config } from "../config.ts"
-import { emitAgents, getStore, resetStore, type ChatItem } from "./stores.ts"
+import { config, statePath } from "../config.ts"
+import { centralDir, centralMode } from "../data/central.ts"
+import { sendMail } from "../data/mail.ts"
+import { emitAgents, getStore, resetStore, subscribeAgents, type ChatItem } from "./stores.ts"
 
 /**
  * AgentHub: owns one SDK agent per tab spec, serializes sends per agent,
@@ -13,10 +16,18 @@ import { emitAgents, getStore, resetStore, type ChatItem } from "./stores.ts"
  *
  * All agents run locally with cwd = $HOME and settingSources ["user"] so they
  * share the saved Atlassian MCP login and the user-level skills.
+ *
+ * Central comes in two flavours (config central.mode). "embedded": the
+ * `central` spec is an SDK agent like the others and tab 1 is its chat.
+ * "tmux": the manager is cursor-cli in a pane of the Command Center window
+ * (cc-central); reports addressed to central leave this process through
+ * cc-mail to central.dir, and instructions come back through the agent feed
+ * (cc-instruct → `event: "instruct"` → instructSpecialist).
  */
 
 const MODEL = config().model
 const USER = config().user.name
+const CENTRAL_TMUX = centralMode() === "tmux"
 
 /** Max autonomous central deliveries per minute (loop/cost guard). */
 const CENTRAL_DELIVERIES_PER_MINUTE = 6
@@ -93,21 +104,73 @@ const ctx: HubContext = {
       `last report: ${entry.lastReport ?? "(none)"}`,
     ].join("\n")
   },
-  instruct: (id, instruction) => {
-    const entry = entries.get(id)
-    if (!entry || id === "central") {
-      return `unknown agent "${id}" — valid: ${[...entries.keys()].filter((k) => k !== "central").join(", ")}`
-    }
-    enqueue(id, {
-      text: `[instruction from central]\n${instruction}`,
-      display: "info",
-      onDone: (finalText) => {
-        // If the specialist already reported via its tool, don't double up.
-        if (!entry.reportedInRun) reportToCentral(id, "info", `reply to instruction: ${finalText || "(no reply)"}`)
-      },
-    })
-    return `instruction queued for ${id} — its reply will arrive as a report`
-  },
+  instruct: (id, instruction) => instructSpecialist(id, instruction),
+}
+
+/**
+ * Central (either flavour) tells a specialist what to do. Fire-and-forget:
+ * the specialist's final reply comes back to central as a report unless it
+ * already reported during that run.
+ */
+export function instructSpecialist(id: string, instruction: string, from = "central"): string {
+  const entry = entries.get(id)
+  if (!entry || id === "central") {
+    return `unknown agent "${id}" — valid: ${[...entries.keys()].filter((k) => k !== "central").join(", ")}`
+  }
+  enqueue(id, {
+    text: `[instruction from ${from}]\n${instruction}`,
+    display: "info",
+    onDone: (finalText) => {
+      // If the specialist already reported via its tool, don't double up.
+      if (!entry.reportedInRun) reportToCentral(id, "info", `reply to instruction: ${finalText || "(no reply)"}`)
+    },
+  })
+  return `instruction queued for ${id} — its reply will arrive as a report`
+}
+
+// ---------------------------------------------------------------------------
+// hub status file: lets CLIs outside this process (cc-instruct list) see the
+// specialists' busy/queue state. Rewritten at most once a second.
+
+const HUB_STATUS = statePath("hub.json")
+let hubStatusTimer: ReturnType<typeof setTimeout> | null = null
+
+function writeHubStatus(): void {
+  const agents = [...entries.values()]
+    .filter((e) => e.spec.id !== "central" || !CENTRAL_TMUX)
+    .map((e) => ({
+      id: e.spec.id,
+      title: e.spec.title,
+      live: e.agent !== null,
+      busy: e.running,
+      queued: e.queue.length,
+      lastReport: e.lastReport,
+    }))
+  const body = JSON.stringify({ ts: new Date().toISOString(), pid: process.pid, central: centralMode(), agents })
+  try {
+    mkdirSync(config().dirs.config, { recursive: true })
+    writeFileSync(`${HUB_STATUS}.tmp`, `${body}\n`)
+    renameSync(`${HUB_STATUS}.tmp`, HUB_STATUS)
+  } catch {
+    // status is advisory
+  }
+}
+
+subscribeAgents(() => {
+  if (hubStatusTimer) return
+  hubStatusTimer = setTimeout(() => {
+    hubStatusTimer = null
+    writeHubStatus()
+  }, 1_000)
+})
+writeHubStatus()
+
+// In tmux mode the durable inbox for central is only a log (cc-mail's mailbox
+// is the delivery store), so anything left unread from an embedded run is
+// already history.
+if (CENTRAL_TMUX) {
+  const stale = unreadInbox("central")
+  if (stale.length) ackInbox("central", stale[stale.length - 1].id)
 }
 
 // ---------------------------------------------------------------------------
@@ -134,8 +197,13 @@ export function agentBusy(id: string): boolean {
   return entry ? entry.running || entry.queue.length > 0 : false
 }
 
-/** True when this tab already has a live SDK handle (catch-up uses the inbox instead). */
+/**
+ * True when this tab already has a live SDK handle (catch-up uses the inbox
+ * instead). The tmux central is always "live": its mailbox holds whatever it
+ * has not read yet, so the hub never wakes or catches it up.
+ */
 export function isAgentLive(id: string): boolean {
+  if (id === "central" && CENTRAL_TMUX) return true
   return entries.get(id)?.agent != null
 }
 
@@ -146,6 +214,7 @@ export function isAgentLive(id: string): boolean {
  * and never sent.
  */
 export function sendUser(id: string, text: string): void {
+  if (id === "central" && CENTRAL_TMUX) return // tab 1 is read-only; Daniel types in the agent's pane
   if (text.includes("/")) {
     const slash = parseSlash(text)
     if (slash.kind === "mentions") {
@@ -176,6 +245,10 @@ export function sendUser(id: string, text: string): void {
 
 /** Hub-originated traffic (event digests, report batches, instructions). */
 export function sendSystem(id: string, text: string, onDone?: (finalText: string) => void): void {
+  if (id === "central" && CENTRAL_TMUX) {
+    void sendMail({ dir: centralDir() }, text, { from: "command center" }).then(() => onDone?.(""))
+    return
+  }
   enqueue(id, { text, display: "info", onDone })
 }
 
@@ -184,6 +257,7 @@ const REPORT_MAX = 160
 /** Specialists report up; central's inbox delivers when it goes idle. */
 export function reportToCentral(from: string, severity: string, summary: string): void {
   const clipped = summary.replace(/\s+/g, " ").trim().slice(0, REPORT_MAX)
+  if (!clipped) return // a specialist called the tool with nothing to say
   const entry = entries.get(from)
   if (entry) entry.lastReport = clipped
   const ts = Date.now()
@@ -393,7 +467,9 @@ function deliveryRateOk(): boolean {
 function deliverInbox(): void {
   if (inbox.length === 0) return
   const central = entries.get("central")!
-  if (central.running || central.queue.length > 0) return // flushed when it goes idle
+  // Embedded: flushed when the SDK agent goes idle. tmux: cc-mail decides
+  // (hook mid-turn, follow-up at turn end, or a nudge when idle).
+  if (!CENTRAL_TMUX && (central.running || central.queue.length > 0)) return
   const hasAttention = inbox.some((r) => r.severity === "attention")
   if (!hasAttention && !deliveryRateOk()) {
     if (!deliveryTimer) {
@@ -408,6 +484,31 @@ function deliverInbox(): void {
   const batch = inbox.splice(0)
   const lastDisk = unreadInbox("central")
   if (lastDisk.length) ackInbox("central", lastDisk[lastDisk.length - 1].id)
+  if (CENTRAL_TMUX) {
+    void mailBatchToCentral(batch)
+    return
+  }
   const text = `[reports]\n${batch.map((r) => `- [${formatClock(r.ts)}] ${r.from} (${r.severity}): ${r.summary}`).join("\n")}`
   sendSystem("central", text)
+}
+
+let mailChain: Promise<unknown> = Promise.resolve()
+
+/**
+ * One cc-mail message per report so each keeps its sender and severity; only
+ * the last one may wake an idle agent, which then receives every pending
+ * message in a single nudge. Sends are chained so batches never interleave.
+ */
+function mailBatchToCentral(batch: Report[]): Promise<void> {
+  const job = mailChain.then(async () => {
+    const dir = centralDir()
+    for (let i = 0; i < batch.length; i++) {
+      const r = batch[i]
+      const severity = r.severity === "warn" || r.severity === "attention" ? r.severity : "info"
+      const res = await sendMail({ dir }, r.summary, { from: r.from, severity, noWake: i < batch.length - 1 })
+      if (!res.ok) console.warn(`central mail failed: ${res.message}`)
+    }
+  })
+  mailChain = job.catch(() => {})
+  return job
 }

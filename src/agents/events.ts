@@ -34,7 +34,8 @@ import {
   stalledMinutes,
   type Todo,
 } from "../data/todos.ts"
-import { currentSnapshot, isAgentLive, sendSystem } from "./hub.ts"
+import { currentSnapshot, instructSpecialist, isAgentLive, reportToCentral, sendSystem } from "./hub.ts"
+import { centralMode } from "../data/central.ts"
 
 /**
  * Autonomous event sources. Two feeds produce per-tab "[event digest]"
@@ -131,6 +132,12 @@ export function pushEvent(
 ): void {
   const stamped = line.startsWith("[") ? line : `[${formatClock()}] ${line}`
   if (extra?.dir && severity !== "info") flagTmux(severity, { dir: extra.dir })
+  // The tmux central has no digest buffer: anything addressed to it (cc-report
+  // central, approval outcomes) is a report and goes out through cc-mail.
+  if (tab === "central" && centralMode() === "tmux") {
+    reportToCentral(extra?.dir ? basename(extra.dir) : "command center", severity, line)
+    return
+  }
   let inboxId: string | null = null
   if (extra?.persist !== false) {
     inboxId = appendInbox({
@@ -280,11 +287,12 @@ function drainFeed(): void {
   if (currentSnapshot().rows.length === 0) return
   if (!existsSync(FEED)) return
   const size = statSync(FEED).size
-  if (size < feedOffset) {
-    // Rotated (hook script keeps the last 2000 lines). Replay from 0 and
-    // skip events we already persisted via lastFeedTs.
-    feedOffset = 0
-  }
+  // Rotated (hook script keeps the last 2000 lines): replay from 0 and skip
+  // what we already persisted via lastFeedTs. Only then — timestamps have
+  // second granularity, so comparing them on a normal drain would drop every
+  // line that lands in the same second as an earlier one.
+  const replaying = size < feedOffset
+  if (replaying) feedOffset = 0
   if (size === feedOffset) return
   const fd = openSync(FEED, "r")
   const chunk = Buffer.alloc(size - feedOffset)
@@ -300,8 +308,8 @@ function drainFeed(): void {
   for (const line of text.slice(0, end).split("\n")) {
     const event = parseFeedLine(line)
     if (!event) continue
-    if (event.ts && lastTs && event.ts <= lastTs) continue
-    if (event.ts) lastTs = event.ts
+    if (replaying && event.ts && saved.lastTs && event.ts < saved.lastTs) continue
+    if (event.ts && (!lastTs || event.ts > lastTs)) lastTs = event.ts
     // Explicit cc-report lines are addressed to a tab. Accept them from any
     // cwd so a brand-new agent can report before its worktree is on the board.
     if (event.event === "report") {
@@ -314,6 +322,15 @@ function drainFeed(): void {
         dir: event.dir || undefined,
         inboxSummary: `[${formatClock()}] ${text}`,
       })
+      continue
+    }
+    // cc-instruct from the tmux central agent → a hub specialist. Its reply
+    // returns to central as a report (instructSpecialist handles that).
+    if (event.event === "instruct") {
+      const text = (event.text || "").trim()
+      const to = event.to ?? ""
+      if (!text || to === "central" || !(WAKE_TABS as readonly string[]).includes(to)) continue
+      instructSpecialist(to, text, event.from || "central")
       continue
     }
     // Only ticket agents in known worktrees and project agents under

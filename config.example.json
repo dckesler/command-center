@@ -34,6 +34,13 @@
 
   "model": "composer-2.5",
 
+  "central": {
+    "$comment": "mode = tmux: the central manager is commands.agent (cursor-cli) in a pane under the TUI in the Command Center tmux window, started by cc-central; specialists report to it through cc-mail, it steers every agent with cc-instruct, and tab 1 is a read-only view of its chat. embedded: a Cursor SDK agent inside the TUI with a chat on tab 1. dir = the tmux agent's cwd / mailbox / prompt / LOG.md. model = Cursor CLI slug for it; \"\" = commands.projectModel.",
+    "mode": "tmux",
+    "dir": "~/.config/command-center/central",
+    "model": ""
+  },
+
   "projects": {
     "$comment": "Directory names under dirs.projects that are not projects.",
     "exclude": ["command-center", "node_modules"]

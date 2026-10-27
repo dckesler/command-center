@@ -21,7 +21,9 @@ export interface AgentStatus {
  * agent-event.sh from Cursor/Claude hooks or by the `cc-report` CLI.
  * State events carry `state`; activity events carry `event` instead
  * (response text, file edits, state-changing git/glab commands);
- * explicit reports use `event: "report"` plus `to` / `severity`.
+ * explicit reports use `event: "report"` plus `to` / `severity`; the tmux
+ * central agent's instructions to hub specialists use `event: "instruct"`
+ * (cc-instruct).
  */
 export interface FeedEvent {
   ts: string
@@ -29,14 +31,16 @@ export interface FeedEvent {
   dir: string
   session: string
   state?: AgentState
-  event?: "response" | "edit" | "shell" | "report"
+  event?: "response" | "edit" | "shell" | "report" | "instruct"
   summary?: string
   transcript?: string
   text?: string
   file?: string
   command?: string
-  /** Explicit report target (cc-report). */
+  /** Explicit report / instruction target (cc-report, cc-instruct). */
   to?: string
+  /** Who sent an instruction (cc-instruct). */
+  from?: string
   severity?: "info" | "warn" | "attention"
 }
 

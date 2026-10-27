@@ -156,13 +156,16 @@ export type MailTarget = { dir: string } | { pane: string } | { window: string }
 export async function sendMail(
   target: MailTarget,
   text: string,
-  opts: { from: string; severity?: "info" | "warn" | "attention" } = { from: "command center" },
+  opts: { from: string; severity?: "info" | "warn" | "attention"; noWake?: boolean } = { from: "command center" },
 ): Promise<{ ok: boolean; message: string }> {
   const args = ["send"]
   if ("dir" in target) args.push("--dir", target.dir)
   else if ("pane" in target) args.push("--pane", target.pane)
   else args.push("--window", target.window)
-  args.push("--from", opts.from, "--severity", opts.severity ?? "info", text)
+  args.push("--from", opts.from, "--severity", opts.severity ?? "info")
+  // queue only: a later send (or the agent's next hook) delivers it together with the rest
+  if (opts.noWake) args.push("--no-wake")
+  args.push(text)
   const res = await run(ccMailBin(), args, { timeoutMs: 15_000 })
   const out = (res.stdout.trim() || res.stderr.trim()).split("\n").pop() ?? ""
   if (!res.ok) return { ok: false, message: out || "cc-mail failed" }

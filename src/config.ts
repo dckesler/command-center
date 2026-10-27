@@ -59,6 +59,19 @@ export interface Config {
   }
   /** Cursor SDK model for the hub specialists and cloud agents */
   model: string
+  central: {
+    /**
+     * tmux = the central manager is `commands.agent` (cursor-cli) running in a pane of the
+     * Command Center tmux window, started by cc-central; specialists reach it through cc-mail
+     * and tab 1 is a read-only view of its conversation. embedded = a Cursor SDK agent inside
+     * the TUI with a chat on tab 1 (the original design).
+     */
+    mode: "tmux" | "embedded"
+    /** cwd + mailbox of the tmux central agent; its prompt and LOG.md live here. Nothing else should. */
+    dir: string
+    /** Cursor CLI model slug for the tmux central agent; "" = commands.projectModel */
+    model: string
+  }
   projects: {
     /** directory names under dirs.projects that are not projects */
     exclude: string[]
@@ -120,6 +133,7 @@ export const DEFAULTS: Config = {
   // No Jira site by default: browse links and REST transitions are disabled until set.
   jira: { baseUrl: "", cloudId: "", sprintField: "customfield_10007" },
   model: "composer-2.5",
+  central: { mode: "tmux", dir: join(DEFAULT_CONFIG_DIR, "central"), model: "" },
   projects: { exclude: ["command-center", "node_modules"] },
   mail: { quietSeconds: 30, retrySeconds: 20, retryMinutes: 180, staleMinutes: 10 },
   email: { days: 7, filters: DEFAULT_EMAIL_FILTERS },
@@ -184,6 +198,11 @@ export function config(): Config {
       baseUrl: (env.JIRA_BASE_URL || file.jira?.baseUrl || DEFAULTS.jira.baseUrl).replace(/\/+$/, ""),
     },
     model: env.CC_MODEL || file.model || DEFAULTS.model,
+    central: {
+      mode: (env.CC_CENTRAL_MODE || file.central?.mode) === "embedded" ? "embedded" : "tmux",
+      dir: expandHome(env.CC_CENTRAL_DIR || file.central?.dir || join(configDir(), "central")),
+      model: env.CC_CENTRAL_MODEL ?? file.central?.model ?? DEFAULTS.central.model,
+    },
     projects: { exclude: file.projects?.exclude ?? DEFAULTS.projects.exclude },
     mail: {
       quietSeconds: Number(file.mail?.quietSeconds) || DEFAULTS.mail.quietSeconds,
