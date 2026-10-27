@@ -76,7 +76,7 @@ export function Epics({
 
   return (
     <box flexDirection="column">
-      <text>
+      <text wrapMode="none">
         <span fg={C.header}>
           {fit("EPIC", COLS.key)}
           {fit("STATUS", COLS.status)}
@@ -90,7 +90,7 @@ export function Epics({
         const isSelected = idx === selected
         return (
           <box key={epic.key} backgroundColor={isSelected ? C.selectedBg : undefined}>
-            <text>
+            <text wrapMode="none">
               <span fg={isSelected ? "#ffffff" : C.key}>{isSelected ? "▸" : " "}{fit(epic.key, COLS.key - 1)}</span>
               <span fg={epic.status === "Blocked" ? C.red : C.value}>{fit(epic.status, COLS.status)}</span>
               <span fg={PRIORITY_COLORS[epic.priority ?? ""] ?? C.gray}>{fit(epic.priority ?? "-", COLS.priority)}</span>

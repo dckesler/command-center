@@ -105,7 +105,7 @@ export function Projects({
 
   return (
     <box flexDirection="column">
-      <text>
+      <text wrapMode="none">
         <span fg={C.header}>
           {fit("PROJECT", COLS.name)}
           {fit("STATUS", COLS.status)}
@@ -124,7 +124,7 @@ export function Projects({
         const status = brief?.status ?? "unknown"
         return (
           <box key={project.name} backgroundColor={isSelected ? C.selectedBg : undefined}>
-            <text>
+            <text wrapMode="none">
               <span fg={isSelected ? "#ffffff" : C.key}>{isSelected ? "▸" : " "}{fit(project.name, COLS.name - 1)}</span>
               <span fg={brief ? STATUS_COLORS[status] : C.red}>{fit(brief ? status : "no brief", COLS.status)}</span>
               <span fg={brief?.epic ? C.key : C.dim}>{fit(brief?.epic ?? "-", COLS.epic)}</span>

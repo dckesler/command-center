@@ -83,7 +83,7 @@ export function Tickets({
 
   return (
     <box flexDirection="column">
-      <text>
+      <text wrapMode="none">
         <span fg={C.header}>
           {fit("KEY", COLS.key)}
           {fit("TYPE", COLS.type)}
@@ -100,7 +100,7 @@ export function Tickets({
         const hasWorktree = worktreeKeys.has(ticket.key)
         return (
           <box key={ticket.key} backgroundColor={isSelected ? C.selectedBg : undefined}>
-            <text>
+            <text wrapMode="none">
               <span fg={isSelected ? "#ffffff" : C.key}>{isSelected ? "▸" : " "}{fit(ticket.key, COLS.key - 1)}</span>
               <span fg={C.gray}>{fit(ticket.type, COLS.type)}</span>
               <span fg={ticket.status === "Blocked" ? C.red : C.value}>{fit(ticket.status, COLS.status)}</span>

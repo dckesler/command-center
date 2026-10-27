@@ -1719,54 +1719,77 @@ export function App() {
   const working =
     loading.length > 0 || ticketsLoading || epicsLoading || projectsLoading || cloudLoading || busy !== null
   const spinner = useSpinner(working)
+  // Half a 284-column window (dashboard left, central right) is ~140 columns: short tab
+  // labels, a short clock, tighter key hints, and nothing in the header/footer wraps.
+  const narrow = width < 200
   const statusLine =
     loading.length > 0
-      ? `${spinner} loading: ${loading.join(", ")}…`
+      ? narrow
+        ? `${spinner} loading…`
+        : `${spinner} loading: ${loading.join(", ")}…`
       : ticketsLoading
         ? `${spinner} loading tickets…`
         : lastRefresh
-          ? `refreshed ${lastRefresh.toLocaleTimeString()}`
+          ? narrow
+            ? lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : `refreshed ${lastRefresh.toLocaleTimeString()}`
           : ""
+  const tabBar: { key: string; view: View; count: number | null; long: string; short: string }[] = [
+    { key: "1", view: "central", count: null, long: "central", short: "central" },
+    { key: "2", view: "projects", count: projects.length, long: "projects", short: "proj" },
+    { key: "3", view: "review", count: reviewRows.length, long: "review", short: "rev" },
+    { key: "4", view: "worktrees", count: workRows.length, long: "worktrees", short: "wt" },
+    { key: "5", view: "qa", count: qaRows.length, long: "qa", short: "qa" },
+    { key: "6", view: "tickets", count: tickets.length, long: "tickets", short: "tix" },
+    { key: "7", view: "epics", count: epics.length, long: "epics", short: "epics" },
+    { key: "8", view: "todos", count: todos.filter((t) => !t.done).length, long: "todos", short: "todos" },
+    {
+      key: "9",
+      view: "email",
+      count: emails === null ? null : emails.filter((e) => !e.isRead && !e.hiddenBy).length,
+      long: "email",
+      short: "mail",
+    },
+    { key: "0", view: "cloud", count: cloudAgents.length, long: "cloud", short: "cloud" },
+    {
+      key: "-",
+      view: "calendar",
+      count: events === null ? null : events.filter((e) => !e.isCancelled && new Date(e.end).getTime() > Date.now()).length,
+      long: "calendar",
+      short: "cal",
+    },
+    {
+      key: "=",
+      view: "grok",
+      count: grokRuns.filter((g) => g.state === "sent").length || null,
+      long: "grok",
+      short: "grok",
+    },
+  ]
+  // Key hints: at half width, two-space separators and drop the universal ctrl+c hint.
+  const hint = (s: string) => (narrow ? s.replace(/ {3}/g, "  ").replace(/ {2}ctrl\+c quit$/, "") : s)
 
   return (
     <box flexDirection="column" height={height}>
       <box paddingLeft={1} paddingRight={1} flexDirection="row" justifyContent="space-between">
-        <text>
-          <span fg="#93c5fd">COMMAND CENTER</span>
+        <text wrapMode="none">
+          <span fg="#93c5fd">{narrow ? "CC" : "COMMAND CENTER"}</span>
           {approvals.length ? <span fg="#f87171">  ! {approvals.length} to approve</span> : null}
           {stuckMail ? <span fg="#f87171">  @ ✉ {stuckMail} stuck</span> : null}
-          <span fg={view === "central" ? "#ffffff" : "#6b7280"}>  [1] central</span>
-          {agentDot("central")}
-          <span fg={view === "projects" ? "#ffffff" : "#6b7280"}>  [2] {projects.length} projects</span>
-          {agentDot("projects")}
-          <span fg={view === "review" ? "#ffffff" : "#6b7280"}>  [3] {reviewRows.length} review</span>
-          {agentDot("review")}
-          <span fg={view === "worktrees" ? "#ffffff" : "#6b7280"}>  [4] {workRows.length} worktrees</span>
-          {agentDot("worktrees")}
-          <span fg={view === "qa" ? "#ffffff" : "#6b7280"}>  [5] {qaRows.length} qa</span>
-          {agentDot("qa")}
-          <span fg={view === "tickets" ? "#ffffff" : "#6b7280"}>  [6] {tickets.length} tickets</span>
-          {agentDot("tickets")}
-          <span fg={view === "epics" ? "#ffffff" : "#6b7280"}>  [7] {epics.length} epics</span>
-          {agentDot("epics")}
-          <span fg={view === "todos" ? "#ffffff" : "#6b7280"}>  [8] {todos.filter((t) => !t.done).length} todos</span>
-          {agentDot("todos")}
-          <span fg={view === "email" ? "#ffffff" : "#6b7280"}>
-            {"  "}[9] {emails === null ? "" : `${emails.filter((e) => !e.isRead && !e.hiddenBy).length} `}email
-          </span>
-          {agentDot("email")}
-          <span fg={view === "cloud" ? "#ffffff" : "#6b7280"}>  [0] {cloudAgents.length} cloud</span>
-          {agentDot("cloud")}
-          <span fg={view === "calendar" ? "#ffffff" : "#6b7280"}>
-            {"  "}[-] {events === null ? "" : `${events.filter((e) => !e.isCancelled && new Date(e.end).getTime() > Date.now()).length} `}calendar
-          </span>
-          {agentDot("calendar")}
-          <span fg={view === "grok" ? "#ffffff" : "#6b7280"}>
-            {"  "}[=] {grokRuns.filter((g) => g.state === "sent").length ? `${grokRuns.filter((g) => g.state === "sent").length} ` : ""}grok
-          </span>
-          {agentDot("grok")}
+          {tabBar.map((t) => (
+            <span key={t.view}>
+              <span fg={view === t.view ? "#ffffff" : "#6b7280"}>
+                {narrow ? ` [${t.key}]` : `  [${t.key}] `}
+                {t.count === null ? "" : `${t.count} `}
+                {narrow ? t.short : t.long}
+              </span>
+              {agentDot(t.view)}
+            </span>
+          ))}
         </text>
-        <text fg="#6b7280">{statusLine}</text>
+        <text fg="#6b7280" wrapMode="none">
+          {statusLine}
+        </text>
       </box>
       <box paddingLeft={1} paddingRight={1} flexGrow={1} flexDirection="column">
         <box flexGrow={1} flexDirection="column">
@@ -1960,14 +1983,14 @@ export function App() {
         )}
       </box>
       <box paddingLeft={1}>
-        <text>
+        <text wrapMode="none">
           {busy ? (
             <span fg="#facc15">{spinner} {busy}</span>
           ) : message ? (
             <span fg={message.ok ? "#4ade80" : "#f87171"}>{message.text}</span>
           ) : (
             <span fg="#6b7280">
-              {drawerVisible && drawerFocused
+              {hint(drawerVisible && drawerFocused
                 ? "enter send   esc table keys   ; close agent chat"
                 : projectPrompt
                 ? "enter next step (empty skips optional ones)   esc cancel"
@@ -2009,7 +2032,7 @@ export function App() {
                             ? "tab views   j/k move   enter details   n new review   s open/jump   a approve MR   c status   x cleanup   ; agent   r refresh   o/t open   ctrl+c quit"
                           : view === "qa"
                             ? "tab views   j/k move   enter details   n new QA   s open/jump   c status   x cleanup   ; agent   r refresh   o/t open   ctrl+c quit"
-                            : "tab views   j/k move   enter details   n new   s start/jump   c status   w wrap-up   x cleanup   X mass cleanup   ; agent   r refresh   o/t open   ctrl+c quit"}
+                            : "tab views   j/k move   enter details   n new   s start/jump   c status   w wrap-up   x cleanup   X mass cleanup   ; agent   r refresh   o/t open   ctrl+c quit")}
             </span>
           )}
         </text>

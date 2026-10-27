@@ -152,7 +152,7 @@ export function Dashboard({
 
   return (
     <box flexDirection="column">
-      <text>
+      <text wrapMode="none">
         <span fg={C.header}>
           {fit("REPO", COLS.repo)}
           {fit("BRANCH", COLS.branch)}
@@ -178,7 +178,7 @@ export function Dashboard({
         const agent = agentCell(row)
         return (
           <box key={`${row.repo}/${row.branch}`} backgroundColor={isSelected ? C.selectedBg : undefined}>
-            <text>
+            <text wrapMode="none">
               <span fg={isSelected ? "#ffffff" : C.repo}>{isSelected ? "▸" : " "}{fit(row.repo, COLS.repo - 1)}</span>
               <span fg={C.branch}>{fit(row.branch, COLS.branch)}</span>
               <span fg={git.color}>{git.text}</span>

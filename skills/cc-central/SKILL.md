@@ -20,8 +20,8 @@ cc-central pane                         # pane id (exit 1 when none)
 cc-central prompt                       # rewrite the prompt file and print its path
 ```
 
-- **Window**: `--window`, else the window of the pane you run it from, else the window marked `@cc_role=command-center`, else one named `Command Center`.
-- **Pane**: the registered `@agent_pane` if the agent quit and left a shell; else the first shell pane below the TUI (bottom-left); else a new 35 % pane split under the TUI.
+- **Window**: `--window`, else the window marked `@cc_role=command-center`, else the window of the pane you run it from, else one named `Command Center`.
+- **Pane**: the registered `@agent_pane` if the agent quit and left a shell; else a shell pane on the TUI's row to its right; else the TUI is split in half (dashboard left, central right). Panes on the bottom row are the user's terminals and are never taken.
 - **Directory**: `central.dir` (default `~/.config/command-center/central`) — the agent's cwd, mailbox address, `prompt.txt` and `LOG.md`. Nothing else should run there.
 
 To restart with a fresh prompt: quit the agent in its pane (`ctrl+c` twice), then `cc-central ensure`. The log survives; the new session opens by reading it.

@@ -81,7 +81,7 @@ export function Reviews({
 
   return (
     <box flexDirection="column">
-      <text>
+      <text wrapMode="none">
         <span fg={C.header}>
           {fit("TICKET", COLS.ticket)}
           {fit("MR", COLS.url)}
@@ -99,7 +99,7 @@ export function Reviews({
         const title = row.mr?.title ?? row.ticket?.summary ?? ""
         return (
           <box key={row.worktreePath} backgroundColor={isSelected ? C.selectedBg : undefined}>
-            <text>
+            <text wrapMode="none">
               <span fg={isSelected ? "#ffffff" : C.ticket}>
                 {isSelected ? "▸" : " "}
                 {fit(row.ticketKey ?? row.branch, COLS.ticket - 1)}

@@ -3,7 +3,7 @@
 Keyboard-first TUI dashboard for all in-progress work: git worktrees, agents in tmux,
 GitLab MRs, Jira tickets and epics, local projects, todos, Outlook mail, and Cursor
 Cloud agents — with one Cursor SDK "specialist" agent per tab and a central manager
-they report to (a Cursor CLI session in the pane below the dashboard, see *[1] Central*). See `PLAN.md` for the roadmap and verified feasibility notes.
+they report to (a Cursor CLI session beside the dashboard, see *[1] Central*). See `PLAN.md` for the roadmap and verified feasibility notes.
 
 ## Install on a new machine
 
@@ -88,7 +88,7 @@ Resolution order: environment variable → `config.json` → default.
 | `dirs.skills` | | cursor/claude/agents skill dirs | roots scanned for `/skill` completion |
 | `commands.agent` | `CC_AGENT_CMD` | `cursor-cli` | command typed into tmux panes to start an agent (alias OK) |
 | `commands.projectModel` | `CC_PROJECT_MODEL` | `claude-opus-5-5-high` | Cursor CLI model for each project's central agent (`cursor-cli --list-models`); `""` = CLI default; only applied when `commands.agent` is the Cursor CLI |
-| `central.mode` | `CC_CENTRAL_MODE` | `tmux` | `tmux` = the central manager is a Cursor CLI session in a pane below the dashboard (`cc-central`), tab 1 read-only; `embedded` = Cursor SDK agent inside the TUI with a typed chat on tab 1 |
+| `central.mode` | `CC_CENTRAL_MODE` | `tmux` | `tmux` = the central manager is a Cursor CLI session in the pane right of the dashboard (`cc-central`), tab 1 read-only; `embedded` = Cursor SDK agent inside the TUI with a typed chat on tab 1 |
 | `central.dir` | `CC_CENTRAL_DIR` | `~/.config/command-center/central` | the tmux central's working dir and `cc-mail` mailbox (`prompt.txt`, `LOG.md`) |
 | `central.model` | `CC_CENTRAL_MODEL` | `""` | Cursor CLI model for the tmux central; `""` = `commands.projectModel` |
 | `commands.mkpanes` | `MKPANES_BIN` | `~/.local/bin/mkpanes` | worktree launcher; parsed for repo aliases when `repos` is empty |
@@ -122,12 +122,12 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
 
 - **[1] Central** — the manager every specialist reports to. By default
   (`central.mode: "tmux"`) it is **not** an SDK agent inside the TUI but a Cursor CLI
-  session in a tmux pane *below the dashboard* in the Command Center window, running in
+  session in a tmux pane *right of the dashboard* in the Command Center window (top row: dashboard | central; the bottom row is yours for terminals), running in
   its own directory (`central.dir`, default `~/.config/command-center/central`:
   `prompt.txt`, `LOG.md`) on `central.model` (falls back to `commands.projectModel`).
   On start the TUI runs `cc-central ensure`, which reuses the pane marked
-  `@cc_role=command-center`, else the first shell pane under the TUI, else splits one
-  off, and launches the agent with the manager prompt. The tab is **read-only**: it
+  `@cc_role=command-center`, else a shell pane right of the TUI on its row, else splits
+  the TUI in half, and launches the agent with the manager prompt. The tab is **read-only**: it
   shows the agent's own transcript (mail envelopes collapsed to `✉ from: text`), state,
   pane id and queued mail; `enter`/`i` switch the tmux client to its pane, `j`/`k`
   scroll, `g` latest. Specialist reports (`report_to_central`, `cc-report central …`,

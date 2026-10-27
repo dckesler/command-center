@@ -80,7 +80,7 @@ export function EpicDetail({
           {tickets ? `   ${done}/${tickets.length} done` : "   loading tickets…"}
         </span>
       </text>
-      <text>
+      <text wrapMode="none">
         <span fg={C.header}>
           {fit("KEY", COLS.key)}
           {fit("TYPE", COLS.type)}
@@ -97,7 +97,7 @@ export function EpicDetail({
         const hasWindow = windowKeys.has(ticket.key)
         return (
           <box key={ticket.key} backgroundColor={isSelected ? C.selectedBg : undefined}>
-            <text>
+            <text wrapMode="none">
               <span fg={isSelected ? "#ffffff" : C.key}>{isSelected ? "▸" : " "}{fit(ticket.key, COLS.key - 1)}</span>
               <span fg={C.gray}>{fit(ticket.type, COLS.type)}</span>
               <span fg={statusColor(ticket)}>{fit(ticket.status, COLS.status)}</span>

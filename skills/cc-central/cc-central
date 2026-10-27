@@ -8,11 +8,12 @@
 #   cc-central pane                         print the agent's pane id (exit 1 when none)
 #   cc-central prompt                       (re)write the prompt file and print its path
 #
-# Window: --window, else the window of $TMUX_PANE (run it from the TUI or any
-# pane of that window), else the window already marked @cc_role=command-center,
-# else a window named "Command Center". Pane: the registered @agent_pane if it
-# is a shell again (agent quit), else the first shell pane below the TUI
-# (bottom-left), else a new pane split under the TUI.
+# Window: --window, else the window already marked @cc_role=command-center, else
+# the window of $TMUX_PANE (run it from the TUI or any pane of that window), else
+# a window named "Command Center". Pane: the registered @agent_pane if it is a
+# shell again (agent quit), else a shell pane on the TUI's row to its right, else
+# the TUI is split in half (dashboard left, central right). Layout: top row =
+# dashboard | central; the bottom row is left to the user's own terminals.
 #
 # The agent's cwd is central.dir (default ~/.config/command-center/central):
 # that directory is its mailbox address for cc-mail, holds its prompt and its
@@ -90,15 +91,15 @@ tui_pane() {
   tmux list-panes -t "$WIN" -F '#{pane_id}' 2>/dev/null | head -n 1
 }
 
-# First shell pane below the TUI (smallest top, then left), else any shell pane.
-shell_pane_below() {
-  local tui_top below any
+# First shell pane on the TUI's row to its right (nearest first). Panes on other rows
+# are the user's terminals and are never taken; the caller splits the TUI instead.
+shell_pane_right() {
+  local tui_top tui_left
   tui_top="$(tmux display-message -p -t "$TUI" '#{pane_top}' 2>/dev/null || echo 0)"
-  below="$(tmux list-panes -t "$WIN" -F $'#{pane_id}\t#{pane_current_command}\t#{pane_top}\t#{pane_left}' 2>/dev/null \
-    | awk -F'\t' -v t="$tui_top" -v re="$SHELL_CMDS" '$2 ~ re && $3 > t {print $3 "\t" $4 "\t" $1}' | sort -n -k1,1 -k2,2 | head -n 1 | cut -f3)"
-  [ -n "$below" ] && { printf '%s' "$below"; return; }
-  tmux list-panes -t "$WIN" -F $'#{pane_id}\t#{pane_current_command}' 2>/dev/null \
-    | awk -F'\t' -v re="$SHELL_CMDS" -v me="$TUI" '$2 ~ re && $1 != me {print $1; exit}'
+  tui_left="$(tmux display-message -p -t "$TUI" '#{pane_left}' 2>/dev/null || echo 0)"
+  tmux list-panes -t "$WIN" -F $'#{pane_id}\t#{pane_current_command}\t#{pane_top}\t#{pane_left}' 2>/dev/null \
+    | awk -F'\t' -v t="$tui_top" -v l="$tui_left" -v re="$SHELL_CMDS" '$2 ~ re && $3 == t && $4 > l {print $4 "\t" $1}' \
+    | sort -n -k1,1 | head -n 1 | cut -f2
 }
 
 # --- prompt ------------------------------------------------------------------
@@ -207,10 +208,11 @@ fi
 
 TUI="$(tui_pane)"
 PANE="$AGENT_PANE"
-[ -n "$PANE" ] || PANE="$(shell_pane_below)"
+[ -n "$PANE" ] || PANE="$(shell_pane_right)"
 if [ -z "$PANE" ]; then
-  PANE="$(tmux split-window -v -l 35% -d -P -F '#{pane_id}' -t "$TUI" -c "$CENTRAL_DIR" 2>/dev/null || true)"
-  [ -n "$PANE" ] || { echo "cc-central: could not create a pane under $TUI" >&2; exit 1; }
+  # Split the TUI in half: dashboard left, central right. Rows below stay the user's terminals.
+  PANE="$(tmux split-window -h -l 50% -d -P -F '#{pane_id}' -t "$TUI" -c "$CENTRAL_DIR" 2>/dev/null || true)"
+  [ -n "$PANE" ] || { echo "cc-central: could not create a pane beside $TUI" >&2; exit 1; }
   CREATED=1
 else
   CREATED=0
@@ -228,5 +230,5 @@ esac
 # send-keys types into an interactive shell so the cursor-cli alias resolves.
 tmux send-keys -t "$PANE" C-u "cd '$CENTRAL_DIR' && clear && $AGENT_CMD ${MODEL_FLAG}\"\$(cat '$PROMPT_FILE')\"" Enter
 
-echo "started central agent in pane $PANE of $WIN_TARGET ($AGENT_CMD, model $MODEL)$([ "$CREATED" = 1 ] && echo ' — new pane under the TUI')"
+echo "started central agent in pane $PANE of $WIN_TARGET ($AGENT_CMD, model $MODEL)$([ "$CREATED" = 1 ] && echo ' — new pane right of the TUI')"
 exit 0

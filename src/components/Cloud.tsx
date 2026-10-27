@@ -103,7 +103,7 @@ export function Cloud({
 
   return (
     <box flexDirection="column">
-      <text>
+      <text wrapMode="none">
         <span fg={C.header}>
           {fit("NAME", COLS.name)}
           {fit("STATUS", COLS.status)}
@@ -119,7 +119,7 @@ export function Cloud({
         const repo = agent.repos[0] ? repoLabel(agent.repos[0]) : "-"
         return (
           <box key={agent.id} backgroundColor={isSelected ? C.selectedBg : undefined}>
-            <text>
+            <text wrapMode="none">
               <span fg={isSelected ? "#ffffff" : C.key}>{isSelected ? "▸" : " "}{fit(agent.name || agent.id, COLS.name - 1)}</span>
               <span fg={statusColor(agent.status)}>{fit(agent.status, COLS.status)}</span>
               <span fg={C.gray}>{fit(repo, COLS.repo)}</span>
