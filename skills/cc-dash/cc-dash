@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# cc-dash — per-project dashboard TUI for the top-left pane of a project's
+# "central" tmux window (see src/dash). Read-only.
+#
+#   cc-dash [<project-name> | <project-dir>]
+#
+# Without an argument the project is the one containing the current directory.
+# start-project launches this in pane 1 of the central window; run it by hand
+# anywhere to glance at a project.
+set -euo pipefail
+
+# Resolve the command-center checkout from this script's real location
+# (~/.local/bin/cc-dash is a symlink into the repo).
+SELF="$0"
+while [ -L "$SELF" ]; do
+  DIR="$(cd "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$DIR/$SELF" ;; esac
+done
+REPO="$(cd "$(dirname "$SELF")/../.." && pwd)"
+
+BUN="$(command -v bun || true)"
+for c in "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+  [ -n "$BUN" ] && break
+  [ -x "$c" ] && BUN="$c"
+done
+if [ -z "$BUN" ]; then
+  echo "cc-dash: bun not found" >&2
+  exit 1
+fi
+
+exec "$BUN" run "$REPO/src/dash/index.tsx" "$@"

@@ -20,7 +20,7 @@ import { config, configPath } from "../src/config.ts"
 const REPO = resolve(import.meta.dir, "..")
 const HOME = homedir()
 const LOCAL_BIN = join(HOME, ".local", "bin")
-const SKILL_BINS = ["cc-report", "cc-mail", "cc-grok", "cc-flag", "start-project", "project-task"]
+const SKILL_BINS = ["cc-report", "cc-mail", "cc-grok", "cc-flag", "cc-dash", "start-project", "project-task"]
 const checksOnly = process.argv.includes("doctor") || process.argv.includes("--check")
 
 const ok = (msg: string) => console.log(`  ✓ ${msg}`)

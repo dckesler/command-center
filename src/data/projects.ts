@@ -94,7 +94,7 @@ export function parseBrief(markdown: string, fallbackTitle: string): ProjectBrie
         : "unknown"
   const updated = markdown.match(/^\**Updated:?\**:?\s*(\d{4}-\d{2}-\d{2})/im)?.[1] ?? null
   const epic = markdown.match(EPIC_LINE)?.[1]?.toUpperCase() ?? null
-  const steps = sectionAfter(markdown, /^##\s+next steps/i)
+  const steps = sectionAfter(markdown, /^##\s+next steps\s*$/i)
   const nextSteps: string[] = []
   let doneSteps = 0
   for (const line of steps.split("\n")) {
@@ -108,8 +108,8 @@ export function parseBrief(markdown: string, fallbackTitle: string): ProjectBrie
     status,
     updated,
     epic,
-    goal: firstParagraph(sectionAfter(markdown, /^##\s+goal/i)),
-    currentState: firstParagraph(sectionAfter(markdown, /^##\s+current state/i)),
+    goal: firstParagraph(sectionAfter(markdown, /^##\s+goal\s*$/i)),
+    currentState: firstParagraph(sectionAfter(markdown, /^##\s+current state\s*$/i)),
     nextSteps,
     doneSteps,
   }

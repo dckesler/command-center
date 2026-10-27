@@ -89,7 +89,7 @@ Resolution order: environment variable → `config.json` → default.
 | `commands.agent` | `CC_AGENT_CMD` | `cursor-cli` | command typed into tmux panes to start an agent (alias OK) |
 | `commands.projectModel` | `CC_PROJECT_MODEL` | `claude-opus-5-5-high` | Cursor CLI model for each project's central agent (`cursor-cli --list-models`); `""` = CLI default; only applied when `commands.agent` is the Cursor CLI |
 | `commands.mkpanes` | `MKPANES_BIN` | `~/.local/bin/mkpanes` | worktree launcher; parsed for repo aliases when `repos` is empty |
-| `commands.editor` | | `""` | editor to open in the left pane of project/task windows (e.g. `vim`); empty or `none` leaves it as a shell |
+| `commands.editor` | | `""` | editor to open in a spare pane of project/task windows (e.g. `vim`; project windows use a bottom pane since the top-left runs `cc-dash`); empty or `none` = no editor |
 | `commands.terminal` | | `switch` | `switch` = one terminal window, projects are tmux sessions the client switches between (see *Tabs* below); `alacritty` \| `terminal` = a new OS window per project; `none` = leave the session detached |
 | `commands.tmuxSession` | | `null` | pin the session that receives ticket windows |
 | `jira.baseUrl` | `JIRA_BASE_URL` | `""` | Jira site; empty disables links and transitions |
@@ -185,8 +185,24 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   tab, and the worker starts with `/start-ticket <KEY>` while reporting to the project's
   central agent.
 
+  **Project dashboard (`cc-dash`).** The top-left pane of every project's `central`
+  window runs `cc-dash <project>`, a read-only TUI so that switching to a project's tab
+  answers "what is this, what's going on, who needs me" without visiting the sub-agent
+  tabs: PROJECT.md status / goal / current state (+ epic progress), a red **NEEDS YOU**
+  block (tabs whose newest report is `attention`, agents in the `attention` hook state,
+  stuck cc-mail — oldest wait first), one row per tab (window #, ticket + short Jira
+  status, MR with CI icon / approvals / open threads, agent state, newest report and
+  its age), open next steps and the latest reports. It watches `.cc/inbox.jsonl`,
+  `PROJECT.md`, the agent feed and the mail dir, so a worker's `cc-report` shows up
+  within a second; Jira/GitLab columns refresh every 60 s. Keys: `j/k` select,
+  `enter` jump to that tab, `o` MR, `t` ticket, `p` PROJECT.md, `r` refresh, `q` quit.
+  `start-project` launches it for new sessions and, on a resume, starts it in pane 1 of
+  an existing session when that pane is an idle shell. `commands.editor`, if set, now
+  opens in a bottom pane instead.
+
   Skills in `skills/` (synced to `~/.agents/skills`, binaries linked into
-  `~/.local/bin`): `start-project`, `project-task`, `cc-report`, `cc-mail`, `cc-grok`.
+  `~/.local/bin`): `start-project`, `project-task`, `cc-report`, `cc-mail`, `cc-grok`,
+  `cc-flag`, `cc-dash`.
 
   **Inter-agent mail.** Nothing is typed into a pane that a human may be using. Every
   agent-to-agent message (`cc-report project:<name>`, `project-task --message`, the
@@ -356,6 +372,7 @@ stuck. `cc-flag info` is a no-op so callers can pass severities straight through
 
 ```
 src/            TUI (OpenTUI/React), data layer, hub agents and their specs
+src/dash/       cc-dash — the per-project dashboard TUI (own entrypoint, reuses the data layer)
 src/config.ts   config loader (defaults ← config.json ← env)
 skills/         first-party agent skills; `bun run skills sync` links them into ~/.agents/skills and ~/.claude/skills
 tmux/           command-center.tmux — top status rows (numbered projects / gap / tabs) and keys; cc-session numbers sessions
@@ -366,7 +383,7 @@ config.example.json, .env.example
 
 State written at runtime lives only in `dirs.config` (default `~/.config/command-center`):
 `agents.jsonl` (hook feed), `inbox.jsonl` + `cursors.json` (durable specialist inbox),
-`mail/` (inter-agent mailboxes), `todos.json`, `focus-day.json`, `tui.log`. Nothing is written inside the repo.
+`mail/` (inter-agent mailboxes), `todos.json`, `focus-day.json`, `tui.log`, `dash.log`. Nothing is written inside the repo.
 
 Personal constants baked into some skill docs (`skills/*/SKILL.md` "Known constants":
 Atlassian account ids, cloud id, GitLab group) are still the author's; adjust them when
