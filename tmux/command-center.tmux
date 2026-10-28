@@ -22,6 +22,7 @@
 #
 # Keys:
 #   Ctrl-s 0 … 9        session by number (0 = Command Center)
+#   Ctrl-s n / p        next / previous session (like prefix n / p for windows)
 #   Ctrl-s Tab / BTab   next / previous session
 #   Ctrl-s Ctrl-s       send a real Ctrl-s to the pane
 #   Alt-0 … Alt-9       session by number, no prefix
@@ -67,13 +68,15 @@ set-hook -g client-attached "set-option @cc_flag '' ; set-window-option @tab_col
 
 # --- keyboard -----------------------------------------------------------------
 # Ctrl-s is a second prefix for sessions: it opens the "session" key table,
-# where a digit picks a session and Tab/BTab step. Any other key just drops
+# where a digit picks a session and n/p (or Tab/BTab) step. Any other key just drops
 # back out. Ctrl-s Ctrl-s sends a literal Ctrl-s to the pane for apps that
 # want it. Alt-N (no prefix) does the same if the terminal sends Option as Meta.
 bind -n C-s switch-client -T session
 bind -T session C-s send-keys C-s
 bind -T session Tab  run-shell "#{@cc_tmux_dir}/cc-session next '#{session_id}' '#{client_name}'"
 bind -T session BTab run-shell "#{@cc_tmux_dir}/cc-session prev '#{session_id}' '#{client_name}'"
+bind -T session n    run-shell "#{@cc_tmux_dir}/cc-session next '#{session_id}' '#{client_name}'"
+bind -T session p    run-shell "#{@cc_tmux_dir}/cc-session prev '#{session_id}' '#{client_name}'"
 bind -T session 0 run-shell "#{@cc_tmux_dir}/cc-session go 0 '#{client_name}'"
 bind -n M-0 run-shell "#{@cc_tmux_dir}/cc-session go 0 '#{client_name}'"
 bind -T session 1 run-shell "#{@cc_tmux_dir}/cc-session go 1 '#{client_name}'"

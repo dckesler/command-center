@@ -381,8 +381,8 @@ Install it by sourcing it at the end of your tmux config (`~/.tmux.conf.user` if
 source-file ~/projects/command-center/tmux/command-center.tmux
 ```
 
-Keys: `Ctrl-s 0..9` project by number (`Ctrl-s 0` is Command Center), `Ctrl-s Tab` /
-`Ctrl-s BTab` next / previous project, `Ctrl-s Ctrl-s` sends a real Ctrl-s to the pane;
+Keys: `Ctrl-s 0..9` project by number (`Ctrl-s 0` is Command Center), `Ctrl-s n` / `Ctrl-s p`
+(or `Ctrl-s Tab` / `Ctrl-s BTab`) next / previous project, `Ctrl-s Ctrl-s` sends a real Ctrl-s to the pane;
 `prefix 1-9` windows as usual, `prefix Tab` / `BTab` also step projects, `prefix S`
 project picker. `Alt-0..9` does the same as `Ctrl-s N` without a prefix if the terminal
 sends Option as Meta (Alacritty `[window] option_as_alt = "Both"`, Ghostty
