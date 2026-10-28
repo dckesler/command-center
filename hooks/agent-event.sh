@@ -9,7 +9,7 @@
 #           activity events response | edit | shell
 #           mail delivery   tool (Cursor postToolUse)
 #
-# State events:    {ts, source, state, dir, session, summary?, transcript?}
+# State events:    {ts, source, state, dir, session, summary?, transcript?, pane?}
 # Activity events: {ts, source, event, dir, session, text|file|command}
 #   (no "state" field, so status readers ignore them)
 #
@@ -92,7 +92,8 @@ EDIT_FILTER="$BASE"' + {event: "edit", file: $file}'
 SHELL_FILTER="$BASE"' + {event: "shell", command: ($cmd | .[:200])}'
 STATE_FILTER="$BASE"' + {state: $state,
     summary: (.message // (.tool_name // "" | if . == "" then "" else "permission: " + . end)),
-    transcript: (.transcript_path // "")}
+    transcript: (.transcript_path // ""),
+    pane: $pane}
   | with_entries(select(.value != "" or (.key | IN("dir", "session"))))'
 
 append() {
@@ -159,7 +160,9 @@ case "$KIND" in
       TP="$(printf '%s' "$INPUT" | jq -r '.transcript_path // ""' 2>/dev/null)"
       emit_response "$(last_claude_text "$TP")"
     fi
-    append "$(printf '%s' "$INPUT" | jq -c --arg source "$SOURCE" --arg state "$KIND" "$STATE_FILTER" 2>/dev/null)"
+    # $TMUX_PANE is inherited from the agent process: it ties this conversation
+    # id to the pane it runs in (cc-snapshot uses it to resume agents in place).
+    append "$(printf '%s' "$INPUT" | jq -c --arg source "$SOURCE" --arg state "$KIND" --arg pane "${TMUX_PANE:-}" "$STATE_FILTER" 2>/dev/null)"
     # stop: a finishing Cursor agent takes waiting mail as its next turn. Only
     # when the turn completed — an aborted/errored stop may not run follow-ups,
     # and the mail must stay queued for the wake path instead.

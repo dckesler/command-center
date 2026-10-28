@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# cc-restore — rebuild the Command Center from a cc-snapshot: missing tmux sessions/windows with their layouts, agents resumed in place (see src/cli/snapshot.ts).
+# Existing windows are left alone, so it is safe to re-run.
+#
+#   cc-restore [name] [--dry-run] [--no-agents] [--session <name>]…
+set -euo pipefail
+
+# Resolve the command-center checkout from this script's real location
+# (~/.local/bin/cc-restore is a symlink into the repo).
+SELF="$0"
+while [ -L "$SELF" ]; do
+  DIR="$(cd "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$DIR/$SELF" ;; esac
+done
+REPO="$(cd "$(dirname "$SELF")/../.." && pwd)"
+
+BUN="$(command -v bun || true)"
+for c in "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+  [ -n "$BUN" ] && break
+  [ -x "$c" ] && BUN="$c"
+done
+if [ -z "$BUN" ]; then
+  echo "cc-restore: bun not found" >&2
+  exit 1
+fi
+
+exec "$BUN" run "$REPO/src/cli/snapshot.ts" restore "$@"

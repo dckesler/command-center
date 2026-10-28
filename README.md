@@ -110,7 +110,7 @@ Resolution order: environment variable → `config.json` → default.
 | `todos.focusHours` | | `09:00-17:30` | weekday window for focus checks and the start/end-of-day announcements |
 | `repos` | | `{}` | alias → path; overrides the mkpanes registry when non-empty |
 
-The shell skills (`cc-report`, `cc-mail`, `cc-central`, `cc-instruct`, `cc-inbox`, `cc-todo`,
+The shell skills (`cc-report`, `cc-mail`, `cc-central`, `cc-instruct`, `cc-inbox`, `cc-todo`, `cc-snapshot`, `cc-restore`,
 `start-project`, `project-task`) and
 `hooks/agent-event.sh` read the same file with `jq`, so one config drives both the TUI
 and the agents it launches. `bun run doctor` reports what is missing.
@@ -398,12 +398,27 @@ raises a warn/attention event about that directory (stuck mail, Grok `needs-you`
 ticket-agent events), and marks its own tab when an approval is waiting or mail is
 stuck. `cc-flag info` is a no-op so callers can pass severities straight through.
 
+## Save and restore the whole thing
+
+`cc-snapshot save [name] [--note "…"]` writes every tmux session, window and pane —
+layout, cwd, what runs there — plus the conversation id of every agent to
+`dirs.config/snapshots/<name>.json` (and `latest.json`); `cc-snapshot list` / `show`.
+`cc-restore [name] [--dry-run] [--no-agents] [--session <name>]` rebuilds whatever is
+missing: sessions (same numbering), windows (matched by name — open ones are left
+alone, so it is safe to re-run) with their layouts, then types the program back into
+each pane: `bun start` for the dashboard, `cc-dash <project>` for project dashboards,
+`<commands.agent> --resume=<id>` for every agent (the central included), the editor
+where one ran. Agent conversations are tied to panes by the hooks (`agents.jsonl`
+state events carry `pane`), with transcript-based fallbacks for agents that predate
+that; `show` marks any it could not resolve. Windows whose worktree is gone and the
+Command Center dev session's agent are skipped with a note.
+
 ## Layout
 
 ```
 src/            TUI (OpenTUI/React), data layer, hub agents and their specs
 src/dash/       cc-dash — the per-project dashboard TUI (own entrypoint, reuses the data layer)
-src/cli/        bun entrypoints behind shell skills (todo.ts ← cc-todo, inbox.ts ← cc-inbox)
+src/cli/        bun entrypoints behind shell skills (todo.ts ← cc-todo, inbox.ts ← cc-inbox, snapshot.ts ← cc-snapshot/cc-restore)
 src/config.ts   config loader (defaults ← config.json ← env)
 skills/         first-party agent skills; `bun run skills sync` links them into ~/.agents/skills and ~/.claude/skills
 tmux/           command-center.tmux — top status rows (numbered projects / gap / tabs) and keys; cc-session numbers sessions
@@ -415,7 +430,7 @@ config.example.json, .env.example
 State written at runtime lives only in `dirs.config` (default `~/.config/command-center`):
 `agents.jsonl` (hook feed), `inbox.jsonl` + `cursors.json` (durable specialist inbox),
 `mail/` (inter-agent mailboxes), `todos.json`, `focus-day.json`, `hub.json` (specialist
-status snapshot read by `cc-instruct`), `central/` (the tmux central's prompt, log and `seen.json` read cursor),
+status snapshot read by `cc-instruct`), `central/` (the tmux central's prompt, log and `seen.json` read cursor), `snapshots/` (cc-snapshot files),
 `tui.log`, `dash.log`. Nothing is written inside the repo.
 
 Personal constants baked into some skill docs (`skills/*/SKILL.md` "Known constants":

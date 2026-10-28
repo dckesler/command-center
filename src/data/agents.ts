@@ -34,6 +34,8 @@ export interface FeedEvent {
   event?: "response" | "edit" | "shell" | "report" | "instruct"
   summary?: string
   transcript?: string
+  /** tmux pane the agent runs in (state events; from the hook's $TMUX_PANE) */
+  pane?: string
   text?: string
   file?: string
   command?: string
@@ -96,7 +98,7 @@ export function readAgentStatuses(): Map<string, AgentStatus> {
 //   cursor: ~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl
 //   claude: ~/.claude/projects/-<slug>/<id>.jsonl
 
-function slug(dir: string): string {
+export function slug(dir: string): string {
   return dir.replace(/^\//, "").replace(/[/_]/g, "-")
 }
 
