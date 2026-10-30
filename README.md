@@ -147,7 +147,8 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   typed chat on this tab.
 
 - **[3] Review** — code reviews of other people's merge requests, one row per
-  `<repo>_review_<branch>` worktree (`mkpanes --review`). Columns: ticket, MR URL,
+  `<repo>_review_<branch>` worktree (`mkpanes --review`; `/` in a branch becomes `__` in
+  the directory). Columns: ticket, MR URL,
   MR title, agent, approval (`✓ approved 2/2`, `1/2 approved`, `unapproved`; `★` marks
   your own approval). `n` picks a repo and asks for a ticket key (the branch is assumed
   to be named after it), a branch, **or an MR link** (`https://…/-/merge_requests/123`
