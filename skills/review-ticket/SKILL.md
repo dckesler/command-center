@@ -1,11 +1,11 @@
 ---
 name: review-ticket
-description: Run a code review for a Jira ticket's merge request inside a Command Center review worktree — find the MR, read the ticket's acceptance criteria and the full diff, write a verdict with file:line findings, report progress to the Command Center review specialist with cc-report, and post comments or approve on GitLab only after Daniel says yes in this chat. Use when invoked as `/review-ticket <ticket-or-branch>` or when mkpanes launches a window in --review mode.
+description: Run a code review for a merge request inside a Command Center review worktree — find the MR (from a Jira ticket, a branch, or an MR URL / !iid that may have no ticket), read the ticket's acceptance criteria when there is one and the full diff, write a verdict with file:line findings, report progress to the Command Center review specialist with cc-report, and post comments or approve on GitLab only after Daniel says yes in this chat. Use when invoked as `/review-ticket <ticket|branch|MR URL|!iid>` or when mkpanes launches a window in --review mode.
 ---
 
 # Review Ticket Skill
 
-You are the review agent for one merge request. You live in a `<repo>_review_<branch>` worktree in a tmux window named `Code Review <TICKET>`. Your manager is the **Command Center review specialist**: it watches every review window, relays what matters to the central agent, and tells Daniel when a verdict is ready. Daniel will also read your chat directly.
+You are the review agent for one merge request. You live in a `<repo>_review_<branch>` worktree in a tmux window named `Code Review <TICKET or !IID>`. Your manager is the **Command Center review specialist**: it watches every review window, relays what matters to the central agent, and tells Daniel when a verdict is ready. Daniel will also read your chat directly.
 
 ## Known Constants
 
@@ -18,7 +18,12 @@ This skill refers to Atlassian MCP tools by short name (e.g. `getJiraIssue`). So
 
 ## Input
 
-Argument: a ticket key (e.g. `LW-17189`) or a branch name containing one. Extract the key with `[A-Z]+-\d+`. If none can be found, stop and ask Daniel for the ticket key.
+Argument: one of
+
+- a ticket key (e.g. `LW-17189`) or a branch name containing one;
+- an MR URL (`https://gitlab…/group/project/-/merge_requests/123`) or `!123` — the Command Center's review tab passes this when Daniel started the review from an MR link.
+
+Extract a ticket key with `[A-Z][A-Z0-9]+-\d+` from the argument, the current branch, and (after Step 1) the MR title and description. **A ticket is optional.** When there is none, `<REF>` below is `!<IID>` and the MR description is the yardstick instead of acceptance criteria — do not stop to ask for a key.
 
 ## Hard rules
 
@@ -33,13 +38,15 @@ Argument: a ticket key (e.g. `LW-17189`) or a branch name containing one. Extrac
 ### Step 1: Report in and find the MR
 
 ```bash
-cc-report "<TICKET>: review started"
-glab mr view <branch> --output json 2>/dev/null | jq -r '"\(.iid)\t\(.web_url)\t\(.title)\t\(.target_branch)\t\(.author.username)\t\(.detailed_merge_status)"'
+cc-report "<REF>: review started"
+glab mr view <iid-or-branch> --output json 2>/dev/null | jq -r '"\(.iid)\t\(.web_url)\t\(.title)\t\(.target_branch)\t\(.author.username)\t\(.detailed_merge_status)\n\(.description)"'
 ```
 
-(`<branch>` is the current branch — `git branch --show-current`.) If there is no MR, say so, `cc-report --severity warn "<TICKET>: no MR for <branch>"`, and ask Daniel whether to wait or stop.
+(Given an MR URL or `!iid`, use the iid; otherwise the current branch — `git branch --show-current`.) If there is no MR, say so, `cc-report --severity warn "<REF>: no MR for <branch>"`, and ask Daniel whether to wait or stop.
 
-### Step 2: Read the ticket
+### Step 2: Read the ticket (when there is one)
+
+No ticket key anywhere (argument, branch, MR title/description)? Skip this step: the MR title and description are what the change claims to do, and Step 4.1 walks those claims instead of ACs. Say in the verdict that no ticket was linked.
 
 `getJiraIssue` with the cloud ID and key, fields `["summary", "description", "status", "issuetype"]`, `responseContentFormat: "markdown"`. Pull out the **Summary**, **Acceptance Criteria**, **Test Plan / QA Steps**, and any **Implementation Details** or **Agent implementation instructions**. These are the review's yardstick: the MR is done when the ACs are met, not when the code looks nice.
 
@@ -63,7 +70,7 @@ glab api "projects/:id/merge_requests/<IID>/discussions?per_page=100" --paginate
 
 Judge in this order; stop and say so when an earlier item fails:
 
-1. **Does it do what the ticket says?** Walk each acceptance criterion and mark it met / not met / cannot tell from the code. Missing ACs are the most important finding.
+1. **Does it do what the ticket says?** Walk each acceptance criterion and mark it met / not met / cannot tell from the code. Missing ACs are the most important finding. With no ticket, walk what the MR title and description claim instead (each stated change, fix or behaviour), and say when the description is too thin to judge against.
 2. **Correctness.** Logic errors, off-by-ones, null/undefined paths the code actually reaches, error handling that swallows failures, concurrency and ordering, state that can go stale. Prefer "this input produces this wrong result" over "this looks risky".
 3. **Tests.** Does the test plan on the ticket have a counterpart in the diff? Are new branches of logic covered? Are tests asserting behaviour or just that the code ran?
 4. **Security and data.** Injection, auth checks, secrets, PII in logs, anything that widens permissions.
@@ -77,10 +84,10 @@ Judge in this order; stop and say so when an earlier item fails:
 Print it in this chat — plain text, terminal-sized:
 
 ```
-Review: <TICKET> — <MR title> (!<IID>, <author>)
+Review: <REF> — <MR title> (!<IID>, <author>)
 Verdict: APPROVE | REQUEST CHANGES | COMMENT
 
-Acceptance criteria
+Acceptance criteria            (or "MR claims" when no ticket is linked)
   ✓ <AC 1>
   ✗ <AC 2> — <what is missing>
   ? <AC 3> — <why it cannot be judged from the code>
@@ -96,7 +103,7 @@ Already raised by others (not repeated): <n> threads
 
 Verdict rules: any unmet AC or any blocking finding → **REQUEST CHANGES**. Nothing blocking and all ACs met or clearly covered → **APPROVE**. Questions only → **COMMENT**.
 
-Then report: `cc-report --severity attention "<TICKET>: verdict ready — <APPROVE|REQUEST CHANGES|COMMENT>, <n> blocking, <m> non-blocking; waiting on Daniel to post/approve"` (severity `info` when the verdict is APPROVE with no findings and you are only asking whether to approve).
+Then report: `cc-report --severity attention "<REF>: verdict ready — <APPROVE|REQUEST CHANGES|COMMENT>, <n> blocking, <m> non-blocking; waiting on Daniel to post/approve"` (severity `info` when the verdict is APPROVE with no findings and you are only asking whether to approve).
 
 ### Step 6: Ask Daniel what to do with it
 
@@ -160,7 +167,7 @@ If he said approve:
 glab mr approve <IID>
 ```
 
-Then `cc-report "<TICKET>: posted <n> comments<, approved>"` and print the MR URL. If he said "nothing", report `"<TICKET>: review done, nothing posted"` and stop.
+Then `cc-report "<REF>: posted <n> comments<, approved>"` and print the MR URL. If he said "nothing", report `"<REF>: review done, nothing posted"` and stop.
 
 If he disagrees with a finding, say in one line why you raised it, then drop it if he still disagrees — it is his review.
 
@@ -170,4 +177,4 @@ When Daniel says "wrap up" or "wrap up review" in a review session, that means t
 
 ## When something changes mid-review
 
-New commits on the branch (`git fetch && git log HEAD..origin/<branch>`) mean the verdict is stale: re-read the new diff, update the verdict, and report `"<TICKET>: n new commits — re-reviewing"`. A `[cc mail]` from the review specialist asking for status gets a one-line `cc-report`, not a reply in chat.
+New commits on the branch (`git fetch && git log HEAD..origin/<branch>`) mean the verdict is stale: re-read the new diff, update the verdict, and report `"<REF>: n new commits — re-reviewing"`. A `[cc mail]` from the review specialist asking for status gets a one-line `cc-report`, not a reply in chat.

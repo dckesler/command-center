@@ -149,10 +149,14 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
 - **[3] Review** — code reviews of other people's merge requests, one row per
   `<repo>_review_<branch>` worktree (`mkpanes --review`). Columns: ticket, MR URL,
   MR title, agent, approval (`✓ approved 2/2`, `1/2 approved`, `unapproved`; `★` marks
-  your own approval). `n` picks a repo and asks for the ticket key (the branch is assumed
-  to be named after it), creates the worktree, opens a tmux window named
-  `Code Review <TICKET>` and starts `/review-ticket <TICKET>` in the agent pane. That
-  agent reads the ticket's acceptance criteria and the full diff, writes a verdict with
+  your own approval). `n` picks a repo and asks for a ticket key (the branch is assumed
+  to be named after it), a branch, **or an MR link** (`https://…/-/merge_requests/123`
+  or `!123`): an MR is looked up with `glab`, the worktree is made on its source branch,
+  and the agent gets `/review-ticket <MR URL>` — no ticket needed; a URL naming another
+  registered repo switches to that repo. Either way it opens a tmux window named
+  `Code Review <TICKET or !IID>` and starts `/review-ticket` in the agent pane. That
+  agent reads the ticket's acceptance criteria (or, without a ticket, the MR's own
+  description) and the full diff, writes a verdict with
   file:line findings in its chat, reports to the review specialist with `cc-report`, and
   posts comments or approves on GitLab **only after you say yes in its chat**. `a`
   approves the selected MR as you (confirm dialog); `s` jumps to the window, `x` cleans

@@ -77,7 +77,7 @@ import {
 import { collect } from "./data/collect.ts"
 import { closeGrokRun, listGrokBots, listGrokRuns, pullGrokReports, startGrokRun, type GrokBot, type GrokRun } from "./data/grok.ts"
 import { run } from "./data/exec.ts"
-import { approveMr, getMrExtras, gitlabUsername } from "./data/gitlab.ts"
+import { approveMr, getMrByIid, getMrExtras, gitlabUsername, parseMrRef, remoteProjectPath } from "./data/gitlab.ts"
 import {
   applyTransition,
   getAssignedTickets,
@@ -104,7 +104,9 @@ import { planWrapUp, runCleanup, runWrapUp } from "./data/wrapup.ts"
 import { discardMail, isMailStuck, kickMail, peekMail, readPendingMail, type PendingMail } from "./data/mail.ts"
 import { centralMode, ensureCentral, focusCentral, readCentral, type CentralSnapshot } from "./data/central.ts"
 import { statePath } from "./config.ts"
-import { watch } from "node:fs"
+import { watch, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { LoadState, MrExtras, Row, TicketInfo } from "./types.ts"
 
 const INITIAL_LOAD: LoadState = { git: false, jira: false, gitlab: false, tmux: false }
@@ -998,20 +1000,61 @@ export function App() {
     })
   }, [])
 
+  /**
+   * Second step of `n` on the review tab. The input is a ticket key / branch
+   * (worktree on that branch, `/review-ticket <key>`), or an MR — URL or
+   * `!iid` — which may have no ticket at all: the MR is looked up with glab,
+   * the worktree is made on its source branch, and the agent gets
+   * `/review-ticket <MR URL>` so it reviews against the MR itself. A URL that
+   * names another registered repo switches to that repo.
+   */
   const submitReviewTicket = useCallback(
-    (ticket: string) => {
+    (input: string) => {
       if (!reviewPrompt) return
-      const repo = reviewPrompt.repo
+      let repo = reviewPrompt.repo
       setReviewPrompt(null)
-      setBusy(`opening code review for ${ticket} in ${repo}…`)
-      targetSession()
-        .then((session) => runMkpanes([repo, "-w", ticket, "-t", ticket, "--review"], session))
-        .then((result) =>
-          finishAction({
-            ...result,
-            message: result.ok ? `Code Review ${ticket} window opened` : result.message,
-          }),
-        )
+      const ref = parseMrRef(input)
+      if (!ref) {
+        setBusy(`opening code review for ${input} in ${repo}…`)
+        targetSession()
+          .then((session) => runMkpanes([repo, "-w", input, "-t", input, "--review"], session))
+          .then((result) =>
+            finishAction({
+              ...result,
+              message: result.ok ? `Code Review ${input} window opened` : result.message,
+            }),
+          )
+        return
+      }
+      setBusy(`looking up !${ref.iid}…`)
+      ;(async () => {
+        const repos = parseRepoMap()
+        let info = repos.find((r) => r.alias === repo) ?? null
+        if (ref.projectPath) {
+          for (const r of repos) {
+            if ((await remoteProjectPath(r.path)) === ref.projectPath) {
+              info = r
+              break
+            }
+          }
+        }
+        if (!info) return { ok: false, message: `no registered repo for ${ref.projectPath ?? repo}` }
+        repo = info.alias
+        const mr = await getMrByIid(info.path, ref.iid)
+        if (!mr) return { ok: false, message: `!${ref.iid} not found in ${repo} (glab mr view)` }
+        const key = `${mr.sourceBranch} ${mr.title}`.match(/\b[A-Z][A-Z0-9]+-\d+\b/)?.[0] ?? null
+        const label = key ?? `!${mr.iid}`
+        const promptFile = join(tmpdir(), `cc-review-${repo}-${mr.iid}.txt`)
+        writeFileSync(promptFile, `/review-ticket ${mr.webUrl}\n`)
+        const session = await targetSession()
+        const result = await runMkpanes([repo, "-w", mr.sourceBranch, "-t", label, "--review", "--prompt-file", promptFile], session)
+        return {
+          ...result,
+          message: result.ok
+            ? `Code Review ${label} window opened in ${repo} — ${mr.sourceBranch}${key ? "" : " (no ticket; reviewing against the MR)"}`
+            : result.message,
+        }
+      })().then(finishAction, (err: unknown) => finishAction({ ok: false, message: String(err) }))
     },
     [reviewPrompt, finishAction],
   )

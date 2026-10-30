@@ -5,7 +5,7 @@ const C = {
   dim: "#6b7280",
 }
 
-/** Second step of the QA / code-review flow: repo is chosen, ask for the ticket. */
+/** Second step of the QA / code-review flow: repo is chosen, ask for the ticket (reviews also take an MR URL or !iid). */
 export function QaTicketPrompt({
   repo,
   mode = "qa",
@@ -22,9 +22,13 @@ export function QaTicketPrompt({
 
   return (
     <box flexDirection="column">
-      <box title={`New ${label} in ${repo} — ticket`} border borderColor={C.header} height={3}>
+      <box title={`New ${label} in ${repo} — ${mode === "review" ? "ticket, branch or MR URL" : "ticket"}`} border borderColor={C.header} height={3}>
         <input
-          placeholder={`e.g. LW-17124   (enter to open ${label} window, esc to cancel)`}
+          placeholder={
+            mode === "review"
+              ? "e.g. LW-17124, a branch, https://gitlab…/-/merge_requests/123 or !123   (enter to open, esc to cancel)"
+              : `e.g. LW-17124   (enter to open ${label} window, esc to cancel)`
+          }
           focused
           onInput={(value: string) => {
             draft.current = value
@@ -36,7 +40,11 @@ export function QaTicketPrompt({
           }}
         />
       </box>
-      <text fg={C.dim}>runs: mkpanes {repo} -w &lt;ticket&gt; {flag}</text>
+      <text fg={C.dim}>
+        {mode === "review"
+          ? `runs: mkpanes ${repo} -w <ticket|branch> --review — an MR link is looked up with glab and reviewed on its source branch, ticket or not`
+          : `runs: mkpanes ${repo} -w <ticket> ${flag}`}
+      </text>
     </box>
   )
 }

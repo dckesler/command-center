@@ -38,6 +38,44 @@ interface GlabMr {
   pipeline?: { status: string } | null
 }
 
+/** `https://gitlab…/group/project/-/merge_requests/123` or `!123` → iid (+ project path from a URL). */
+export function parseMrRef(text: string): { iid: number; projectPath: string | null } | null {
+  const t = text.trim()
+  const url = t.match(/^https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/(\d+)/)
+  if (url) return { iid: Number(url[2]), projectPath: url[1] }
+  const bang = t.match(/^!(\d+)$/)
+  if (bang) return { iid: Number(bang[1]), projectPath: null }
+  return null
+}
+
+/** `group/project` of a checkout's origin remote (ssh or https), or null. */
+export async function remoteProjectPath(repoPath: string): Promise<string | null> {
+  const res = await run("git", ["remote", "get-url", "origin"], { cwd: repoPath })
+  if (!res.ok) return null
+  return res.stdout.trim().replace(/^(git@[^:]+:|ssh:\/\/[^/]+\/|https?:\/\/[^/]+\/)/, "").replace(/\.git$/, "") || null
+}
+
+export interface MrSummary {
+  iid: number
+  projectId: number
+  title: string
+  state: "opened" | "merged" | "closed"
+  webUrl: string
+  sourceBranch: string
+}
+
+/** One MR by iid, resolved against the checkout's GitLab project. */
+export async function getMrByIid(repoPath: string, iid: number): Promise<MrSummary | null> {
+  const res = await run("glab", ["mr", "view", String(iid), "--output", "json"], { cwd: repoPath })
+  if (!res.ok) return null
+  try {
+    const mr = JSON.parse(res.stdout) as GlabMr
+    return { iid: mr.iid, projectId: mr.project_id, title: mr.title, state: mr.state, webUrl: mr.web_url, sourceBranch: mr.source_branch }
+  } catch {
+    return null
+  }
+}
+
 /**
  * Find the most recent MR for a branch (any state), then fetch pipeline status
  * if the list payload didn't include it. Runs `glab` inside the main repo
