@@ -80,15 +80,20 @@ Common navigation patterns used in QA steps:
 ```
 QA Steps:
 
-* Repo: lists/leave-behind-report
-  * Command: `npm start`
-  * Requestly rule: Leave Behind Report
-
-* Go to Audits & Inspections in the nav
+* Preconditions: Staging web app; content group admin; at least one Leave Behind template exists. No feature flag.
+* Go to Audits & Inspections in the left nav
 * Go to Leave Behind Templates
 * Select a template from the top left dropdown
 * Select the 3 dot menu in the top right
 * Go to Settings
-* In the Company Logo section, see the green icon next to the description
-* Hover over it and verify the tooltip appears
+* In the Company Logo section, see the green info icon next to the description
+* Hover over it and verify the tooltip appears with the logo size guidance
+* Regression: upload a company logo in the same section and confirm it saves and shows on the template preview
+
+Local dev check (for the developer, not QA):
+
+* Repo: lists/leave-behind-report
+  * Command: `npm start`
+  * Requestly rule: Leave Behind Report
+* Run the same QA Steps against localhost
 ```

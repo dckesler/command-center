@@ -33,7 +33,7 @@ Delegates to `mkpanes <repo> -w <branch> -s <project-session> --prompt-file …`
 
 - worktree `<repo>_<branch>` next to the repo; branch fetched from origin, reused if it exists, otherwise created from the default branch (`--from <base>` to override)
 - vim / agent / shell panes; `nvm use && <install>` in a bottom pane when there is a `package.json`
-- the worker prompt: with `--ticket`, start with `/start-ticket <KEY>` (plan → Daniel approves in that chat → implement → `push-branch` → `babysit-branch`); without, commit on the branch and ask before pushing
+- the worker prompt: with `--ticket`, start with `/start-ticket <KEY>` (plan → implement → `push-branch` → `babysit-branch`, no approval stop; questions come to you, not Daniel); without, commit on the branch and report done — you tell it whether to push
 - tab name keeps the ticket key / branch so both the project session and the worktrees tab can find it
 
 ## Arguments
@@ -49,9 +49,10 @@ The worker's prompt is saved to `.cc/tasks/<slug>.txt`. It tells the worker to r
 They arrive in your chat as `[report HH:MM] (severity) <title>: <text>` and are appended to `.cc/inbox.jsonl`. For each:
 
 1. Fold the result into `PROJECT.md` (Current state, tick/add Next steps, Log line).
-2. If the worker asked something you can answer, reply with `project-task --message "<title>" "<answer>"`. Ticket workers wait for Daniel's plan approval in their own chat — tell Daniel which tab needs him rather than approving on his behalf.
-3. If Daniel is needed, pass it upward: `cc-report projects "<name>: <title> needs …" --severity attention`.
-4. When a task finishes, send `cc-report projects "<name>: <title> done — <one line>"`.
+2. **Answer the worker yourself whenever the approved Plan or PROJECT.md settles it** — its implementation plan, which of two approaches, a scope edge, whether to push — with `project-task --message "<title>" "<answer>"`. You hold the plan Daniel approved; approving within it is your job, not his.
+3. Escalate only a true ambiguity (two product-different readings, or scope the Plan does not cover): add a `- [ ] <question> (<title>)` line under `## Needs Daniel`, run `cc-report projects --severity attention "<name>: needs you — <question>"`, and keep other steps moving. When he answers, tick the line and relay with `--message`.
+4. "MR ready for review" → pass upward once with `--severity attention` (Daniel's review is a gate; the ticket stays In Progress). When Daniel tells you he posted an MR for review → relay it with `--message` so the worker moves the ticket to Code Review — never move it yourself, never without his message. "MR merged / ticket Done" → run the `wrap-up` skill for that tab (worktree removed, tab closed), tick the step, log, start the next step.
+5. When a task finishes, send `cc-report projects "<name>: <title> done — <one line>"` and start the next unblocked step from the Plan (keep `projects.maxParallelTasks` tabs busy).
 
 ## Other commands
 
@@ -64,4 +65,5 @@ project-task --message "<title>" "<text>"    # message a task tab's agent (deliv
 
 - Never open a tab named `central`.
 - Do not start a second tab for the same work; use `--message` to steer the existing one.
-- Closing finished tabs and removing worktrees is Daniel's call (`wrap-up` skill), not yours.
+- Open tabs only for steps of an approved Plan (`**Plan:** approved` in PROJECT.md), or for a spike that informs a plan you are writing. Nothing else starts before approval.
+- Wrap up your own task tabs (`wrap-up` skill) once their MR is merged and the ticket is Done. Tabs with an open MR, an unmerged branch, or unanswered questions stay — Daniel decides those.

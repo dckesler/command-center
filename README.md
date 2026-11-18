@@ -99,6 +99,9 @@ Resolution order: environment variable → `config.json` → default.
 | `jira.cloudId`, `jira.sprintField` | | `""`, `customfield_10007` | Atlassian MCP cloud id; sprint custom field |
 | `model` | `CC_MODEL` | `composer-2.5` | Cursor SDK model for specialists and Cloud agents |
 | `projects.exclude` | | `command-center, node_modules` | dirs under `dirs.projects` that are not projects |
+| `projects.maxParallelTasks` | | `2` | task tabs a project's central agent keeps busy at once under an approved plan |
+| `projects.idleMinutes` | | `20` | an active project with an approved plan, open steps, no task tabs and an idle central agent for this long gets an "idle project" nudge via the projects specialist (`0` = off) |
+| `mrs.sinceDays` | | `60` | `cc-mrs` / `list_my_mrs` hide your open MRs with no GitLab activity for this long (`0` = show all) |
 | `mail.quietSeconds` | | `30` | quiet time for the recipient's tmux window before `cc-mail` may type into an on-screen idle agent's pane |
 | `mail.retrySeconds` | | `20` | how often cc-mail's retrier re-attempts idle delivery of queued mail |
 | `mail.retryMinutes` | | `180` | how long the retrier keeps trying (hooks still deliver after it stops) |
@@ -110,7 +113,7 @@ Resolution order: environment variable → `config.json` → default.
 | `todos.focusHours` | | `09:00-17:30` | weekday window for focus checks and the start/end-of-day announcements |
 | `repos` | | `{}` | alias → path; overrides the mkpanes registry when non-empty |
 
-The shell skills (`cc-report`, `cc-mail`, `cc-central`, `cc-instruct`, `cc-inbox`, `cc-todo`, `cc-snapshot`, `cc-restore`,
+The shell skills (`cc-report`, `cc-mail`, `cc-central`, `cc-instruct`, `cc-inbox`, `cc-mrs`, `cc-todo`, `cc-snapshot`, `cc-restore`,
 `start-project`, `project-task`) and
 `hooks/agent-event.sh` read the same file with `jq`, so one config drives both the TUI
 and the agents it launches. `bun run doctor` reports what is missing.
@@ -140,7 +143,14 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   `cc-instruct <specialist> "<text>"` (the specialist's reply returns as a report),
   `cc-instruct project:<name> …` / `window:` / `pane:` / `dir:` (cc-mail to a project
   central, ticket or task agent) — and keeps the focus-todo loop with `cc-todo`
-  (`list`, `focus`, `note`, `add`, `done`). It never messages the pane that runs the
+  (`list`, `focus`, `note`, `add`, `done`). Ask it what is out for review and it runs
+  `cc-mrs`: every open MR you authored on GitLab (worktree or not) with approvals,
+  unresolved threads (human vs bot, newest age), CI, conflicts and Jira status, ending in
+  "N waiting on approval · N need work"; `cc-mrs threads !<iid>` shows the open threads
+  and, when you ask for a pass, `cc-mrs pass` hands each MR that needs work to a
+  babysit-branch agent (cc-mail to the one already in its worktree, else a new worktree
+  window) that fixes or closes the threads, pushes, and reports back — never touching the
+  Jira status. It never messages the pane that runs the
   Command Center dev session. Restart it with `ctrl+c` twice in its pane then
   `cc-central ensure` (or `cc-central start --force`); `cc-central status` shows what
   is running where. `central.mode: "embedded"` restores the in-TUI SDK central with a
@@ -165,11 +175,15 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
 
 - **[4] Worktrees** — one row per git worktree, joining local git state, Jira, GitLab MR,
   and tmux. `w` wraps a branch up (merge the MR, ticket → Done, close the tmux window,
-  remove the worktree + branch; refused while the MR has unresolved review threads), `x`
+  remove the worktree + branch; refused while the MR has unresolved review threads or
+  its pipeline is held at `manual` by unplayed QA Audit jobs — the `wrap-up` skill, run in
+  the worktree, verifies the four ticket items and plays those on your yes), `x`
   removes just the worktree, `X` mass-cleans worktrees whose ticket is Done and MR merged.
   The same wrap-up is available by asking — "wrap up lists/LW-1234" in the worktrees
   chat (or central, which relays it) queues the identical plan for your approval; both
-  paths share `src/data/wrapup.ts`.
+  paths share `src/data/wrapup.ts`. The worktrees specialist's `list_worktrees` adds
+  approvals and unresolved-thread counts for every open MR, and `list_my_mrs` lists all
+  your open MRs on GitLab (same data as `cc-mrs`).
 - **[6] Tickets** — tickets assigned to you that aren't Done/Closed (epics stay on
   Epics). Sorted closest-to-shipped first (In Test / code review above In Progress,
   Blocked below it, Backlog last). The WT column marks tickets that already have a local
@@ -182,9 +196,13 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   `projects.exclude` and linked git worktrees). Each project is
   tracked by a `PROJECT.md` brief — `# Title`, `**Status:** active|paused|done`,
   `**Updated:** YYYY-MM-DD`, an optional `**Epic:** LW-1234` (the Jira epic the project
-  delivers; `none` when there isn't one), then `## Goal`, `## Current state`,
-  `## Next steps` (checkbox list) and a dated `## Log`. The table shows status, epic,
-  open next steps, the project's tmux window, and its agent state. `n` runs a short
+  delivers; `none` when there isn't one), `**Plan:** draft|proposed|approved YYYY-MM-DD|revision pending`,
+  then `## Goal`, `## Current state`, `## Plan`, `## Next steps` (checkbox list),
+  `## Needs <user>` (open questions, checkbox list), `## Decisions` (dated calls the agent
+  made alone) and a dated `## Log`. The table shows status, plan state, how many things
+  wait on you (NEEDS), epic, open next steps, the project's tmux window, and its agent
+  state. Projects whose brief is `done`, or whose steps are all ticked with nothing
+  running, are hidden; `v` shows them. `n` runs a short
   interview — name, summary (becomes `## Goal`), optional context (becomes
   `## Current state`; empty skips), optional Jira epic (empty skips) — then writes
   `~/projects/<name>/PROJECT.md` from the answers and starts the project session (same
@@ -195,6 +213,24 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   (`commands.terminal: switch`) or it opens in a new OS window. An existing session is
   switched to instead. `e` links/clears the
   epic (writes the `**Epic:**` line), `o` opens the folder, `t` opens `PROJECT.md`.
+  `a` approves a proposed plan or pending revision (writes `**Plan:** approved <today>`
+  and mails the central agent, which starts the steps); `w` lists everything waiting on
+  you across all projects and jumps to the one you pick.
+
+  **How a project runs itself.** The central agent interviews you once, writes
+  `## Plan` (milestones → steps, each with deliverable, repo / ticket or
+  `ticket to create: <title>`, done-when, confidence, open questions), sets
+  `**Plan:** proposed` and reports `attention`. After your approval it keeps
+  `projects.maxParallelTasks` task tabs busy, starts the next unblocked step whenever one
+  finishes, creates the tickets the plan names without re-asking, answers workers'
+  questions from the plan, and wraps up its own tabs once their MR is merged. It stops
+  for exactly five gates: plan approval, an ambiguity the plan cannot settle (logged
+  under `## Needs <user>`), a non-reversible low-confidence call (reversible ones are
+  made and logged under `## Decisions` with a `warn` report), MR review, and a plan
+  revision (`**Plan:** revision pending`, written as `### Revision <date>` under
+  `## Plan`). If an approved project sits idle with open steps and no task tabs for
+  `projects.idleMinutes`, the projects specialist nudges the central agent, then tells
+  central if it stays stalled.
 
   `enter` expands a project: header (status, updated, session, central agent state,
   step counts), the epic with its Jira status and `done/total` child tickets, goal and
@@ -223,9 +259,10 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   **Project dashboard (`cc-dash`).** The top-left pane of every project's `central`
   window runs `cc-dash <project>`, a read-only TUI so that switching to a project's tab
   answers "what is this, what's going on, who needs me" without visiting the sub-agent
-  tabs: PROJECT.md status / goal / current state (+ epic progress), a red **NEEDS YOU**
-  block (tabs whose newest report is `attention`, agents in the `attention` hook state,
-  stuck cc-mail — oldest wait first), one row per tab (window #, ticket + short Jira
+  tabs: PROJECT.md status / plan state / goal / current state (+ epic progress), a red
+  **NEEDS YOU** block (a plan or revision awaiting approval, open `## Needs <user>`
+  questions, tabs whose newest report is `attention`, agents in the `attention` hook
+  state, stuck cc-mail — oldest wait first), one row per tab (window #, ticket + short Jira
   status, MR with CI icon / approvals / open threads, agent state, newest report and
   its age), open next steps and the latest reports. It watches `.cc/inbox.jsonl`,
   `PROJECT.md`, the agent feed and the mail dir, so a worker's `cc-report` shows up
@@ -304,7 +341,13 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   agent's chat first; mail never counts. Setup (per Bot) is in
   `skills/cc-grok/SKILL.md`: webhook URL + key in `~/.config/command-center/grok.json`,
   the `cc-grok routine` text pasted into the Bot's routine, an outbox token in the
-  Bot's Secure Storage, local execution left at Ask/Never.
+  Bot's Secure Storage, local execution left at Ask/Never. A Bot that pauses at
+  `needs-you` (its saved logins need you present in the app) and later rewrites its
+  report is delivered again. The `grok-qa` skill uses a Bot as a QA tester: it sends a
+  ticket's QA steps to run on staging (app.joltstage.com, signed in with the QA test
+  account held in the Bot's Secure Storage as `JOLT_STAGE_QA_USERNAME` /
+  `JOLT_STAGE_QA_PASSWORD`) and hands the findings back as candidate issues you
+  confirm — from a `qa-ticket` session or any agent chat.
 - **[8] Todos** — local list for things without a ticket or branch, stored in
   `dirs.config/todos.json`. `a` adds, `e` edits, `space`/`enter` toggles done,
   `x` deletes (with confirm). The top **FOCUS** section holds the todos that must
@@ -408,22 +451,38 @@ stuck. `cc-flag info` is a no-op so callers can pass severities straight through
 `cc-snapshot save [name] [--note "…"]` writes every tmux session, window and pane —
 layout, cwd, what runs there — plus the conversation id of every agent to
 `dirs.config/snapshots/<name>.json` (and `latest.json`); `cc-snapshot list` / `show`.
-`cc-restore [name] [--dry-run] [--no-agents] [--session <name>]` rebuilds whatever is
-missing: sessions (same numbering), windows (matched by name — open ones are left
-alone, so it is safe to re-run) with their layouts, then types the program back into
-each pane: `bun start` for the dashboard, `cc-dash <project>` for project dashboards,
-`<commands.agent> --resume=<id>` for every agent (the central included), the editor
-where one ran. Agent conversations are tied to panes by the hooks (`agents.jsonl`
-state events carry `pane`), with transcript-based fallbacks for agents that predate
-that; `show` marks any it could not resolve. Windows whose worktree is gone and the
-Command Center dev session's agent are skipped with a note.
+Per session it records which `~/projects` project it is; per window which project task
+tab (ticket, prompt file, worktree or not); per window the exact command the launcher
+typed into the agent pane (`@agent_cmd`, set by `mkpanes`, `start-project` and
+`project-task`); and the hub specialists' SDK agent ids (`hub-agents.json`). The
+window's agent pane counts as an agent pane even when the agent has already exited.
+
+`cc-restore [name] [--dry-run] [--no-agents] [--revive] [--no-fresh] [--no-attach]
+[--session <name>]… [--project <name>]…` rebuilds whatever is missing: sessions (same
+numbering), windows (matched by name — open ones are left alone, so it is safe to
+re-run) with their layouts and window options, then types the program back into each
+pane: `bun start` for the dashboard, `cc-dash <project>` for project dashboards,
+`<commands.agent> --resume=<id>` for every agent that was running (the central
+included), the editor where one ran, and `nvm use && <install>` in a worktree window
+whose checkout has no `node_modules`. An agent whose conversation cannot be resumed is
+relaunched with its original prompt from `@agent_cmd` (a started ticket becomes
+`/resume-ticket`); `--no-fresh` leaves it a shell. Agents that had already exited at
+save time (finished workers) come back only with `--revive`. The hub specialists'
+ids are written back before the TUI starts, so the TUI resumes their conversations
+(`Agent.resume`; a specialist on a different `model` starts fresh, and "new
+conversation" in a tab forgets its id). Finally the client is attached (outside tmux)
+or switched (inside) to the saved current session. Agent conversations are tied to
+panes by the hooks (`agents.jsonl` state events carry `pane`), with transcript-based
+fallbacks for agents that predate that; `show` marks each agent `✓` (resumable),
+`↻` (relaunchable only), `?` (neither), `(idle)` when it had exited. Windows whose
+worktree is gone and the Command Center dev session's agent are skipped with a note.
 
 ## Layout
 
 ```
 src/            TUI (OpenTUI/React), data layer, hub agents and their specs
 src/dash/       cc-dash — the per-project dashboard TUI (own entrypoint, reuses the data layer)
-src/cli/        bun entrypoints behind shell skills (todo.ts ← cc-todo, inbox.ts ← cc-inbox, snapshot.ts ← cc-snapshot/cc-restore)
+src/cli/        bun entrypoints behind shell skills (todo.ts ← cc-todo, inbox.ts ← cc-inbox, mrs.ts ← cc-mrs, snapshot.ts ← cc-snapshot/cc-restore)
 src/config.ts   config loader (defaults ← config.json ← env)
 skills/         first-party agent skills; `bun run skills sync` links them into ~/.agents/skills and ~/.claude/skills
 tmux/           command-center.tmux — top status rows (numbered projects / gap / tabs) and keys; cc-session numbers sessions
@@ -435,7 +494,8 @@ config.example.json, .env.example
 State written at runtime lives only in `dirs.config` (default `~/.config/command-center`):
 `agents.jsonl` (hook feed), `inbox.jsonl` + `cursors.json` (durable specialist inbox),
 `mail/` (inter-agent mailboxes), `todos.json`, `focus-day.json`, `hub.json` (specialist
-status snapshot read by `cc-instruct`), `central/` (the tmux central's prompt, log and `seen.json` read cursor), `snapshots/` (cc-snapshot files),
+status snapshot read by `cc-instruct`), `hub-agents.json` (specialist SDK agent ids the TUI
+resumes on start), `central/` (the tmux central's prompt, log and `seen.json` read cursor), `snapshots/` (cc-snapshot files),
 `tui.log`, `dash.log`. Nothing is written inside the repo.
 
 Personal constants baked into some skill docs (`skills/*/SKILL.md` "Known constants":

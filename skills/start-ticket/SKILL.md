@@ -97,6 +97,7 @@ If the ticket already matches, skip to Step 3.
 If it doesn't match:
 
 1. Rebuild the title and description into the correct template, **reusing the existing ticket content** — map whatever is already there into the right sections (e.g. an existing goal into Summary; existing repro / QA Testing Steps / Test Cases into QA Steps; old Technical Details into Implementation Details; any "why" from Business Context into Summary). Auto-detect platform/type from the content. Keep `## Branch Id:` set to the ticket key and leave `## Merge Request` empty.
+   While mapping QA Steps, apply `~/skills/jira-ticket/references/qa-steps-checklist.md`: make `**Preconditions:**` the first bullet (pull any feature flag named in Implementation Details or the body up into it), and flag — don't silently rewrite — any existing step QA cannot run on staging (localhost, console, API, "check the db"). Call those out in the Step 5 report so Daniel can fix or mark them `Dev-assisted`.
 2. For any **required** section that the existing ticket doesn't provide and that only Daniel can supply (acceptance criteria, repro steps, the "why"), **ask Daniel** for it per *When you need Daniel*. Use "None" / "N/A" for genuinely inapplicable fields rather than asking. Implementation Details is not one of these — leave it as a placeholder and fill it from your own Step 6 investigation. Do not invent acceptance criteria or repro steps.
 3. Apply with `editJiraIssue` (`summary` + `description`) and call out in a few lines what moved where (old title → new title; which existing text landed in which section). Do not wait for confirmation — it is his own content rearranged, and the Step 5 report shows the result.
 
@@ -114,6 +115,12 @@ Compare against the ticket's current **QA Steps** section (post Step 2, if that 
 
 - **If QA Steps is missing or thin** (just restates the AC, no edge/negative cases): draft additional bullets from the agent's edge/negative cases to merge in. Reuse its wording; don't invent beyond what it suggests.
 - **If QA Steps already covers this ground**: no change needed.
+
+Before appending, dedupe and filter each candidate bullet (per `qa-steps-checklist.md`):
+- Drop it if it restates an existing QA Step or a TestRail case already linked on the ticket — no duplicate steps.
+- Drop or rewrite it if QA cannot run it on staging through the UI (API calls, database checks, console). If the only way to check it is backend-side, write it as `Dev-assisted: Daniel verifies <what> with QA`.
+- Pin any vague action to a surface and object (which page, which item type, web vs. mobile).
+- If a case needs a flag or setup, add that to the `**Preconditions:**` bullet rather than inside the step.
 
 Never overwrite existing QA Steps — only append what's missing. Apply via `editJiraIssue` on `description` (fold it into the Step 2 edit when both happen) and call out in one line how many bullets were added. No confirmation.
 
@@ -208,7 +215,7 @@ If execution hits something the plan did not cover:
 
 ### Step 9: Hand off to /push-branch
 
-When the plan's checks pass and the working tree holds only the ticket's changes, write a two-line note (what changed, how it was verified) and run the `push-branch` skill. It calls out the commit message, pushes, opens the MR, links it on the ticket and hands on to `/babysit-branch`, which watches CI and review until the MR is ready and then notifies Daniel. Do not ask whether to push.
+When the plan's checks pass and the working tree holds only the ticket's changes, write a two-line note (what changed, how it was verified) and run the `push-branch` skill. It calls out the commit message, pushes, opens the MR, links it on the ticket and hands on to `/babysit-branch`, which watches CI and review until the MR is ready and then notifies Daniel. Do not ask whether to push. The ticket stays `In Progress` through all of that; it moves to Code Review only when Daniel says he has posted the MR for review (`babysit-branch` Step 6).
 
 Do not hand off while blocked on a question, when a check fails for a reason you cannot fix within the ticket's scope, or when the diff contains anything outside the plan that you have not called out.
 
@@ -216,7 +223,7 @@ Do not hand off while blocked on a question, when a check fails for a reason you
 
 - Atlassian MCP only for Jira; never silently switch workspaces. If SmartSense/MCP is unavailable, stop and tell the user (do not skip ahead to a plan that depends on ticket fields you could not read).
 - Use the hardcoded cloud ID and Daniel's account ID — do not call `getAccessibleAtlassianResources` or `atlassianUserInfo`.
-- The `jira-ticket` skill is the source of truth for title/description format — read it rather than hardcoding the template here.
+- The `jira-ticket` skill is the source of truth for title/description format — read it rather than hardcoding the template here. Its `references/qa-steps-checklist.md` governs every QA Steps edit: Preconditions first, stage-runnable UI steps only, no duplicates of existing steps or linked TestRail cases.
 - Never overwrite existing ticket content with placeholders; reuse what's there and ask for anything genuinely missing.
 - Call out ticket reformatting, QA Steps additions and the plan as information; never wait for confirmation on them.
 - Set the sprint via `customfield_10007` with the numeric sprint ID.

@@ -153,22 +153,23 @@ Follow the `jira-ticket` skill (preview, confirm, create, Branch Id update) with
 - **Merge Request:** the MR URL.
 - **Summary:** what is upgraded and why it matters to this repo (one paragraph), the risk rating and its reason, and whether fixes were pushed.
 - **Acceptance Criteria:** the features from the usage map keep working, each affected change is handled (named), the MR pipeline passes, and the MR is merged after QA.
-- **Test Plan:**
-  - **Prerequisites:** environment, accounts, and data needed to reach the affected screens.
+- **Test Plan** (a few lines; see `jira-ticket/references/qa-steps-checklist.md`):
+  - **Prerequisites:** environment (staging), accounts, and data needed to reach the affected screens.
+  - **Test type:** `both` when Step 4 ran automated checks and QA runs manual steps; `manual` otherwise.
   - **How to verify:** one flow per affected feature from the usage map, focused on the changes recorded in Step 2.
-  - **Automated tests:** the Step 4 commands and their results, plus any test added with the fixes.
-- **QA Steps:** concrete navigation and checks for each user-facing place that uses the library, starting with the areas hit by behaviour or breaking changes. Include edge inputs those changes touch (e.g. date formats, locales, empty values). End with one regression check on a nearby flow.
+  - **Automated tests:** the Step 4 commands by name (e.g. `npm test -w lists-web`, `npm run typecheck`) and their results, plus any test file added with the fixes. Not "existing tests should pass".
+- **QA Steps:** first bullet `**Preconditions:**` (staging, role, data, any feature flag). Then concrete navigation and checks, runnable on staging through the UI, for each user-facing place that uses the library, starting with the areas hit by behaviour or breaking changes. Each step names the page and object. Include edge inputs those changes touch (e.g. date formats, locales, empty values). No build, console, API or database steps — those are the Test Plan's automated checks, not QA's. End with one regression check on a nearby flow.
 - **Implementation Details:** repo, packages and versions, release notes reviewed (links), the usage map (`file:line` per import or wrapper), and the fixes made.
 
-**Dev-only upgrades** get a short ticket. Leave out the usage-to-screen mapping. QA Steps are: the app builds and loads, and one main page renders and works. The Test Plan lists the Step 4 commands.
+**Dev-only upgrades** get a short ticket. Leave out the usage-to-screen mapping. QA Steps are: `**Preconditions:** staging deploy of this MR`, then "open the staging app and confirm it loads", and one main page renders and works. The Test Plan lists the Step 4 commands as the automated tests.
 
 Show the full preview and wait for his yes. If he asks for edits, re-show it. Once created, move it to **IN CODE REVIEW** (see "Moving the ticket" below), assignee Daniel.
 
 ### Step 8: Test plan approval (before MR approval and IN TEST)
 
-Daniel takes the Test Plan and QA Steps to QA. Do not contact QA yourself. Tell him:
+Daniel takes the Test Plan and QA Steps to QA. Do not contact QA yourself. QA's test plan review does **not** cover the QA Steps — `test_plan_reviewed` means the plan was checked, not the steps. Tell him:
 
-> "<KEY> is in IN CODE REVIEW. Tell me when QA approves the test plan, or what to change."
+> "<KEY> is in IN CODE REVIEW. Tell me when QA approves the test plan, or what to change. If you want QA to check the QA Steps too, ask them for that separately — plan approval doesn't cover it."
 
 Report `cc-report --severity attention "!<iid> <package>: <KEY> waiting on test plan approval"` and wait.
 

@@ -21,6 +21,16 @@ const EXCLUDED = new Set(config().projects.exclude)
 
 export type ProjectStatus = "active" | "paused" | "done" | "unknown"
 
+/**
+ * Lifecycle of the brief's `## Plan` (header line `**Plan:** …`):
+ *   none      — no Plan line yet (older briefs)
+ *   draft     — the central agent is still writing it
+ *   proposed  — written, waiting for the user's approval (a gate)
+ *   approved  — the agent runs it on its own
+ *   revision  — findings changed it; the revision waits for approval (a gate)
+ */
+export type PlanState = "none" | "draft" | "proposed" | "approved" | "revision"
+
 export interface ProjectBrief {
   title: string
   status: ProjectStatus
@@ -28,6 +38,10 @@ export interface ProjectBrief {
   updated: string | null
   /** "Epic:" line — the Jira epic this project delivers, if any (e.g. LW-17444). */
   epic: string | null
+  /** "Plan:" line — see PlanState. */
+  plan: PlanState
+  /** Date on the Plan line when approved (YYYY-MM-DD), else null. */
+  planApproved: string | null
   /** First paragraph under "## Goal". */
   goal: string
   /** First paragraph under "## Current state". */
@@ -35,6 +49,10 @@ export interface ProjectBrief {
   /** Unchecked items under "## Next steps". */
   nextSteps: string[]
   doneSteps: number
+  /** Unchecked items under "## Needs Daniel" — questions only the user can answer. */
+  needsUser: string[]
+  /** Entries under "## Decisions" — calls the agent made on its own (reviewable). */
+  decisions: number
 }
 
 export interface Project {
@@ -80,7 +98,31 @@ function sectionAfter(body: string, heading: RegExp): string {
 /** `**Epic:** LW-1234` (key optional — "none"/"-" mean no epic). */
 const EPIC_LINE = /^\**Epic:?\**:?\s*([A-Za-z][A-Za-z0-9]+-\d+)\b/im
 const EPIC_ANY_LINE = /^\**Epic:?\**:?.*$/im
+/** `**Plan:** approved 2026-11-09` / `proposed` / `draft` / `revision pending` */
+const PLAN_LINE = /^\**Plan:?\**:?\s*(.+)$/im
 export const TICKET_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/
+
+export function parsePlanLine(raw: string | undefined): { plan: PlanState; approved: string | null } {
+  const v = raw?.trim().toLowerCase() ?? ""
+  if (!v) return { plan: "none", approved: null }
+  if (v.startsWith("approved")) return { plan: "approved", approved: v.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? null }
+  if (v.startsWith("revision")) return { plan: "revision", approved: v.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? null }
+  if (v.startsWith("proposed") || v.startsWith("ready")) return { plan: "proposed", approved: null }
+  if (v.startsWith("draft")) return { plan: "draft", approved: null }
+  return { plan: "none", approved: null }
+}
+
+function checklist(section: string): { open: string[]; done: number } {
+  const open: string[] = []
+  let done = 0
+  for (const line of section.split("\n")) {
+    const m = line.match(/^\s*[-*]\s+\[( |x|X)\]\s+(.+)$/)
+    if (!m) continue
+    if (m[1] === " ") open.push(m[2].trim())
+    else done++
+  }
+  return { open, done }
+}
 
 export function parseBrief(markdown: string, fallbackTitle: string): ProjectBrief {
   const title = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || fallbackTitle
@@ -94,25 +136,37 @@ export function parseBrief(markdown: string, fallbackTitle: string): ProjectBrie
         : "unknown"
   const updated = markdown.match(/^\**Updated:?\**:?\s*(\d{4}-\d{2}-\d{2})/im)?.[1] ?? null
   const epic = markdown.match(EPIC_LINE)?.[1]?.toUpperCase() ?? null
-  const steps = sectionAfter(markdown, /^##\s+next steps\s*$/i)
-  const nextSteps: string[] = []
-  let doneSteps = 0
-  for (const line of steps.split("\n")) {
-    const m = line.match(/^\s*[-*]\s+\[( |x|X)\]\s+(.+)$/)
-    if (!m) continue
-    if (m[1] === " ") nextSteps.push(m[2].trim())
-    else doneSteps++
-  }
+  const { plan, approved: planApproved } = parsePlanLine(markdown.match(PLAN_LINE)?.[1])
+  const steps = checklist(sectionAfter(markdown, /^##\s+next steps\s*$/i))
+  const needs = checklist(sectionAfter(markdown, /^##\s+needs\s+\S+\s*$/i))
+  const decisions = sectionAfter(markdown, /^##\s+decisions\s*$/i)
+    .split("\n")
+    .filter((l) => /^\s*[-*]\s+\S/.test(l)).length
   return {
     title,
     status,
     updated,
     epic,
+    plan,
+    planApproved,
     goal: firstParagraph(sectionAfter(markdown, /^##\s+goal\s*$/i)),
     currentState: firstParagraph(sectionAfter(markdown, /^##\s+current state\s*$/i)),
-    nextSteps,
-    doneSteps,
+    nextSteps: steps.open,
+    doneSteps: steps.done,
+    needsUser: needs.open,
+    decisions,
   }
+}
+
+/** Things only the user can unblock: a plan (or revision) awaiting approval, open "Needs Daniel" items. */
+export function projectNeeds(p: Project): string[] {
+  const b = p.brief
+  if (!b) return []
+  const out: string[] = []
+  if (b.plan === "proposed") out.push("plan awaiting approval")
+  if (b.plan === "revision") out.push("plan revision awaiting approval")
+  out.push(...b.needsUser)
+  return out
 }
 
 function today(): string {
@@ -136,6 +190,7 @@ export function briefTemplate(name: string, seed: string | BriefSeed = ""): stri
     "**Status:** active",
     `**Updated:** ${today()}`,
     `**Epic:** ${epic ?? "none"}`,
+    "**Plan:** draft",
     "",
     "## Goal",
     "",
@@ -145,15 +200,50 @@ export function briefTemplate(name: string, seed: string | BriefSeed = ""): stri
     "",
     context || "_Where things are right now. Keep this current — it is what the command center shows._",
     "",
+    "## Plan",
+    "",
+    "_Milestones and steps, written by the central agent and approved once before work starts. Each step: deliverable, repo / ticket (or \"ticket to create: <title>\"), done when, confidence (high / medium / low), open questions._",
+    "",
     "## Next steps",
     "",
-    "- [ ] Define the first concrete step",
+    "- [ ] Write the plan and propose it",
+    "",
+    `## Needs ${config().user.name}`,
+    "",
+    `_Open questions only ${config().user.name} can answer, as checkboxes. Tick them when answered._`,
+    "",
+    "## Decisions",
+    "",
+    "_Dated calls the central agent made on its own (reversible, low confidence) for review._",
     "",
     "## Log",
     "",
     `- ${today()}: project created`,
     "",
   ].join("\n")
+}
+
+/**
+ * Set the `**Plan:**` header line (creating the brief if needed), e.g. after
+ * the user approves from the TUI. Returns the line written.
+ */
+export function setProjectPlanState(projectPath: string, state: Exclude<PlanState, "none">): { ok: boolean; message: string } {
+  const path = briefPath(projectPath)
+  let markdown = readBriefRaw(projectPath) ?? briefTemplate(basename(projectPath))
+  const value = state === "approved" ? `approved ${today()}` : state === "revision" ? "revision pending" : state
+  const line = `**Plan:** ${value}`
+  if (PLAN_LINE.test(markdown)) {
+    markdown = markdown.replace(PLAN_LINE, line)
+  } else {
+    const anchor = markdown.match(EPIC_ANY_LINE) ?? markdown.match(/^\**Updated:?\**:?.*$/im) ?? markdown.match(/^#\s+.+$/m)
+    markdown = anchor ? markdown.replace(anchor[0], `${anchor[0]}\n${line}`) : `${line}\n${markdown}`
+  }
+  try {
+    writeFileSync(path, markdown)
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+  }
+  return { ok: true, message: `${basename(projectPath)}: plan ${value}` }
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +307,19 @@ function listProjectDirs(): string[] {
 }
 
 const STATUS_RANK: Record<ProjectStatus, number> = { active: 0, unknown: 1, paused: 2, done: 3 }
+
+/**
+ * Done, or as good as: the brief says done, or every next step is checked off
+ * and nothing is running for it (no tmux session, no agent). The projects tab
+ * hides these by default.
+ */
+export function isProjectFinished(p: Project): boolean {
+  const b = p.brief
+  if (!b) return false
+  if (b.status === "done") return true
+  const allStepsDone = b.nextSteps.length === 0 && b.doneSteps > 0
+  return allStepsDone && !p.tmuxWindow && !p.agent
+}
 
 /** Active first, then most recently modified. */
 export function sortProjects(projects: Project[]): Project[] {
@@ -479,8 +582,10 @@ export function fmtProject(p: Project): string {
   const parts = [
     p.name,
     b ? `status ${b.status}` : "no PROJECT.md",
+    b && b.plan !== "none" ? `plan ${b.plan}${b.planApproved ? ` ${b.planApproved}` : ""}` : null,
     b?.epic ? `epic ${b.epic}` : null,
     b && b.nextSteps.length ? `${b.nextSteps.length} next step${b.nextSteps.length === 1 ? "" : "s"}` : null,
+    b && projectNeeds(p).length ? `needs ${config().user.name}: ${projectNeeds(p).join("; ")}` : null,
     p.tmuxWindow ? `window ${p.tmuxWindow}` : "no window",
     p.agent ? `agent ${p.agent.state} (${p.agent.source})` : "no agent",
     p.mail ? fmtMail(p.mail) : null,

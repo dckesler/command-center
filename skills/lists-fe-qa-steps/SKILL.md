@@ -1,11 +1,14 @@
 ---
 name: lists-fe-qa-steps
-description: Generate formatted QA testing steps for frontend changes in the lists monorepo. Use when asked to write QA steps, testing steps, or QA instructions for a Jira ticket. Analyzes the current branch diff or a Jira ticket to identify which workspace(s) in the lists monorepo are affected, then produces ready-to-paste steps in the team's standard format. Handles shared library changes, multi-workspace impact, and optionally updates the Jira ticket via MCP.
+description: Generate formatted QA testing steps for frontend changes in the lists monorepo. Use when asked to write QA steps, testing steps, or QA instructions for a Jira ticket. Analyzes the current branch diff or a Jira ticket to identify which workspace(s) in the lists monorepo are affected, then produces QA steps QA can run on staging through the UI (Preconditions first), plus a separate local-dev block (workspace, npm start, Requestly rule) for developers. Handles shared library changes, multi-workspace impact, and optionally updates the Jira ticket via MCP.
 ---
 
 # Lists FE QA Steps Skill
 
-Generate structured QA testing steps for frontend changes in the `lists` monorepo. Steps follow the team's standard format and are ready to paste into a Jira ticket description.
+Generate structured QA testing steps for frontend changes in the `lists` monorepo. The output has two parts:
+
+1. **QA Steps** — what goes on the Jira ticket. Written for QA, who tests on **staging** through the UI, has no database access and does not run anything locally. Starts with Preconditions. Must pass the shared [QA steps checklist](../jira-ticket/references/qa-steps-checklist.md).
+2. **Local dev check** — the workspace, start command and Requestly rule a developer needs to verify the same flow against localhost. Shown in chat for the developer; not written to the ticket's QA Steps (see Step 6).
 
 ## Monorepo Context
 
@@ -13,14 +16,15 @@ The `lists` repo is a federated-module monorepo. Each workspace builds an indepe
 
 Workspace details (ports, Requestly rules, routes) are in [references/workspaces.md](references/workspaces.md).
 
-## Prerequisites (assumed of the tester)
+## Prerequisites
 
-The QA steps this skill produces assume the tester has the following set up. The skill does not verify them — surface this list to the user if they look new to the workflow:
+**QA** (the audience of the QA Steps) needs only a staging login for the SmartSense web app (`app.joltstage.com`) with the role the feature requires. Unless the ticket says otherwise, QA tests on staging — never assume localhost, Requestly, devtools or database access.
+
+**The developer** running the local dev check needs:
 
 - **`lists` repo cloned** locally with `npm install` run from the root.
 - **Requestly browser extension** installed and signed in, with the team's shared rule workspace synced.
 - **Atlassian access** to the SmartSense Jira workspace (cloud ID `3be885af-99d6-4514-939e-3c99560b10eb`). The Atlassian MCP must be configured for any ticket-update step.
-- **A test environment login** for the SmartSense web app (typically staging — confirm with the user if unsure which environment to QA against).
 
 ## Flags
 
@@ -60,7 +64,7 @@ For each affected workspace, look up its entry in [references/workspaces.md](ref
 
 ### Step 3: Resolve Requestly Rule(s)
 
-For each affected workspace:
+Steps 3 and 4 feed the **local dev check** block only. For each affected workspace:
 
 1. Check [references/workspaces.md](references/workspaces.md) for a known rule name.
 2. If the rule is listed as **"check file"**, read the workspace's `requestly_rules.json` or `requestly_rules.txt` and extract all `"name"` values.
@@ -86,12 +90,18 @@ npm start
 
 Check [references/workspaces.md](references/workspaces.md) for the correct start location per workspace.
 
-### Step 5: Analyze the Change and Infer Navigation
+### Step 5: Analyze the Change, Infer Navigation and Preconditions
 
 Read the changed file paths and any context (ticket summary, component names, route files) to determine:
 
 - **Which page or feature** was changed (e.g., "settings modal", "template builder", "grid view")
 - **The navigation path** to reach it from the app's home
+- **Preconditions** QA must have before step one:
+  - **Feature flags / dev flags** — grep the diff and the touched components for flag checks (e.g. `useFeatureFlag`, `isFeatureEnabled`, `flags.`, LaunchDarkly keys) and read the ticket's Implementation Details → Feature flags. Name every flag that gates the change and the value it needs.
+  - **Role / permissions** — admin vs. member, content-group vs. location mode, if the UI differs.
+  - **Data that must exist** — e.g. "a template with at least one camera item", "an audit list with a completed instance". Say how to create it in the UI if it may not exist on staging.
+  - **Hardware** — only for mobile or device-paired flows.
+- **Ambiguous actions** — any verb that can mean more than one thing in this app ("upload a photo", "open the item", "add a tag") must be pinned to one surface and object (which page, which item type, web vs. mobile). Resolve from the diff; if you cannot, ask the user — do not leave the step vague.
 
 Use these signals:
 - File name (e.g., `SettingsModal.tsx` → navigate to settings)
@@ -104,36 +114,50 @@ If the change's location in the UI is ambiguous, note this in the steps and ask 
 
 ### Step 6: Generate and Present QA Steps
 
-Format the steps exactly as follows, then present them to the user:
+Format the output exactly as follows, then present it to the user:
 
 ```
 QA Steps:
 
-* Repo: lists/<workspace>
-  * Command: `npm start`
-  * Requestly rule: <Rule Name>
-
-* <Navigation step 1>
+* Preconditions: <staging; role/account; data that must exist; feature flags and their values; hardware — or "None">
+* <Navigation step 1 — name the app and page>
 * <Navigation step 2>
 * ...
 * <Verification step>
+* Regression: <nearby flow that could break — or "None">
+
+Local dev check (for the developer, not QA):
+
+* Repo: lists/<workspace>
+  * Command: `npm start`
+  * Requestly rule: <Rule Name>
+* Run the same QA Steps against localhost
 ```
 
-**Rules for the steps block:**
-- List navigation steps in the order a tester would follow them top-to-bottom in the UI
-- End with one or more **verification steps** that confirm the changed behavior (e.g., "Verify the tooltip appears", "Confirm the field is disabled")
-- Keep each step as a single, plain-English action — no code or technical jargon
-- If multiple workspaces are affected, produce a separate `* Repo: ...` block for each
+**Rules for the QA Steps block:**
+- `Preconditions` is always the first bullet. Flags, role, data and hardware go there and nowhere else — QA runs the steps top to bottom and does not read ahead
+- Every step is runnable on **staging through the UI**. No `npm`, Requestly, localhost, devtools/console, API or GraphQL calls, SQL, or "check the db". If a result is only visible in the database, write `Dev-assisted: <who> verifies <what> with QA` instead
+- Every step names the surface and the object: which page, which item or template type, web vs. mobile. No step a tester could read two ways
+- List navigation steps in the order a tester would follow them top-to-bottom in the UI, one action per step
+- End with one or more **verification steps** that confirm the changed behavior (e.g., "Verify the tooltip appears", "Confirm the field is disabled"), then one `Regression:` bullet
+- Keep each step as a single, plain-English action — no code, component names or technical jargon; refer to UI by its visible label
+- Do not restate the acceptance criteria
+- If the ticket links TestRail cases, do not repeat their steps — cover only what they don't
+- Run the [QA steps checklist](../jira-ticket/references/qa-steps-checklist.md) before presenting
+
+**Rules for the local dev block:**
+- If multiple workspaces are affected, produce a separate `* Repo: ...` entry for each (and, if the flows differ, a separate QA Steps block per workspace)
 - For `lists-web`, the Command must read `cd <lists-repo> && npm start` (not `cd <lists-repo>/lists-web && npm start`) since it runs the relay compiler from the repo root
 
 After presenting, ask:
-> "Should I add these QA steps to the Jira ticket?"
+> "Should I add the QA steps to the Jira ticket?"
 
 If the user confirms and provides (or you already have) a ticket key, update the ticket via the Atlassian MCP:
 
 1. Call `getJiraIssue` (cloud ID `3be885af-99d6-4514-939e-3c99560b10eb`) with `responseContentFormat: "markdown"` to fetch the **current description**.
-2. Concatenate: `<existing description>\n\n<QA steps block>`. If the existing description is empty, use only the QA steps block.
-3. Call `editJiraIssue` with the full concatenated string as the new description (`contentFormat: "markdown"`).
+2. Build the ticket section: a `## QA Steps` heading followed by the **QA Steps bullets only**. The local dev block is for the developer and would be steps QA cannot run; leave it out unless the user explicitly asks for it, in which case add it under Implementation Details, never inside QA Steps.
+3. If the description already has a `## QA Steps` section, replace its bullets; otherwise append the section after `## Test Plan` if present, else at the end.
+4. Call `editJiraIssue` with the full updated description (`contentFormat: "markdown"`).
 
 Never pass only the QA steps as the description — always preserve whatever content was already there.
 
@@ -156,15 +180,18 @@ Shared libraries:
 ## Critical Rules
 
 - NEVER generate QA steps without first identifying the correct workspace
-- ALWAYS include the Requestly rule — it is required for local testing
-- ALWAYS end the steps with at least one explicit verification step
+- ALWAYS start QA Steps with a `Preconditions` bullet (flags, role, data, hardware — or "None"); never put a flag in a later step
+- ALWAYS write QA Steps that QA can run on staging through the UI — no localhost, Requestly, console, API or database steps; mark backend-only checks `Dev-assisted`
+- ALWAYS include the Requestly rule in the local dev block — it is required for local testing
+- ALWAYS end the steps with at least one explicit verification step and a `Regression:` bullet
 - When a workspace needs multiple Requestly rules, include ALL of them
 - Do NOT add technical implementation details to the step bullets — steps must be readable by non-engineers
-- If the navigation path cannot be confidently inferred, flag it and ask the user rather than guessing
+- If the navigation path or an action's surface/object cannot be confidently inferred, flag it and ask the user rather than guessing or leaving the step vague
 - NEVER update a Jira ticket without showing the steps preview and receiving explicit confirmation
 - NEVER overwrite the existing ticket description — always fetch the current description first and append the QA steps after it
 
 ## Reference Files
 
 - **Workspace ports, Requestly rules, and routes**: [references/workspaces.md](references/workspaces.md)
+- **Test Plan / QA Steps checklist (QA's guidance)**: [../jira-ticket/references/qa-steps-checklist.md](../jira-ticket/references/qa-steps-checklist.md)
 - **MCP workflow for Jira updates**: [../jira-ticket/references/mcp-workflow.md](../jira-ticket/references/mcp-workflow.md)

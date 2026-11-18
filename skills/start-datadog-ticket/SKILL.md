@@ -212,7 +212,7 @@ For KEEP, FIX UP and REWRITE, show a plan in `start-ticket` Step 7's format. Lea
 Approve this plan to start, or say what to change.
 ```
 
-If the ticket text is wrong, put a preview of only the changed sections under the plan. Include any Universal Test Plan Agent cases that QA Steps is missing.
+If the ticket text is wrong, put a preview of only the changed sections under the plan. Include any Universal Test Plan Agent cases that QA Steps is missing, filtered per `~/.agents/skills/jira-ticket/references/qa-steps-checklist.md`: `**Preconditions:**` first (the repro usually needs a specific page, object or account — name them), steps QA can run on staging through the UI, no duplicate of an existing step, and no "check Datadog" or database step for QA — the Datadog check is yours, write it as `Dev-assisted: Daniel confirms the error stops in Datadog`.
 
 Wait for an explicit approval, such as "go", "lgtm" or "do it". An answer to a question is not approval.
 

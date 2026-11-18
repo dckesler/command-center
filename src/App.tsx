@@ -59,10 +59,13 @@ import {
 } from "./agents/events.ts"
 import {
   createProject,
+  isProjectFinished,
   listProjects,
   listProjectTasks,
+  projectNeeds,
   readProjectReportEntries,
   setProjectEpic,
+  setProjectPlanState,
   type Project,
   type ProjectReport,
   type ProjectTask,
@@ -101,9 +104,9 @@ import {
 } from "./data/tmux.ts"
 import { deleteBranch, depsReviewIid, removeWorktree } from "./data/worktrees.ts"
 import { planWrapUp, runCleanup, runWrapUp } from "./data/wrapup.ts"
-import { discardMail, isMailStuck, kickMail, peekMail, readPendingMail, type PendingMail } from "./data/mail.ts"
+import { discardMail, isMailStuck, kickMail, peekMail, readPendingMail, sendMail, type PendingMail } from "./data/mail.ts"
 import { centralMode, ensureCentral, focusCentral, readCentral, type CentralSnapshot } from "./data/central.ts"
-import { statePath } from "./config.ts"
+import { config, statePath } from "./config.ts"
 import { watch, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -210,6 +213,13 @@ export function App() {
   const [pendingMail, setPendingMail] = useState<Map<string, PendingMail>>(new Map())
   const [projectsLoading, setProjectsLoading] = useState(true)
   const [selectedProject, setSelectedProject] = useState(0)
+  /** projects tab: include done / all-steps-checked projects (hidden by default) */
+  const [showFinishedProjects, setShowFinishedProjects] = useState(false)
+  const visibleProjects = useMemo(
+    () => (showFinishedProjects ? projects : projects.filter((p) => !isProjectFinished(p))),
+    [projects, showFinishedProjects],
+  )
+  const hiddenProjectCount = projects.length - visibleProjects.length
   /** new-project name prompt */
   const [projectPrompt, setProjectPrompt] = useState(false)
   /** expanded project view (enter on the projects tab) */
@@ -946,6 +956,71 @@ export function App() {
     [epicPrompt, projectDetail, loadProjectDetail],
   )
 
+  /** `a` on a project: approve a proposed plan / pending revision — flips the Plan line and tells the central agent. */
+  const approvePlan = useCallback(
+    (project: Project) => {
+      const state = project.brief?.plan ?? "none"
+      if (state !== "proposed" && state !== "revision") {
+        setMessage({ text: `${project.name}: plan is ${state} — nothing waiting for approval`, ok: false })
+        return
+      }
+      const what = state === "revision" ? "plan revision" : "plan"
+      setModal({
+        title: `Approve ${what} for ${project.name}?`,
+        body: [
+          `PROJECT.md → **Plan:** approved ${new Date().toISOString().slice(0, 10)}`,
+          "The central agent is told and starts (or resumes) the plan's steps on its own.",
+          "Read ## Plan first (t opens PROJECT.md) if you have not.",
+        ],
+        options: [{ label: "Approve" }, { label: "Cancel" }],
+        selected: 0,
+        onPick: (i) => {
+          setModal(null)
+          if (i !== 0) return
+          const result = setProjectPlanState(project.path, "approved")
+          setMessage({ text: result.message, ok: result.ok })
+          if (!result.ok) return
+          const target = project.tmuxWindow ? { window: project.tmuxWindow } : { dir: project.path }
+          void sendMail(
+            target,
+            `${what} approved from the TUI by ${config().user.name}. PROJECT.md already says **Plan:** approved — log it and start (or continue) the plan's steps now; no further confirmation is needed.`,
+            { from: "command center", severity: "info" },
+          )
+          listProjects().then((fresh) => {
+            setProjects(fresh)
+            const updated = fresh.find((p) => p.name === project.name)
+            if (updated && projectDetail?.name === project.name) loadProjectDetail(updated, true)
+          })
+        },
+      })
+    },
+    [projectDetail, loadProjectDetail],
+  )
+
+  /** `w` on the projects tab: every gate waiting on the user, across projects; pick one to jump to it. */
+  const showNeedsQueue = useCallback(() => {
+    const waiting = projects.filter((p) => projectNeeds(p).length > 0)
+    if (waiting.length === 0) {
+      setMessage({ text: "nothing is waiting on you — every project is running or done", ok: true })
+      return
+    }
+    setModal({
+      title: `Waiting on ${config().user.name} (${waiting.reduce((n, p) => n + projectNeeds(p).length, 0)})`,
+      body: waiting.flatMap((p) => projectNeeds(p).map((q) => `${p.name}: ${q}`)),
+      options: [...waiting.map((p) => ({ label: `${p.name} — ${projectNeeds(p).length} item${projectNeeds(p).length === 1 ? "" : "s"}` })), { label: "Close" }],
+      selected: 0,
+      onPick: (i) => {
+        setModal(null)
+        const project = waiting[i]
+        if (!project) return
+        setShowFinishedProjects((v) => v || isProjectFinished(project))
+        const idx = visibleProjects.findIndex((p) => p.name === project.name)
+        if (idx >= 0) setSelectedProject(idx)
+        openProjectDetail(project)
+      },
+    })
+  }, [projects, visibleProjects, openProjectDetail])
+
   const submitNewProject = useCallback(
     (answers: ProjectAnswers) => {
       setProjectPrompt(false)
@@ -1681,6 +1756,8 @@ export function App() {
         }
       }
       if (key.name === "e") setEpicPrompt(detailProject)
+      if (key.name === "a") approvePlan(detailProject)
+      if (key.name === "w") showNeedsQueue()
       if (key.name === "t") {
         const url = projectDetail.epic?.ticket?.url
         if (url) run("open", [url])
@@ -1693,13 +1770,19 @@ export function App() {
     }
 
     if (view === "projects") {
-      const project = projects[selectedProject]
+      const project = visibleProjects[selectedProject]
       if (key.name === "j" || key.name === "down") {
-        setSelectedProject((s) => Math.min(s + 1, Math.max(0, projects.length - 1)))
+        setSelectedProject((s) => Math.min(s + 1, Math.max(0, visibleProjects.length - 1)))
       }
       if (key.name === "k" || key.name === "up") {
         setSelectedProject((s) => Math.max(s - 1, 0))
       }
+      if (key.name === "v") {
+        setShowFinishedProjects((v) => !v)
+        setSelectedProject(0)
+      }
+      if (key.name === "a" && project) approvePlan(project)
+      if (key.name === "w") showNeedsQueue()
       if (key.name === "return" && project) openProjectDetail(project)
       if (key.name === "s" && project) openProject(project)
       if (key.name === "e" && project) setEpicPrompt(project)
@@ -1779,7 +1862,7 @@ export function App() {
           : ""
   const tabBar: { key: string; view: View; count: number | null; long: string; short: string }[] = [
     { key: "1", view: "central", count: null, long: "central", short: "central" },
-    { key: "2", view: "projects", count: projects.length, long: "projects", short: "proj" },
+    { key: "2", view: "projects", count: visibleProjects.length, long: "projects", short: "proj" },
     { key: "3", view: "review", count: reviewRows.length, long: "review", short: "rev" },
     { key: "4", view: "worktrees", count: workRows.length, long: "worktrees", short: "wt" },
     { key: "5", view: "qa", count: qaRows.length, long: "qa", short: "qa" },
@@ -1942,7 +2025,8 @@ export function App() {
           />
         ) : view === "projects" ? (
           <Projects
-            projects={projects}
+            projects={visibleProjects}
+            hiddenCount={hiddenProjectCount}
             selected={selectedProject}
             loading={projectsLoading}
             width={width - 2}
@@ -2068,9 +2152,9 @@ export function App() {
                         : view === "epics"
                           ? "tab views   j/k move   enter open epic   n new ticket   f finalize   c status   t open epic   ; agent   r refresh   ctrl+c quit"
                         : view === "projects" && projectDetail
-                          ? "esc back   j/k move   enter/s jump to tab   e epic   t open epic/ticket   m open MR   b PROJECT.md   o folder   ; agent   r refresh   ctrl+c quit"
+                          ? "esc back   j/k move   enter/s jump to tab   a approve plan   w waiting on me   e epic   t open epic/ticket   m open MR   b PROJECT.md   o folder   ; agent   r refresh   ctrl+c quit"
                         : view === "projects"
-                          ? "tab views   j/k move   enter details   s open or resume   e epic   n new project   o open folder   t open PROJECT.md   ; agent   r refresh   ctrl+c quit"
+                          ? `tab views   j/k move   enter details   s open or resume   a approve plan   w waiting on me   e epic   n new project   v ${showFinishedProjects ? "hide" : "show"} done   o folder   t PROJECT.md   ; agent   r refresh   ctrl+c quit`
                           : view === "review"
                             ? "tab views   j/k move   enter details   n new review   s open/jump   a approve MR   c status   x cleanup   ; agent   r refresh   o/t open   ctrl+c quit"
                           : view === "qa"

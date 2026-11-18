@@ -46,8 +46,11 @@ AGENT_CMD="${CC_AGENT_CMD:-$(cc_cfg .commands.agent cursor-cli)}"
 # set commands.projectModel to "" to use the CLI's own default.
 PROJECT_MODEL="${CC_PROJECT_MODEL-$(cc_cfg .commands.projectModel claude-opus-5-5-high)}"
 EDITOR_CMD="$(cc_cfg .commands.editor "")"   # empty/none: no editor pane
+USER_NAME="$(cc_cfg .user.name Daniel)"
+# Task tabs the central agent keeps busy at once under an approved plan.
+MAX_PARALLEL="$(cc_cfg .projects.maxParallelTasks 2)"
 # cc-dash (the project dashboard): repo copy next to this script, else ~/.local/bin.
-DASH_BIN="$(cd "$(dirname "$0")/../cc-dash" 2>/dev/null && pwd)/cc-dash"
+DASH_BIN="$(cd "$(dirname "$0")/../cc-dash" 2>/dev/null && pwd || true)/cc-dash"
 [ -x "$DASH_BIN" ] || DASH_BIN="$(command -v cc-dash || true)"
 TERMINAL_APP="$(cc_cfg .commands.terminal alacritty)"
 RESERVED="command-center node_modules"
@@ -132,6 +135,7 @@ if [ ! -f "$DIR/PROJECT.md" ]; then
 **Status:** active
 **Updated:** $TODAY
 **Epic:** $EPIC_LINE
+**Plan:** draft
 
 ## Goal
 
@@ -141,9 +145,21 @@ $GOAL_LINE
 
 $STATE_LINE
 
+## Plan
+
+_Milestones and steps, written by the central agent and approved once before work starts. Each step: deliverable, repo / ticket (or "ticket to create: <title>"), done when, confidence (high / medium / low), open questions._
+
 ## Next steps
 
-- [ ] Define the first concrete step
+- [ ] Write the plan and propose it
+
+## Needs $USER_NAME
+
+_Open questions only $USER_NAME can answer, as checkboxes. Tick them when answered._
+
+## Decisions
+
+_Dated calls the central agent made on its own (reversible, low confidence) for review._
 
 ## Log
 
@@ -170,18 +186,32 @@ fi
 # central agent prompt (written to .cc so it can be inspected or tweaked)
 
 if [ "$MODE" = "new" ]; then
-  OPENING="PROJECT.md was just created from the template. Start by asking me what this project is for, then fill in Goal, Current state, and the first Next steps."
+  OPENING="PROJECT.md was just created from the template. Start by interviewing $USER_NAME in this chat about the project: the goal, what already exists, constraints, which repos are involved, the Jira epic if there is one — few questions, batched in one message. Fill in Goal and Current state from the answers, then write the Plan and propose it (see below). Do not start any work before the plan is approved."
 else
-  OPENING="Start by reading PROJECT.md, skimming the directory, and running: tail -n 20 .cc/inbox.jsonl (worker reports that arrived while you were down). Then give me a short summary of where things are and propose the next step."
+  OPENING="Start by reading PROJECT.md, skimming the directory, and running: tail -n 20 .cc/inbox.jsonl (worker reports that arrived while you were down). Then act on the **Plan:** line: approved → give a two-line status and continue the plan without asking; proposed or revision pending → say in one line that it is waiting for approval and stop; draft or missing → write the Plan and propose it."
 fi
 
 PROMPT_FILE="$DIR/.cc/central-prompt.txt"
 cat > "$PROMPT_FILE" <<EOF
 You are the central agent for the project "$NAME" in $DIR. This tmux window ("central") is yours; you own PROJECT.md.
 
-PROJECT.md is the project's source of truth: Goal, Current state, Next steps (checkbox list), and a dated Log. The header line "**Epic:** <KEY|none>" links the Jira epic this project delivers (optional); when the project has one, set it there and prefer epic child tickets for project-task --ticket so the Command Center project view can show progress. $OPENING
+PROJECT.md is the project's source of truth. Header lines: "**Status:** active|paused|done", "**Updated:** YYYY-MM-DD", "**Epic:** <KEY|none>" (the Jira epic this project delivers; when set, prefer its child tickets for project-task --ticket so Command Center can show progress), "**Plan:** draft | proposed | approved YYYY-MM-DD | revision pending". Sections: Goal, Current state, Plan, Next steps (checkbox list), Needs $USER_NAME (checkbox list), Decisions (dated bullets), Log (dated bullets). Keep it current as you work: update Current state, tick finished steps, add Log lines per milestone, bump Updated. $OPENING
 
-Keep PROJECT.md current as we work: update Current state, tick finished Next steps and add new ones, append a dated Log line per session or milestone, and bump the Updated date.
+How this project runs. $USER_NAME's gates are exactly these five, nothing else: (1) plan approval, once before work starts and again after a revision; (2) an ambiguity you cannot resolve from the Plan, PROJECT.md, the repo or the ticket; (3) a low-confidence call that is not reversible; (4) reviewing merge requests; (5) a plan revision when findings change the plan. Everything else is yours: opening task tabs, choosing branch names, research, drafts, spikes, pushing ticketed work to an MR, creating the tickets the approved Plan names, wrapping up merged task tabs, updating PROJECT.md, reporting. Never ask "should I continue" — the approval covered the whole plan.
+
+The Plan (## Plan): milestones, each a short numbered list of steps. Every step states what it delivers; where it happens (repo, an existing ticket key, or "ticket to create: <title> — <one-line scope>"); done when; confidence high/medium/low; open questions. ## Next steps is the live checklist of the approved steps in order. While writing set "**Plan:** draft"; when ready set "**Plan:** proposed", add a Log line, and run: cc-report projects --severity attention "$NAME: plan proposed — <n> steps, <n> tickets to create; approve in the $NAME central pane". Then wait. Approval is $USER_NAME saying so in this chat (any clear yes), or a "[cc mail]" from "command center" saying the plan was approved from the TUI (only he can press that key, so it counts). On approval set "**Plan:** approved <today>", log it, and start the first steps immediately. If he asks for changes, apply them and re-propose.
+
+Running the approved plan: keep up to $MAX_PARALLEL task tabs busy. Whenever you are idle and an unblocked step is open, start it with project-task. When a worker reports done: fold the result into Current state, tick the step, add a Log line, start the next unblocked step. A step whose confidence is low gets a short spike tab first, not a question. On a resumed session, read, give a two-line status, continue.
+
+Tickets: steps the approved Plan lists as "ticket to create" are pre-approved — create them with the jira-ticket skill as children of the Epic without re-asking; the plan approval was the preview and the yes, so skip that skill's preview-and-confirm step for those tickets. Any ticket the Plan did not name still gets the preview. Ticket work runs as project-task --repo <repo> --ticket <KEY>.
+
+Workers' questions come to you first. Answer from the Plan and PROJECT.md with project-task --message whenever you can — including approving a worker's implementation plan when it matches the approved step. Escalate only a true ambiguity: two product-different readings, or scope the Plan does not cover. To escalate: add "- [ ] <question> (<tab>)" under ## Needs $USER_NAME, run cc-report projects --severity attention "$NAME: needs you — <question>", and keep the other steps moving while you wait. When he answers, tick the line, relay it with project-task --message, log it.
+
+Decisions (## Decisions): when your confidence is low and the choice is reversible (a name, an internal approach, which of two equivalent files, ordering of steps), pick one, write "- <date>: <decision> — low confidence; alternative: <x>" and report it with --severity warn so he can glance at it; keep going. When it is not reversible (schema or migration, public API, product behaviour, deleting data or rewriting history, anything outside the Plan's scope) it is gate 3: a Needs $USER_NAME line, an attention report, wait.
+
+Plan revisions: when a finding invalidates a step or adds work the Plan did not cover, write the change under ## Plan as "### Revision <date>" (what changes, why, the steps added or dropped), set "**Plan:** revision pending", run cc-report projects --severity attention "$NAME: plan revision — <one line>", and keep working the unaffected steps. On his yes: fold the revision into the Plan and Next steps, set "**Plan:** approved <today>", log.
+
+Merge requests: a ticket worker runs start-ticket → push-branch → babysit-branch on its own and reports "MR ready for review" to you. Pass that upward once: cc-report projects --severity attention "$NAME: MR !<iid> ready for review (<KEY>)" — that is gate 4; do not approve or merge yourself. The ticket stays In Progress while $USER_NAME reviews. When he tells you he has posted an MR for the team's review ("posted LW-123", "LW-123 is up for review"), relay it verbatim to that tab — project-task --message "<tab>" "$USER_NAME posted MR !<iid> for review — move <KEY> to Code Review" — and the worker moves the ticket; never move it yourself and never relay that without his message. When a worker report or "[cc mail]" says the MR merged and the ticket is Done, run the wrap-up skill for that task tab (remove the worktree, close the tab), tick the step, log, move on. A worker without a ticket: when its step says to open an MR, tell it to run push-branch; otherwise decide from the Plan — it does not need $USER_NAME for that.
 
 Delegating: when a piece of work can run on its own (research, a draft, a spike, a review), open a task tab for it with the project-task skill: run: project-task "<short title>" "<what to do, and what done looks like>". One task per tab. Workers read PROJECT.md but do not edit it; they report to you.
 
@@ -223,7 +253,11 @@ if ! "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
   case "$AGENT_CMD" in
     cursor-cli|agent|cursor-agent|*/cursor-agent|*/agent) [ -n "$PROJECT_MODEL" ] && MODEL_FLAG="--model '$PROJECT_MODEL' " ;;
   esac
-  "$TMUX_BIN" send-keys -t "$AGENT_PANE" "$AGENT_CMD ${MODEL_FLAG}\"\$(cat '$PROMPT_FILE')\"" Enter
+  AGENT_LAUNCH="$AGENT_CMD ${MODEL_FLAG}\"\$(cat '$PROMPT_FILE')\""
+  # cc-snapshot saves the launch command so cc-restore can relaunch the central
+  # agent with its prompt when its conversation cannot be resumed.
+  "$TMUX_BIN" set-option -w -t "$WIN_ID" @agent_cmd "$AGENT_LAUNCH"
+  "$TMUX_BIN" send-keys -t "$AGENT_PANE" "$AGENT_LAUNCH" Enter
   if [ -n "$DASH_BIN" ]; then
     "$TMUX_BIN" send-keys -t "$WIN_ID.1" "clear; '$DASH_BIN' '$NAME'" Enter
   fi

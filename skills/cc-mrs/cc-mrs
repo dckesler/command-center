@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# cc-mrs — the user's open MRs with approvals, open threads and a babysit-branch pass (see src/cli/mrs.ts).
+# Used by the tmux central agent: list (default), threads <mr>, pass [--dry-run] [<mr> ...].
+#
+#   cc-mrs [list] [--since N | --all] [--waiting] [--needs] [--json] | threads <mr> | pass [--dry-run] [<mr> ...]
+set -euo pipefail
+
+# Resolve the command-center checkout from this script's real location
+# (~/.local/bin/cc-mrs is a symlink into the repo).
+SELF="$0"
+while [ -L "$SELF" ]; do
+  DIR="$(cd "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$DIR/$SELF" ;; esac
+done
+REPO="$(cd "$(dirname "$SELF")/../.." && pwd)"
+
+BUN="$(command -v bun || true)"
+for c in "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+  [ -n "$BUN" ] && break
+  [ -x "$c" ] && BUN="$c"
+done
+if [ -z "$BUN" ]; then
+  echo "cc-mrs: bun not found" >&2
+  exit 1
+fi
+
+exec "$BUN" run "$REPO/src/cli/mrs.ts" "$@"

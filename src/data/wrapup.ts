@@ -42,6 +42,9 @@ export async function planWrapUp(row: Row): Promise<WrapUpPlan> {
       blocked = `!${row.mr.iid} has ${unresolved} unresolved comment thread${unresolved === 1 ? "" : "s"} — resolve them in GitLab first`
     } else if (unresolved < 0) {
       blocked = `!${row.mr.iid} has unresolved comment threads (count unavailable) — resolve them in GitLab first`
+    } else if (row.mr.pipelineStatus === "manual") {
+      // A blocking manual job (the QA Audit attestation stage) holds the pipeline; GitLab will not merge.
+      blocked = `!${row.mr.iid} pipeline is held at manual (QA Audit jobs not played) — run /wrap-up in the worktree, which checks the ticket and plays them on your yes`
     }
     steps.push(`merge !${row.mr.iid}`)
     if (row.mr.detailedMergeStatus !== "mergeable") {

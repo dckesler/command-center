@@ -1,4 +1,4 @@
-import type { Project } from "../data/projects.ts"
+import { projectNeeds, type Project } from "../data/projects.ts"
 import { isMailStuck, mailWaitMinutes, type PendingMail } from "../data/mail.ts"
 
 const C = {
@@ -22,10 +22,12 @@ function fit(s: string, w: number): string {
 }
 
 const COLS = {
-  name: 30,
-  status: 10,
-  epic: 12,
-  next: 7,
+  name: 26,
+  status: 9,
+  plan: 10,
+  needs: 7,
+  epic: 11,
+  next: 6,
   updated: 13,
   tmux: 8,
   agent: 11,
@@ -50,6 +52,15 @@ const STATUS_COLORS: Record<string, string> = {
   unknown: "#9ca3af",
 }
 
+/** `**Plan:**` state → short label + colour. Gates (waiting on the user) are red. */
+const PLAN_VIEW: Record<string, { label: string; color: string }> = {
+  none: { label: "-", color: "#6b7280" },
+  draft: { label: "draft", color: "#9ca3af" },
+  proposed: { label: "approve?", color: "#f87171" },
+  approved: { label: "approved", color: "#4ade80" },
+  revision: { label: "revision?", color: "#f87171" },
+}
+
 const AGENT_COLORS: Record<string, string> = {
   working: "#facc15",
   attention: "#f87171",
@@ -62,12 +73,15 @@ const PREVIEW_LINES = 3
 
 export function Projects({
   projects,
+  hiddenCount = 0,
   selected,
   loading,
   width,
   height,
 }: {
   projects: Project[]
+  /** done / all-steps-checked projects left out of `projects` (v shows them) */
+  hiddenCount?: number
   selected: number
   loading: boolean
   width: number
@@ -87,16 +101,21 @@ export function Projects({
   const preview: string[] = []
   if (current?.brief) {
     const previewWidth = Math.max(20, width - 4)
-    const text = [current.brief.goal && `goal: ${current.brief.goal}`, current.brief.currentState && `now: ${current.brief.currentState}`]
-      .filter((x): x is string => !!x)
+    const needs = projectNeeds(current)
+    const text = [
+      needs.length && `needs you: ${needs.join("; ")}`,
+      current.brief.goal && `goal: ${current.brief.goal}`,
+      current.brief.currentState && `now: ${current.brief.currentState}`,
+    ]
+      .filter((x): x is string => typeof x === "string" && !!x)
       .join("  ·  ")
     for (let i = 0; i < text.length && preview.length < PREVIEW_LINES; i += previewWidth) {
       preview.push(text.slice(i, i + previewWidth))
     }
   }
 
-  // Header row + optional preview block (blank line + lines).
-  const maxVisible = Math.max(1, height - 1 - (preview.length ? preview.length + 1 : 0))
+  // Header row + optional hidden-count line + optional preview block (blank line + lines).
+  const maxVisible = Math.max(1, height - 1 - (hiddenCount > 0 ? 1 : 0) - (preview.length ? preview.length + 1 : 0))
   let start = 0
   if (projects.length > maxVisible) {
     start = Math.min(Math.max(0, selected - Math.floor(maxVisible / 2)), projects.length - maxVisible)
@@ -109,6 +128,8 @@ export function Projects({
         <span fg={C.header}>
           {fit("PROJECT", COLS.name)}
           {fit("STATUS", COLS.status)}
+          {fit("PLAN", COLS.plan)}
+          {fit("NEEDS", COLS.needs)}
           {fit("EPIC", COLS.epic)}
           {fit("NEXT", COLS.next)}
           {fit("UPDATED", COLS.updated)}
@@ -122,11 +143,15 @@ export function Projects({
         const isSelected = idx === selected
         const brief = project.brief
         const status = brief?.status ?? "unknown"
+        const plan = PLAN_VIEW[brief?.plan ?? "none"] ?? PLAN_VIEW.none
+        const needs = projectNeeds(project).length
         return (
           <box key={project.name} backgroundColor={isSelected ? C.selectedBg : undefined}>
             <text wrapMode="none">
               <span fg={isSelected ? "#ffffff" : C.key}>{isSelected ? "▸" : " "}{fit(project.name, COLS.name - 1)}</span>
               <span fg={brief ? STATUS_COLORS[status] : C.red}>{fit(brief ? status : "no brief", COLS.status)}</span>
+              <span fg={plan.color}>{fit(brief ? plan.label : "-", COLS.plan)}</span>
+              <span fg={needs ? C.red : C.dim}>{fit(needs ? String(needs) : "-", COLS.needs)}</span>
               <span fg={brief?.epic ? C.key : C.dim}>{fit(brief?.epic ?? "-", COLS.epic)}</span>
               <span fg={C.value}>{fit(brief ? String(brief.nextSteps.length) : "-", COLS.next)}</span>
               <span fg={C.dim}>{fit(relativeDays(project.modified), COLS.updated)}</span>
@@ -141,7 +166,10 @@ export function Projects({
         )
       })}
       {projects.length === 0 && !loading && (
-        <text fg={C.dim}>no projects — press n to create one</text>
+        <text fg={C.dim}>{hiddenCount > 0 ? "no active projects — press n to create one" : "no projects — press n to create one"}</text>
+      )}
+      {hiddenCount > 0 && (
+        <text fg={C.dim}>{`${hiddenCount} done hidden — v to show`}</text>
       )}
       {preview.length > 0 && (
         <box flexDirection="column" marginTop={1}>

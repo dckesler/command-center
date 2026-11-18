@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# cc-restore — rebuild the Command Center from a cc-snapshot: missing tmux sessions/windows with their layouts, agents resumed in place (see src/cli/snapshot.ts).
+# cc-restore — rebuild the Command Center from a cc-snapshot: missing tmux sessions/windows with their layouts, agents resumed in place
+# (or relaunched with their original prompt), hub specialists handed back to the TUI, client attached (see src/cli/snapshot.ts).
 # Existing windows are left alone, so it is safe to re-run.
 #
-#   cc-restore [name] [--dry-run] [--no-agents] [--session <name>]…
+#   cc-restore [name] [--dry-run] [--no-agents] [--revive] [--no-fresh] [--no-attach] [--session <name>]… [--project <name>]…
 set -euo pipefail
 
 # Resolve the command-center checkout from this script's real location

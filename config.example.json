@@ -42,8 +42,15 @@
   },
 
   "projects": {
-    "$comment": "Directory names under dirs.projects that are not projects.",
-    "exclude": ["command-center", "node_modules"]
+    "$comment": "exclude = directory names under dirs.projects that are not projects. maxParallelTasks = task tabs a project's central agent keeps busy under an approved plan. idleMinutes = how long an approved project may sit with open steps, no task tabs and an idle central agent before the projects specialist nudges it (0 = off).",
+    "exclude": ["command-center", "node_modules"],
+    "maxParallelTasks": 2,
+    "idleMinutes": 20
+  },
+
+  "mrs": {
+    "$comment": "sinceDays = cc-mrs and the worktrees specialist's list_my_mrs hide your open MRs with no GitLab activity for this many days (0 = show all; --all overrides).",
+    "sinceDays": 60
   },
 
   "mail": {

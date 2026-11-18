@@ -50,8 +50,8 @@ Ask only for missing required fields. Do NOT ask for platform, assignee, parent 
 - Repository (default: detect from current workspace)
 - Data model or schema changes
 - Acceptance criteria
-- Test plan — written at ticket creation, before coding: what prerequisites are needed to test (hardware, software, data), the flow that proves each AC *can* be tested, and what automated tests will be written. Goal is to confirm the work is provably testable before starting.
-- QA steps — the steps a QA engineer runs once the MR is ready to verify (same thing as "QA Testing Steps"). Infer from the summary and ACs when possible. Do not restate the ACs.
+- Test plan — written at ticket creation, before coding: what prerequisites are needed to test (hardware, software, data), the test type (manual / automated / both), the flow that proves each AC *can* be tested, and which automated tests will be written or updated (named). Goal is to confirm the work is provably testable before starting. Keep it to a few lines.
+- QA steps — the steps a QA engineer runs on staging, through the UI, once the MR is ready to verify (same thing as "QA Testing Steps"). Infer from the summary and ACs when possible. Do not restate the ACs. Start with Preconditions (flags, hardware, role, data). No localhost, console, API or database steps. Check both sections against [references/qa-steps-checklist.md](references/qa-steps-checklist.md) before the preview.
 
 **Optional (ask only if needed):**
 
@@ -81,6 +81,8 @@ Use the appropriate template from [references/templates.md](references/templates
 
 ALWAYS present a preview showing: Workspace, Project, Issue Type, Title, Description (including Test Plan and QA Steps), Assignee, Sprint Target, Priority, Parent (if any). Ask: "Should I proceed with creating this ticket?" and WAIT for explicit approval.
 
+**Exception — tickets named in an approved project plan.** When you are a project's central agent (started by `start-project`) and the ticket is one the project's `PROJECT.md` lists under `## Plan` as `ticket to create: <title> — <scope>` with `**Plan:** approved` in the header, the plan approval was the preview and the yes. Print the preview as information, create without waiting, set `parent` to the project's `**Epic:**` key, and log the created key in PROJECT.md. Tickets the plan does not name still wait for approval.
+
 ### Step 4: Detect Available Tool
 
 Before creating, resolve the MCP workspace:
@@ -105,12 +107,14 @@ If the chosen tool fails:
 
 ## Critical Rules
 
-- NEVER create a ticket without showing a preview and receiving confirmation
+- NEVER create a ticket without showing a preview and receiving confirmation — except a ticket an approved project plan names (Step 3 exception), where the plan approval is the confirmation
 - ALWAYS format the title as `[PLATFORM] (type) - description`
 - ALWAYS default assignee to current user
 - ALWAYS target the SmartSense Atlassian workspace only
 - NEVER silently target another Atlassian workspace
 - For bugs, put environment / observed / expected in Summary and use "QA Steps" for post-MR QA steps (never "Repro Steps", "QA Testing Steps", or "Test Cases")
+- QA Steps always start with `**Preconditions:**` and must be runnable by QA on staging through the UI — no db, API, console or localhost steps (see [references/qa-steps-checklist.md](references/qa-steps-checklist.md))
+- Test Plan names the test type and the specific tests; never "existing tests should pass" without naming them
 - ALWAYS update "Branch Id:" to the created Jira issue key immediately after creation
 - Use "None" or "N/A" for inapplicable fields
 - Keep conversation focused -- ask only essential questions
@@ -118,5 +122,6 @@ If the chosen tool fails:
 ## Reference Files
 
 - **Ticket description templates**: [references/templates.md](references/templates.md)
+- **Test Plan / QA Steps checklist (QA's guidance)**: [references/qa-steps-checklist.md](references/qa-steps-checklist.md)
 - **MCP tool workflow**: [references/mcp-workflow.md](references/mcp-workflow.md)
 - **Atlassian CLI (acli) workflow**: [references/acli-workflow.md](references/acli-workflow.md)

@@ -29,7 +29,7 @@ export interface NeedsYou {
   task: ProjectTask | null
   /** display name when there is no task row (closed tab) */
   label?: string
-  reason: "report" | "agent" | "mail"
+  reason: "report" | "agent" | "mail" | "plan" | "question"
   text: string
   /** ISO of when the wait started */
   since: string
@@ -222,6 +222,13 @@ export function computeNeedsYou(project: Project, tasks: ProjectTask[] | null, r
       })
     }
   }
+  // The brief's own gates: a plan (or revision) waiting for approval, and open
+  // "Needs <user>" questions. These are what the central agent is blocked on.
+  const brief = project.brief
+  const briefSince = project.modified
+  if (brief?.plan === "proposed") out.push({ task: null, reason: "plan", text: "plan proposed — approve in the central pane or with `a` on the projects tab", since: briefSince })
+  if (brief?.plan === "revision") out.push({ task: null, reason: "plan", text: "plan revision pending — approve in the central pane or with `a` on the projects tab", since: briefSince })
+  for (const q of brief?.needsUser ?? []) out.push({ task: null, reason: "question", text: q, since: briefSince })
   const central = tasks?.find((t) => t.role === "central") ?? null
   consider(null, central?.agent ?? project.agent, central?.mail ?? project.mail, central?.lastReport ?? null)
   for (const t of tasks ?? []) if (t.role !== "central") consider(t, t.agent, t.mail, t.lastReport)

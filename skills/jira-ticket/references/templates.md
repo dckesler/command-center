@@ -2,9 +2,9 @@
 
 Human-facing sections come first (Branch Id through QA Steps). Implementation Details is last and is written for agents.
 
-**Test Plan** is required at ticket creation. It must show the work is testable: prerequisites, the flow that proves each AC, and what automated tests will be written.
+**Test Plan** is required at ticket creation. It must show the work is testable: prerequisites, test type (manual / automated / both), the flow that proves each AC, and which automated tests will be written or updated. Keep it to a few lines.
 
-**QA Steps** are the steps a QA engineer runs once the MR is ready to verify. This is the same section as "QA Testing Steps" / "Test Cases" — always use the heading `## QA Steps`. Do not add a second QA section.
+**QA Steps** are the steps a QA engineer runs on staging once the MR is ready to verify. This is the same section as "QA Testing Steps" / "Test Cases" — always use the heading `## QA Steps`. Do not add a second QA section. The first item is always `**Preconditions:**`. Both sections must pass [qa-steps-checklist.md](qa-steps-checklist.md).
 
 ## Standard Ticket (Feature / Refactor / Chore / Maintenance)
 
@@ -28,14 +28,18 @@ Human-facing sections come first (Branch Id through QA Steps). Implementation De
 
 **Prerequisites:** {What is needed before testing can begin — hardware (e.g. specific device, sensor, peripheral), other software, environment state, test data, or accounts. "None" if not applicable.}
 
-**How to verify:** {The testing flow that proves each acceptance criterion can be tested — navigate to X, perform Y, confirm Z. One flow per AC if they differ. Written at ticket creation, before coding.}
+**Test type:** {manual / automated / both}
 
-**Automated tests:** {Unit or integration tests to be written — or "None"}
+**How to verify:** {The testing flow that proves each acceptance criterion can be tested — navigate to X, perform Y, confirm Z. One flow per AC if they differ. Written at ticket creation, before coding. A few lines, not the ticket's history.}
+
+**Automated tests:** {The test files or suites to be written or updated, named — or "None". Never "existing tests should pass" without naming them or "the CI pipeline".}
 
 ## QA Steps
 
-{Steps a QA engineer runs once the MR is ready. Concrete navigation and checks, including at least one regression check when a nearby flow could break. Not a restatement of the ACs.}
+{Steps a QA engineer runs on staging, through the UI, once the MR is ready. Concrete navigation and checks, including at least one regression check when a nearby flow could break. Not a restatement of the ACs. Each step names the surface (web / mobile) and the object. No localhost, console, API or database steps — if a check needs backend access, write "Dev-assisted: <who> verifies <what> with QA".}
 
+- **Preconditions:** {Dev flags, feature flags, hardware, account/role, test data that must exist — or "None". Always the first item; never put a flag in a later step.}
+- {TestRail: C<id>, C<id> — only the cases that must run for this ticket, or omit the line. Do not repeat their steps below.}
 - {Navigate to ...}
 - {Perform the action that exercises the change}
 - {Confirm the expected result}
@@ -95,13 +99,16 @@ Same section order as standard. Put environment, observed result, and expected r
 
 **Prerequisites:** {What is needed before testing can begin — hardware, software, environment state, test data, or accounts. "None" if not applicable.}
 
-**How to verify:** {The testing flow that confirms the fix can be verified — perform the repro path, confirm the error is gone, check adjacent flows for regressions. Written at ticket creation.}
+**Test type:** {manual / automated / both}
 
-**Automated tests:** {Unit or integration tests to be written to prevent regression — or "None"}
+**How to verify:** {The testing flow that confirms the fix can be verified — perform the repro path, confirm the error is gone, check adjacent flows for regressions. Written at ticket creation. A few lines.}
+
+**Automated tests:** {The regression test files or suites to be written or updated, named — or "None"}
 
 ## QA Steps
 
-- {Perform the original repro path}
+- **Preconditions:** {Dev flags, feature flags, hardware, account/role, test data needed to reproduce — or "None". Always first.}
+- {Perform the original repro path on staging, naming the app, page and object}
 - {Confirm the expected result — the bug no longer occurs}
 - {Check adjacent flows for regressions}
 
@@ -140,6 +147,8 @@ Same section order as standard. Put environment, observed result, and expected r
 - Keep "Branch Id:" empty in the preview template, then auto-update it to the Jira issue key immediately after creation
 - Do not create a Business Context or Technical Details section. Fold any existing "why" into Summary; map old Technical Details into Implementation Details
 - Always use `## QA Steps` (never "Test Cases", "QA Testing Steps", or "Repro Steps")
+- `## QA Steps` always starts with a `**Preconditions:**` item. Any feature flag named under Implementation Details is repeated there — QA does not read Implementation Details
+- Test Plan and QA Steps must pass [qa-steps-checklist.md](qa-steps-checklist.md) before the preview is shown
 
 ## Platform Detection
 
@@ -186,19 +195,23 @@ Implement a new GraphQL mutation and type resolvers to allow content group admin
 
 ## Test Plan
 
-**Prerequisites:** A content group with an audit template linked to a follow-up action template, plus an admin and a non-admin account.
+**Prerequisites:** A staging content group with an audit template linked to a follow-up action template, plus an admin and a non-admin account.
 
-**How to verify:** Create a digest via the mutation and confirm it appears on the template; retry a duplicate and confirm rejection; call the same mutation as a non-admin and confirm a permission error.
+**Test type:** both
 
-**Automated tests:** Unit/integration tests for createFollowUpActionReportEmailDigest (happy path, duplicate, permission) and for reportEmailDigests on ListTemplate.
+**How to verify:** Create a digest and confirm it appears on the template; retry a duplicate and confirm rejection; try as a non-admin and confirm it is refused.
+
+**Automated tests:** `test/mutations/createFollowUpActionReportEmailDigest.test.ts` (happy path, duplicate, permission) and `test/types/ListTemplate.reportEmailDigests.test.ts`.
 
 ## QA Steps
 
-- Log in as a content group admin and open an audit template linked to a follow-up action template
-- Configure a report email digest for a FUA report type with a frequency, save, and confirm it appears with the correct frequency
-- Attempt a duplicate digest for the same report type and confirm it is rejected
-- Log in as a non-admin and confirm digest configuration is unavailable / returns a permission error
-- Confirm unrelated audit template settings still load and save
+- **Preconditions:** Staging; content group admin account and a non-admin account in the same content group; an audit template that is linked to a follow-up action template. No feature flag.
+- On the web app, log in as the content group admin and go to Audits & Inspections → Templates → open the linked audit template → Settings
+- In the Report Email Digests section, add a digest for the "FUA Site" report type with a weekly frequency and save
+- Confirm the digest appears in the list with report type "FUA Site" and frequency "Weekly"
+- Add a second digest for "FUA Site" and confirm the save is rejected with a duplicate error
+- Log out, log in as the non-admin, open the same template's Settings and confirm the Report Email Digests section is not editable
+- Regression: change and save an unrelated setting on the same template and confirm it persists after reload
 
 ## Implementation Details
 

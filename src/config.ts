@@ -75,6 +75,14 @@ export interface Config {
   projects: {
     /** directory names under dirs.projects that are not projects */
     exclude: string[]
+    /** task tabs a project's central agent keeps running at once under an approved plan */
+    maxParallelTasks: number
+    /** minutes an active project with an approved plan and open steps may sit with no task tabs and an idle central agent before the projects specialist nudges it (0 = off) */
+    idleMinutes: number
+  }
+  mrs: {
+    /** cc-mrs / list_my_mrs hide the user's open MRs with no GitLab activity for this many days (0 = show all) */
+    sinceDays: number
   }
   mail: {
     /** seconds the recipient's tmux *window* must have been quiet before cc-mail types into an on-screen idle agent's pane */
@@ -134,7 +142,8 @@ export const DEFAULTS: Config = {
   jira: { baseUrl: "", cloudId: "", sprintField: "customfield_10007" },
   model: "composer-2.5",
   central: { mode: "tmux", dir: join(DEFAULT_CONFIG_DIR, "central"), model: "" },
-  projects: { exclude: ["command-center", "node_modules"] },
+  projects: { exclude: ["command-center", "node_modules"], maxParallelTasks: 2, idleMinutes: 20 },
+  mrs: { sinceDays: 60 },
   mail: { quietSeconds: 30, retrySeconds: 20, retryMinutes: 180, staleMinutes: 10 },
   email: { days: 7, filters: DEFAULT_EMAIL_FILTERS },
   todos: { focusCadenceMinutes: 30, focusMax: 3, focusHours: "09:00-17:30" },
@@ -203,7 +212,14 @@ export function config(): Config {
       dir: expandHome(env.CC_CENTRAL_DIR || file.central?.dir || join(configDir(), "central")),
       model: env.CC_CENTRAL_MODEL ?? file.central?.model ?? DEFAULTS.central.model,
     },
-    projects: { exclude: file.projects?.exclude ?? DEFAULTS.projects.exclude },
+    projects: {
+      exclude: file.projects?.exclude ?? DEFAULTS.projects.exclude,
+      maxParallelTasks: Number(file.projects?.maxParallelTasks) || DEFAULTS.projects.maxParallelTasks,
+      idleMinutes: file.projects?.idleMinutes === 0 ? 0 : Number(file.projects?.idleMinutes) || DEFAULTS.projects.idleMinutes,
+    },
+    mrs: {
+      sinceDays: file.mrs?.sinceDays === 0 ? 0 : Number(file.mrs?.sinceDays) || DEFAULTS.mrs.sinceDays,
+    },
     mail: {
       quietSeconds: Number(file.mail?.quietSeconds) || DEFAULTS.mail.quietSeconds,
       retrySeconds: Number(file.mail?.retrySeconds) || DEFAULTS.mail.retrySeconds,

@@ -123,6 +123,14 @@ export function ProjectDetail({
   header.push(
     <text key="status">
       <span fg={brief ? STATUS_COLORS[status] : C.red}>{brief ? status : "no PROJECT.md"}</span>
+      {brief && brief.plan !== "none" && (
+        <>
+          <span fg={C.dim}>{"   plan "}</span>
+          <span fg={brief.plan === "approved" ? C.green : brief.plan === "draft" ? C.gray : C.red}>
+            {brief.plan === "approved" ? `approved${brief.planApproved ? ` ${brief.planApproved}` : ""}` : brief.plan === "revision" ? "revision pending (a to approve)" : brief.plan === "proposed" ? "proposed (a to approve)" : brief.plan}
+          </span>
+        </>
+      )}
       <span fg={C.dim}>{brief?.updated ? `   updated ${brief.updated}` : ""}</span>
       <span fg={C.dim}>{"   session "}</span>
       <span fg={project.tmuxWindow ? C.green : C.dim}>{project.tmuxWindow ?? "not running"}</span>

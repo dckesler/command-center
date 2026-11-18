@@ -8,9 +8,9 @@ Use this format when drafting a test case from an Acceptance Criterion. Show the
 |---|---|---|
 | Title | Derived from the AC — concise, action-oriented, sentence case | required |
 | Type | `Functional` | unless the AC clearly implies UI / Performance / Smoke / Regression — then use that |
-| Priority | `Medium` | bump to `High` if the AC mentions security, billing, or data integrity |
-| Preconditions | Inferred from AC context (e.g., "User is logged in", "Audit list exists with at least one item") | empty if none apply |
-| Steps | Numbered, plain-English actions a tester can follow without reading code | required |
+| Priority | `Medium` | `High` / `Critical` only when the case must run on every release. **Mobile** High/Critical cases are pulled into the release Smoke Test — propose one only with a one-line reason, and ask the user to confirm before drafting it that way. Security, billing or data-integrity ACs are candidates, not automatic bumps |
+| Preconditions | Everything the tester needs before step 1: environment (staging unless the AC says otherwise), role/account, data that must exist, feature flags and their values, hardware (device, sensor) | `None` if nothing applies — never leave a flag or setup requirement for a later step |
+| Steps | Numbered, plain-English actions a tester can follow without reading code, runnable on staging through the UI | required |
 | Expected Result (per step) | What should be observable after that step | required for the final step at minimum |
 
 ## Title Rules
@@ -30,7 +30,11 @@ Examples:
 
 - One action per step. Do not stack ("click X and then Y" → split it).
 - Reference UI by visible label, not by component name (`the "Archive" button`, not `<ArchiveButton>`).
+- Every step names the surface and object (web vs. mobile, which page, which item or template type). No step a tester could read two ways — "upload a photo" must say where and on what.
+- Runnable on staging through the UI. No localhost, console, API or database steps; QA has no database access. If the only proof is backend-side, the Expected Result reads `Dev-assisted: <who> confirms <what>`.
+- Preconditions hold flags, role, data and hardware. Never put them in the first or last step.
 - Final step's Expected Result must directly verify the AC.
+- Full rules: `~/.agents/skills/jira-ticket/references/qa-steps-checklist.md`.
 - If the AC implies negative paths (validation, error states), include them as separate steps or a separate test case — flag this to the user before drafting.
 
 ## Draft Format Shown to the User

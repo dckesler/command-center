@@ -1,13 +1,13 @@
 ---
 name: babysit-branch
-description: Get a GitLab MR merge-ready — resolve conflicts with the target branch, poll the CI/CD pipeline until it reaches a terminal state (updating from the target branch when a failure looks unrelated), then collect unresolved MR review comments (any author, including CodeAnt and humans), triage them autonomously — fix the ones worth fixing in the working tree, close the rest with a reason — push the fixes with /push-branch without asking, and loop back to CI polling after every push until CI is green on the current HEAD with no open threads — then notify Daniel that the MR is ready for his review. Asks only when a decision genuinely needs him. Can be invoked standalone on any branch that already has an open MR, or handed off from /push-branch. Use when the user asks to watch CI, babysit a branch, or wait for review comments, and ALWAYS after pushing new commits to a branch that has an open MR.
+description: Get a GitLab MR merge-ready — resolve conflicts with the target branch, poll the CI/CD pipeline until it reaches a terminal state (updating from the target branch when a failure looks unrelated), then collect unresolved MR review comments (any author, including CodeAnt and humans), triage them autonomously — fix the ones worth fixing in the working tree, close the rest with a reason — push the fixes with /push-branch without asking, and loop back to CI polling after every push until CI is green on the current HEAD with no open threads — then notify Daniel that the MR is ready for his review. The Jira ticket stays In Progress through all of that; it moves to Code Review only after Daniel says he has posted the MR for review. Asks only when a decision genuinely needs him. Can be invoked standalone on any branch that already has an open MR, or handed off from /push-branch. Use when the user asks to watch CI, babysit a branch, or wait for review comments, and ALWAYS after pushing new commits to a branch that has an open MR.
 ---
 
 # Babysit Branch Skill
 
-Poll the CI/CD pipeline on the current branch's open GitLab MR until it reaches a terminal state. If the pipeline passes, move the Jira ticket to Code Review. Then wait for review comments to settle, collect unresolved discussions from **any author** (humans and bots), and **triage them yourself**: fix every comment that is worth fixing, close the rest with a reason, summarize what you did, and push the fixes with `/push-branch` — which lands back here for the new pipeline. Keep looping until CI is green on the current `HEAD` and no thread is open, then tell Daniel the MR is ready for his review.
+Poll the CI/CD pipeline on the current branch's open GitLab MR until it reaches a terminal state. Then wait for review comments to settle, collect unresolved discussions from **any author** (humans and bots), and **triage them yourself**: fix every comment that is worth fixing, close the rest with a reason, summarize what you did, and push the fixes with `/push-branch` — which lands back here for the new pipeline. Keep looping until CI is green on the current `HEAD` and no thread is open, then tell Daniel the MR is ready for his review. **The Jira ticket stays `In Progress` the whole time.** Daniel reviews the MR himself; when he approves he posts it for the team's review and tells you — only then does the ticket move to `IN CODE REVIEW` (Step 6).
 
-Daniel is not watching. He hears from this skill at exactly two kinds of moment: **the MR is ready** (Step 5), and **a question only he can answer** — a conflict where both sides are intentional (Step 1a), a CI failure you cannot fix within the MR's scope (Step 1c), a reviewer question about product intent (Step 4). Everything else — which comments to fix, whether to push, whether to update from the target branch, whether to retry a flaky job — is your call. Never ask "ready to push?" or "fix or continue?".
+Daniel is not watching. He hears from this skill at exactly two kinds of moment: **the MR is ready** (Step 5), and **a question only he can answer** — a conflict where both sides are intentional (Step 1a), a CI failure you cannot fix within the MR's scope (Step 1c), a reviewer question about product intent (Step 4). Everything else — which comments to fix, whether to push, whether to update from the target branch, whether to retry a flaky job — is your call. Never ask "ready to push?" or "fix or continue?". Never move the ticket to Code Review on your own — not on a green pipeline, not on "ready for review"; only on Daniel's word that he posted it.
 
 ## Notifying Daniel
 
@@ -36,6 +36,8 @@ This skill is re-entered on every `ScheduleWakeup` fire. **Determine which phase
 - Blocked on a question for Daniel with no pipeline in flight → do not schedule wakeups; wait. If a pipeline **is** in flight while a question is open (Step 4a's left-open items after a push), keep polling and act on the answer whenever it arrives (Step 4b).
 - MR has conflicts with its target branch (Step 1a found `has_conflicts: true`) and they are not yet resolved → **Step 1a**. If you already asked the user how to resolve a genuine intent conflict, wait for their answer.
 - New commits were pushed to the MR since the last CI poll (a `/push-branch` handoff after triage, a manual push, or `git rev-parse HEAD` no longer matches the SHA you last polled) → **Step 1** for the **new** `HEAD` SHA. Reset `REVIEW_POLLS` to 0 and record the push time as `SINCE` (see Step 2).
+- Step 5 printed (MR ready) and Daniel has not yet said he posted the MR for review → no wakeups; wait. His message that he posted it → **Step 6** (move the ticket to Code Review). His review feedback instead → fix it, `/push-branch`, back to Step 1; the ticket stays In Progress.
+- A message that the MR has unresolved review threads again — from Daniel, or a `[cc mail]` from `cc-mrs` / central after he asked for a pass on his MRs — at any point after Step 5 → **Step 1** if CI is not green on the current `HEAD`, otherwise **Step 3** → **Step 4** on the new threads, then `/push-branch` and the usual loop back to Step 5. Whatever status the ticket has by then (In Progress or IN CODE REVIEW) stays; never move it in either direction for this.
 
 Always reuse the MR IID, MR URL, and repo slug captured earlier in the conversation rather than re-deriving them.
 
@@ -107,7 +109,7 @@ Use `ScheduleWakeup` with `delaySeconds: 30` to schedule each poll. Pass the ori
 On each wakeup:
 1. Run the JSON status check above.
 2. If the state is **non-terminal**: tell the user the current status and schedule the next wakeup in 30 seconds with reason `"polling CI pipeline for <branch>"`.
-3. If the state is **terminal**: print the CI status line (below). Then, **if (and only if) the pipeline passed (`success`)**, run **Step 1b** to move the Jira ticket to Code Review. Afterward (or immediately, for any non-`success` terminal state), **continue to Step 2** to begin review-comment handling. Do NOT print the MR/Jira links yet and do NOT end the loop — the links print only at the very end (Step 5).
+3. If the state is **terminal**: print the CI status line (below), then **continue to Step 2** to begin review-comment handling. Do not touch the Jira ticket here — a green pipeline does not move it (see Step 6). Do NOT print the MR/Jira links yet and do NOT end the loop — the links print only at the very end (Step 5).
 
 ### CI terminal status messages
 
@@ -116,7 +118,7 @@ On each wakeup:
 - `canceled` → "⚠️ Pipeline was canceled for `<branch>`."
 - `skipped` → "Pipeline skipped — only manual jobs are configured. No automated CI ran."
 
-Do not include the pipeline URL in any terminal state message. On `success`, run Step 1b before continuing; on `failed`, skip Step 1b and run Step 1c instead; for `canceled` / `skipped`, skip both 1b and 1c. Regardless of which terminal state was reached, proceed to Step 2 (review comments are independent of the CI outcome).
+Do not include the pipeline URL in any terminal state message. On `failed`, run Step 1c; for `success` / `canceled` / `skipped`, skip it. Regardless of which terminal state was reached, proceed to Step 2 (review comments are independent of the CI outcome).
 
 ## Step 1c: Diagnose Pipeline Failure
 
@@ -164,19 +166,6 @@ This runs **once**, immediately after a `failed` terminal state is detected. Ski
    - **Escalate** — none of the above fits: the cause is unclear, a real fix would break the scope rule below, the same job has failed after two fix rounds, or the retry failed again. Say what failed, what you tried and what you think it needs, then stop per *Notifying Daniel*. When Daniel answers, do what he says (a fix → `/push-branch`; "carry on" → Step 2).
 
    **Scope rule for any CI fix you make yourself.** Fix the code this MR changed. Never edit `.gitlab-ci.yml`, CI scripts, lint/type/test configuration, thresholds, timeouts or retry counts to make a failure pass; never skip, delete or `.only` a test to get green; never change code outside the MR's scope. If a genuine fix would require any of those, do not do it — report what you found and why it needs a human decision, then ask.
-
-## Step 1b: Move the Ticket to Code Review (on pipeline success only)
-
-This runs **once**, the moment CI reaches `success`. Skip it entirely for any non-`success` terminal state — a failed/canceled pipeline should not advance the ticket. On later `ScheduleWakeup` re-entries the skill jumps to Step 2, so this is naturally not repeated.
-
-1. Derive the ticket key from the branch name using the pattern `[A-Z]+-[0-9]+` (e.g., `LW-92`). If the branch has no such key, skip this step and continue to Step 2.
-2. Fetch the available transitions with the Atlassian MCP `getTransitionsForJiraIssue` (`cloudId: 3be885af-99d6-4514-939e-3c99560b10eb`, the derived `issueIdOrKey`).
-3. Find the transition whose target status name matches `code review` **case-insensitively** (our board's status is `IN CODE REVIEW`).
-   - If no such transition is offered, the ticket is likely already in Code Review (or past it) — note it in one line ("`<TICKET>` already at/past Code Review — no transition.") and continue to Step 2. Do not force it backward.
-4. Apply it with `transitionJiraIssue` using the same `cloudId` / `issueIdOrKey` and the matched transition id.
-5. Confirm in one line: "🔀 Moved `<TICKET>` to Code Review." Then continue to Step 2.
-
-Do not schedule a wakeup here — this is a synchronous one-shot update on the way to review-comment polling.
 
 ## Step 2: Poll until Review Comments Are Ready to Triage
 
@@ -340,9 +329,26 @@ This is the moment Daniel is meant to hear from this skill. Print the block belo
 Example output:
 ```
 ✅ `LW-17033` is ready for your review — pipeline green, 2 review threads fixed, 1 closed, 0 open. Mergeable once approved.
+Ticket stays In Progress — tell me when you have posted the MR for review and I will move it to Code Review.
 
 🔗 MR: https://gitlab.com/smartsense4/lists/-/merge_requests/3577
 🎟  Jira: https://smartsensebydigi.atlassian.net/browse/LW-17033
 ```
 
-This ends the skill — do not schedule another wakeup.
+Do not schedule another wakeup. Wait for Daniel:
+
+- **He has review feedback** → treat it as Step 4 fixes, `/push-branch`, and the loop runs again from Step 1. The ticket stays In Progress; when the new round reaches Step 5, print the block again.
+- **He says he posted the MR for review** → Step 6.
+
+## Step 6: Move the Ticket to Code Review (only on Daniel's word)
+
+Trigger: Daniel says, in this chat or relayed by a project's central agent as a `[cc mail]` quoting him, that he has posted / sent / submitted the MR for review (e.g. "posted it", "sent for review", "requested reviews", "it's up for review", "move it to code review"). Nothing else triggers this — not a green pipeline, not Step 5, not a bot's approval, not a reviewer being assigned on GitLab, not another agent's message on its own authority.
+
+1. Derive the ticket key from the branch name using the pattern `[A-Z]+-[0-9]+` (e.g., `LW-92`). If the branch has no such key, say so and stop.
+2. Fetch the available transitions with the Atlassian MCP `getTransitionsForJiraIssue` (`cloudId: 3be885af-99d6-4514-939e-3c99560b10eb`, the derived `issueIdOrKey`). If the MCP is unavailable, use `acli jira workitem transition` as the `jira-ticket` skill describes.
+3. Find the transition whose target status name matches `code review` **case-insensitively** (our board's status is `IN CODE REVIEW`).
+   - If no such transition is offered, the ticket is already at or past Code Review — say so in one line and stop. Do not force it backward.
+4. Apply it with `transitionJiraIssue` using the same `cloudId` / `issueIdOrKey` and the matched transition id.
+5. Confirm in one line: "🔀 Moved `<TICKET>` to Code Review." When `cc-report` is on `PATH` and `$TMUX_PANE` is set, run `cc-report "<KEY>: in Code Review — MR !<IID> posted by Daniel"`.
+
+This ends the skill. If commits land on the branch afterwards (review fixes), re-enter at Step 1 as usual; the ticket stays in Code Review — never move it back.

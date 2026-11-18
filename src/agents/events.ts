@@ -19,9 +19,9 @@ import {
 import { run } from "../data/exec.ts"
 import type { EmailMessage } from "../data/outlook.ts"
 import { fmtEvent, fmtMinutes, fmtRange, isNow, minutesUntil, type CalendarEvent } from "../data/calendar.ts"
-import { isProjectDir, projectRootOf, type Project } from "../data/projects.ts"
+import { isProjectDir, listProjects, projectRootOf, type Project } from "../data/projects.ts"
 import { ccMailBin, isMailStuck, mailWaitMinutes, type PendingMail } from "../data/mail.ts"
-import { flagTmux } from "../data/tmux.ts"
+import { flagTmux, listTmuxWindows, projectSessionName } from "../data/tmux.ts"
 import { tabForWorktree } from "../data/worktrees.ts"
 import {
   FOCUS_CADENCE_MS,
@@ -738,7 +738,70 @@ export function ingestGrok(runs: GrokRun[]): void {
 let prevProjects: Project[] | null = null
 
 /** New directories and brief status changes under ~/projects → projects specialist. */
+// ---------------------------------------------------------------------------
+// idle projects → projects specialist
+//
+// A project whose plan is approved should keep itself busy. Every few minutes,
+// a project that is active, has an approved plan and open next steps, whose
+// session is running with no task tabs, and whose central agent has been idle
+// longer than projects.idleMinutes gets an "idle project" event — once per
+// window; the second window escalates to attention. The specialist's job is to
+// message the central agent ("start the next step or say what blocks you"),
+// and to tell central when that did not help.
+
+const IDLE_TICK_MS = 5 * 60_000
+let idleTimer: ReturnType<typeof setInterval> | null = null
+/** project name → epoch ms of the last idle event we raised for it */
+const idlePinged = new Map<string, number>()
+/** project name → epoch ms when we first saw it idle in the current stretch */
+const idleSince = new Map<string, number>()
+
+async function checkIdleProjects(): Promise<void> {
+  const idleMinutes = config().projects.idleMinutes
+  if (!idleMinutes) return
+  const windowMs = idleMinutes * 60_000
+  const now = Date.now()
+  const USER = config().user.name
+  const [projects, windows] = await Promise.all([listProjects(), listTmuxWindows()])
+  const seen = new Set<string>()
+  for (const p of projects) {
+    const b = p.brief
+    if (!b || b.status !== "active" || b.plan !== "approved" || b.nextSteps.length === 0 || !p.tmuxWindow) continue
+    const session = projectSessionName(p.name)
+    const taskTabs = windows.filter((w) => w.target.startsWith(`${session}:`) && w.name !== "central").length
+    if (taskTabs > 0) continue
+    if (p.agent && p.agent.state !== "idle") continue
+    const lastActivity = new Date(p.agent?.ts ?? p.modified).getTime()
+    if (now - lastActivity < windowMs) continue
+    seen.add(p.name)
+    if (!idleSince.has(p.name)) idleSince.set(p.name, lastActivity)
+    if (now - (idlePinged.get(p.name) ?? 0) < windowMs) continue
+    idlePinged.set(p.name, now)
+    const idleFor = Math.round((now - (idleSince.get(p.name) ?? lastActivity)) / 60_000)
+    const windowsIdle = Math.floor((now - (idleSince.get(p.name) ?? lastActivity)) / windowMs)
+    pushEvent(
+      "projects",
+      `idle project: ${p.name} — plan approved, ${b.nextSteps.length} open step${b.nextSteps.length === 1 ? "" : "s"}, no task tabs, central agent idle ${idleFor}m. ` +
+        (windowsIdle >= 2
+          ? `Already nudged once; tell central it is stalled so ${USER} hears about it.`
+          : `Message it (message_project_agent): "idle with open steps — start the next unblocked step from the Plan, or add what blocks you under Needs ${USER}". Next step: ${b.nextSteps[0]}`),
+      windowsIdle >= 2 ? "attention" : "warn",
+      { dir: p.path },
+    )
+  }
+  for (const name of [...idleSince.keys()]) {
+    if (!seen.has(name)) {
+      idleSince.delete(name)
+      idlePinged.delete(name)
+    }
+  }
+}
+
 export function ingestProjects(projects: Project[]): void {
+  const USER = config().user.name
+  if (!idleTimer && config().projects.idleMinutes > 0) {
+    idleTimer = setInterval(() => void checkIdleProjects(), IDLE_TICK_MS)
+  }
   const prev = prevProjects
   prevProjects = projects
   if (!prev) return
@@ -753,6 +816,22 @@ export function ingestProjects(projects: Project[]): void {
     const newStatus = project.brief?.status ?? "none"
     if (oldStatus !== newStatus) {
       pushEvent("projects", `${project.name}: brief status went ${oldStatus} → ${newStatus}`)
+    }
+    const oldPlan = old.brief?.plan ?? "none"
+    const newPlan = project.brief?.plan ?? "none"
+    if (oldPlan !== newPlan) {
+      const gate = newPlan === "proposed" || newPlan === "revision"
+      pushEvent(
+        "projects",
+        `${project.name}: plan went ${oldPlan} → ${newPlan}${gate ? ` — waiting for ${USER}'s approval` : ""}`,
+        gate ? "attention" : "info",
+      )
+    }
+    const oldNeeds = old.brief?.needsUser.length ?? 0
+    const newNeeds = project.brief?.needsUser.length ?? 0
+    if (newNeeds > oldNeeds) {
+      const added = (project.brief?.needsUser ?? []).filter((q) => !(old.brief?.needsUser ?? []).includes(q))
+      pushEvent("projects", `${project.name}: needs ${USER} — ${added.join("; ") || `${newNeeds} open question${newNeeds === 1 ? "" : "s"}`}`, "attention")
     }
   }
   for (const old of prev) {

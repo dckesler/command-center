@@ -259,6 +259,14 @@ export function Dash({ source }: { source: DashSource }) {
     <text key="title">
       <span fg={C.key}>{project.name}</span>
       <span fg={brief ? STATUS_COLORS[brief.status] : C.red}>{`  ${brief ? brief.status : "no PROJECT.md"}`}</span>
+      {brief && brief.plan !== "none" && (
+        <>
+          <span fg={C.dim}>{"  plan "}</span>
+          <span fg={brief.plan === "approved" ? C.green : brief.plan === "draft" ? C.gray : C.red}>
+            {brief.plan === "approved" ? `approved${brief.planApproved ? ` ${brief.planApproved}` : ""}` : brief.plan === "revision" ? "revision pending" : brief.plan}
+          </span>
+        </>
+      )}
       <span fg={C.dim}>{brief?.updated ? `  updated ${brief.updated}` : ""}</span>
       {epic && (
         <>

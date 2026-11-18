@@ -1,12 +1,13 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
-import { Agent, CursorAgentError, type SDKCustomTool } from "@cursor/sdk"
+import { Agent, CursorAgentError, type AgentOptions, type SDKCustomTool } from "@cursor/sdk"
 import { TAB_AGENT_SPECS, type HubContext, type Snapshot, type TabAgentSpec } from "./specs.ts"
 import { ackInbox, appendInbox, formatCatchUp, formatClock, unreadInbox } from "../data/inbox.ts"
 import { parseSlash } from "../data/skills.ts"
 import { config, statePath } from "../config.ts"
 import { centralDir, centralMode } from "../data/central.ts"
 import { sendMail } from "../data/mail.ts"
+import { readSavedHubAgents, saveHubAgent } from "../data/hubAgents.ts"
 import { emitAgents, getStore, resetStore, subscribeAgents, type ChatItem } from "./stores.ts"
 
 /**
@@ -284,6 +285,7 @@ export function newConversation(id: string): void {
   entry.queue = []
   entry.lastReport = null
   entry.pendingCatchUp = null
+  saveHubAgent(id, null)
   resetStore(id)
   old?.[Symbol.asyncDispose]().catch(() => {})
 }
@@ -375,18 +377,41 @@ async function getAgent(entry: Entry): Promise<SdkAgent> {
       },
     }
   }
-  entry.agent = await Agent.create({
+  const options: AgentOptions = {
     apiKey,
     name: `command-center ${entry.spec.id}`,
     model: { id: MODEL },
     agents: entry.spec.agents,
     local: { cwd: homedir(), settingSources: ["user"], customTools: tools },
-  })
+  }
+  // A specialist created by an earlier TUI run keeps its conversation: resume
+  // the SDK agent recorded in hub-agents.json (same model only — a model change
+  // starts over). The role prompt already opened that conversation, so the
+  // resumed agent is seeded; a one-line note tells it the TUI restarted.
+  const saved = readSavedHubAgents()[entry.spec.id]
+  let resumed = false
+  if (saved && saved.model === MODEL) {
+    try {
+      entry.agent = await Agent.resume(saved.agentId, options)
+      entry.seeded = true
+      resumed = true
+    } catch (err) {
+      console.warn(`${entry.spec.id}: could not resume ${saved.agentId} (${err instanceof Error ? err.message : String(err)}); starting fresh`)
+      saveHubAgent(entry.spec.id, null)
+    }
+  }
+  if (!entry.agent) {
+    entry.agent = await Agent.create(options)
+    saveHubAgent(entry.spec.id, { agentId: entry.agent.agentId, model: MODEL, ts: new Date().toISOString() })
+  }
   const missed = unreadInbox(entry.spec.id)
+  const parts: string[] = []
+  if (resumed) parts.push("[the Command Center restarted; this conversation was resumed — your tools and the dashboard state are current again]")
   if (missed.length > 0) {
-    entry.pendingCatchUp = formatCatchUp(missed)
+    parts.push(formatCatchUp(missed))
     ackInbox(entry.spec.id, missed[missed.length - 1].id)
   }
+  if (parts.length) entry.pendingCatchUp = parts.join("\n\n")
   return entry.agent
 }
 
@@ -447,10 +472,12 @@ async function runOnce(entry: Entry, text: string): Promise<string> {
       emitAgents()
     }
   } catch (err) {
-    // Startup failures leave an unusable handle; drop it so the next send retries.
+    // Startup failures leave an unusable handle; drop it so the next send retries
+    // — with a fresh agent, not another resume of the same broken one.
     if (err instanceof CursorAgentError) {
       entry.agent = null
       entry.seeded = false
+      saveHubAgent(entry.spec.id, null)
     }
     addItem(entry.spec.id, { role: "error", text: err instanceof Error ? err.message : String(err) })
     emitAgents()

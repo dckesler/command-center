@@ -57,6 +57,16 @@ After showing the steps, say:
 
 > "Ready when you are. Tell me any issues as you find them, and let me know when you're done."
 
+### Step 3b (optional): a Grok Bot runs the steps on staging
+
+When Daniel asks for it ("have grok run these", "send to the bot", `/qa-ticket KEY --grok`),
+follow the `grok-qa` skill from this chat: it splits out steps the Bot cannot do on
+staging, builds the task, waits for Daniel's yes, starts the run with the report coming
+back to this worktree, and handles the Bot's report. Its
+FAIL rows enter Step 4's list as **candidates** that Daniel confirms; Daniel keeps the
+steps the Bot could not do. Never offer this unprompted — `--grok` typed by Daniel is the
+prompt.
+
 ### Step 4: QA session — collect issues
 
 Wait. The tester will work through the steps and report back. During this phase:
@@ -117,5 +127,6 @@ If MCP tools are not responding, probe `acli` (`acli jira auth status`). If auth
 - NEVER update the ticket description
 - NEVER offer to modify the QA steps on the ticket
 - NEVER post the comment until the tester signals they are done
+- NEVER post a comment or call QA passed on a Grok Bot report alone — Bot findings are candidates Daniel confirms (`grok-qa`)
 - ALWAYS show the comment text to the tester before posting, and wait for confirmation
 - Keep the QA session low-noise — brief acknowledgements only, let the tester focus on testing

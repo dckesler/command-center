@@ -13,6 +13,8 @@ import {
   type CloudAgent,
 } from "../data/cloud.ts"
 import { run } from "../data/exec.ts"
+import { getMrExtras } from "../data/gitlab.ts"
+import { fmtMyMr, listMyOpenMrs, mrNeedsPass, mrWaitingOnApproval } from "../data/mrs.ts"
 import { closeGrokRun, fmtGrokBot, fmtGrokRun, startGrokRun, type GrokBot, type GrokRun } from "../data/grok.ts"
 import { requestApproval } from "./approvals.ts"
 import { sendMail } from "../data/mail.ts"
@@ -109,19 +111,53 @@ function fmtRow(r: Row): string {
   const parts = [
     `${r.repo}/${r.branch}`,
     r.ticket ? `ticket ${r.ticketKey}: ${r.ticket.status}` : (r.ticketKey ?? "no ticket"),
-    r.mr ? `MR !${r.mr.iid} ${r.mr.state}${r.mr.pipelineStatus ? ` ci:${r.mr.pipelineStatus}` : ""}` : "no MR",
+    r.mr ? `MR !${r.mr.iid} ${r.mr.state}${r.mr.pipelineStatus ? ` ci:${r.mr.pipelineStatus}` : ""}${r.mr.hasConflicts ? " conflicts" : ""}` : "no MR",
     r.git ? `${r.git.dirtyCount} dirty` : "git?",
     r.tmuxWindow ? `window ${r.tmuxWindow}` : "no window",
     r.agent ? `agent ${r.agent.state} (${r.agent.source})` : "no agent",
   ]
-  if (r.isReview) parts.push(r.approval ? fmtApproval(r.approval) : "approval ?")
+  if (r.mr?.state === "opened") parts.push(r.approval ? fmtApproval(r.approval) : "approval ?")
   return parts.join(" | ")
 }
 
 function fmtApproval(a: MrExtras): string {
   const got = a.approvalsRequired - a.approvalsLeft
   const who = a.approvedBy.length ? ` by ${a.approvedBy.join(", ")}` : ""
-  return a.approved ? `approved ${got}/${a.approvalsRequired}${who}` : `${got}/${a.approvalsRequired} approvals${who}`
+  const approval = a.approved ? `approved ${got}/${a.approvalsRequired}${who}` : `${got}/${a.approvalsRequired} approvals${who}`
+  const threads = a.unresolvedThreads ? `${a.unresolvedThreads} unresolved thread${a.unresolvedThreads === 1 ? "" : "s"}` : "no open threads"
+  return `${approval}, ${threads}`
+}
+
+const APPROVAL_TTL_MS = 60_000
+const approvalCache = new Map<string, { at: number; extras: MrExtras | null }>()
+
+/**
+ * Rows with an open MR get approvals + unresolved-thread counts when a
+ * specialist lists them. The collector only fetches those for review rows;
+ * here they are fetched on demand (two glab calls per MR) and cached a minute
+ * so a specialist re-listing in the same turn costs nothing.
+ */
+async function withApprovals(rows: Row[]): Promise<Row[]> {
+  await Promise.all(
+    rows.map(async (r) => {
+      if (!r.mr || r.mr.state !== "opened" || r.approval) return
+      const key = `${r.mr.projectId}/${r.mr.iid}`
+      const hit = approvalCache.get(key)
+      if (hit && Date.now() - hit.at < APPROVAL_TTL_MS) {
+        r.approval = hit.extras
+        return
+      }
+      const extras = await getMrExtras(r.repoPath, r.mr.projectId, r.mr.iid)
+      approvalCache.set(key, { at: Date.now(), extras })
+      r.approval = extras
+    }),
+  )
+  return rows
+}
+
+async function listRows(rows: Row[], empty: string): Promise<string> {
+  if (rows.length === 0) return empty
+  return (await withApprovals(rows)).map(fmtRow).join("\n")
 }
 
 function fmtTicket(t: TicketInfo): string {
@@ -408,6 +444,8 @@ const worktrees: TabAgentSpec = {
     `plan in the TUI (the dialog opens in whichever chat he is in). cleanup_worktree is the lighter version (worktree only, no MR/Jira). ` +
     `Never call either tool on a hunch: he must have asked for that branch, and if a wrap-up comes back blocked (open review threads) tell him why and stop. ` +
     `Before queuing, check the row yourself (list_worktrees): dirty files, an unmerged MR with a failing pipeline, or an agent still busy there are worth one line of warning in your reply. ` +
+    `${USER}'s pushed MRs: list_worktrees shows approvals and unresolved threads for every open MR here; list_my_mrs covers all of his open MRs on GitLab, including ones with no worktree, and says which wait on approval and which need work. ` +
+    `When central asks "which MRs are waiting on approval / have comments", answer from list_my_mrs in one line per MR. You never address the comments yourself: the pass is central's (cc-mrs pass) and only on ${USER}'s request. ` +
     TICKET_AGENT_STYLE +
     " " +
     REPLY_STYLE +
@@ -420,9 +458,33 @@ const worktrees: TabAgentSpec = {
       list_worktrees: {
         description: "List current dev worktrees with git/ticket/MR/agent state.",
         inputSchema: { type: "object", properties: {} },
-        execute: () => {
-          const rows = ctx.snapshot().rows.filter((r) => !r.isQa && !r.isReview)
-          return rows.length ? rows.map(fmtRow).join("\n") : "no worktrees"
+        execute: () => listRows(ctx.snapshot().rows.filter((r) => !r.isQa && !r.isReview), "no worktrees"),
+      },
+      list_my_mrs: {
+        description:
+          `Every open MR ${USER} authored on GitLab (any repo, worktree or not) with approvals, unresolved review threads (human vs bot, newest age), ` +
+          "pipeline, conflicts, Jira status and whether a worktree/window/agent is on it, newest activity first, plus a one-line summary " +
+          "(N waiting on approval, N need work). Slow: three GitLab calls per MR. Set needs_work_only to see just the ones with open threads, red CI or conflicts.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            needs_work_only: { type: "boolean", description: "only MRs with unresolved threads, a failed pipeline or conflicts" },
+            since_days: { type: "number", description: `hide MRs with no GitLab activity for this many days (default ${config().mrs.sinceDays}; 0 = all)` },
+          },
+        },
+        execute: async (args) => {
+          const since = typeof args.since_days === "number" ? args.since_days : config().mrs.sinceDays
+          const result = await listMyOpenMrs({ sinceDays: since })
+          if (result.error) return `could not list MRs: ${result.error}`
+          const mrs = args.needs_work_only ? result.mrs.filter(mrNeedsPass) : result.mrs
+          if (mrs.length === 0) return `no open MRs${args.needs_work_only ? " need work" : ""}${result.hidden ? ` (${result.hidden} older hidden)` : ""}`
+          const waiting = mrs.filter(mrWaitingOnApproval).length
+          const needs = mrs.filter(mrNeedsPass)
+          const lines = mrs.map((m) => fmtMyMr(m))
+          lines.push(`${waiting} waiting on approval · ${needs.length} need work${needs.length ? ` (${needs.map((m) => `!${m.iid}`).join(", ")})` : ""}`)
+          if (result.hidden) lines.push(`${result.hidden} older MRs hidden`)
+          lines.push(`To address open threads ${USER} must ask for a pass: central runs \`cc-mrs pass\` (or \`cc-mrs threads !<iid>\` to read them first).`)
+          return lines.join("\n")
         },
       },
       launch_or_resume: {
@@ -445,7 +507,7 @@ const worktrees: TabAgentSpec = {
       wrap_up_worktree: {
         description:
           "Finish a branch: merge its MR (if open), transition the ticket to Done, close the tmux window, remove the worktree and delete the branch. " +
-          `Refuses up front when the MR has unresolved review threads. Otherwise queues the full plan for ${USER}'s approval in the TUI and returns before anything changes.`,
+          `Refuses up front when the MR has unresolved review threads or its pipeline is held at manual by unplayed QA Audit jobs (those are played from the worktree with /wrap-up on ${USER}'s yes). Otherwise queues the full plan for ${USER}'s approval in the TUI and returns before anything changes.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -494,10 +556,7 @@ const qa: TabAgentSpec = {
       list_qa_worktrees: {
         description: "List current QA worktrees with git/ticket/MR/agent state.",
         inputSchema: { type: "object", properties: {} },
-        execute: () => {
-          const rows = ctx.snapshot().rows.filter((r) => r.isQa)
-          return rows.length ? rows.map(fmtRow).join("\n") : "no QA worktrees"
-        },
+        execute: () => listRows(ctx.snapshot().rows.filter((r) => r.isQa), "no QA worktrees"),
       },
       start_qa: {
         description: "Open a QA window for a ticket (mkpanes --qa: _qa_ worktree + /qa-ticket; sets Jira Test Lead to Daniel).",
@@ -544,10 +603,7 @@ const review: TabAgentSpec = {
       list_reviews: {
         description: "List current code-review worktrees with ticket/MR/agent/approval state.",
         inputSchema: { type: "object", properties: {} },
-        execute: () => {
-          const rows = ctx.snapshot().rows.filter((r) => r.isReview)
-          return rows.length ? rows.map(fmtRow).join("\n") : "no review worktrees"
-        },
+        execute: () => listRows(ctx.snapshot().rows.filter((r) => r.isReview), "no review worktrees"),
       },
       start_review: {
         description:
@@ -744,7 +800,10 @@ const projectsSpec: TabAgentSpec = {
   rolePrompt:
     "You are the projects specialist of a development command center, and the field manager of the project agents (cursor-cli) " +
     "working in tmux windows — one per directory under ~/projects (the command center itself is excluded). " +
-    "Each project is tracked by a PROJECT.md brief: Goal, Current state, Next steps (checkboxes), dated Log, and an optional **Epic:** line linking the Jira epic it delivers. " +
+    "Each project is tracked by a PROJECT.md brief: Goal, Current state, Plan, Next steps (checkboxes), Needs <user> (open questions, checkboxes), Decisions (calls the agent made alone), dated Log, an optional **Epic:** line linking the Jira epic it delivers, and a **Plan:** line (draft | proposed | approved <date> | revision pending). " +
+    `Projects run themselves once the plan is approved: the central agent keeps task tabs busy and only stops for ${USER}'s five gates — plan approval, a true ambiguity, a non-reversible low-confidence call, MR review, a plan revision. ` +
+    `Plan 'proposed' or 'revision pending' and open Needs-${USER} items are gates waiting on him: pass each upward once with attention and say where to answer (the project's central pane, or 'a' on the projects tab approves a plan). ` +
+    "'idle project' events mean an approved plan has open steps but nothing running: message the central agent to start the next step; if a second event comes, tell central it is stalled. " +
     "project_detail(name) is the one-call overview (brief, epic progress, every sub-agent tab with worktree/ticket/MR/agent state and last report) — use it before answering questions about a project. " +
     "Reporting chain: task-tab workers → (cc-report project:<name>) → the project's central agent → (cc-report projects) → you → (report_to_central) → central. " +
     "Central-agent reports arrive as event digests and inbox items; read_project_reports shows the worker-level reports underneath when a digest is unclear. " +

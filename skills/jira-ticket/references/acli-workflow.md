@@ -147,6 +147,13 @@ Write the payload to `<ACLI_TMP>/workitem-create.json`. Descriptions MUST use AD
       {
         "type": "paragraph",
         "content": [
+          { "type": "text", "text": "Test type: ", "marks": [{ "type": "strong" }] },
+          { "type": "text", "text": "manual" }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
           { "type": "text", "text": "How to verify: ", "marks": [{ "type": "strong" }] },
           { "type": "text", "text": "The flow that proves each AC can be tested." }
         ]
@@ -166,6 +173,18 @@ Write the payload to `<ACLI_TMP>/workitem-create.json`. Descriptions MUST use AD
       {
         "type": "bulletList",
         "content": [
+          {
+            "type": "listItem",
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [
+                  { "type": "text", "text": "Preconditions: ", "marks": [{ "type": "strong" }] },
+                  { "type": "text", "text": "None" }
+                ]
+              }
+            ]
+          },
           {
             "type": "listItem",
             "content": [

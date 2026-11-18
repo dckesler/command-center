@@ -10,7 +10,7 @@ description: >-
 
 # The tmux central agent (cc-central)
 
-With `central.mode: "tmux"` the manager is not an SDK agent inside the TUI but `commands.agent` (cursor-cli, model `central.model` or `commands.projectModel`) in a pane of the Command Center window. Reports to it land in `inbox.jsonl`, which tab 1 of the TUI shows and the agent reads with `cc-inbox`; only warn/attention reports are also mailed into its chat (cc-mail). It steers everything with `cc-instruct`.
+With `central.mode: "tmux"` the manager is not an SDK agent inside the TUI but `commands.agent` (cursor-cli, model `central.model` or `commands.projectModel`) in a pane of the Command Center window. Reports to it land in `inbox.jsonl`, which tab 1 of the TUI shows and the agent reads with `cc-inbox`; only warn/attention reports are also mailed into its chat (cc-mail). It steers everything with `cc-instruct`, and answers "what is out for review?" with `cc-mrs` (open MRs, approvals, threads; `cc-mrs pass` sends babysit-branch agents after the ones with comments).
 
 ```bash
 cc-central ensure [--window <target>]   # start unless one runs (idempotent)
