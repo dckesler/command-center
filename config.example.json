@@ -53,6 +53,17 @@
     "sinceDays": 60
   },
 
+  "hubs": {
+    "$comment": "Standing hub projects under dirs.projects: every code-review window lives in the tmux session of hubs.review, every QA window in hubs.qa, each run by its own central agent (cc-hub ensure, run by the TUI on start) that reports to the review / qa specialist. Their tabs are pinned right after COMMAND CENTER. Set a hub to \"\" to turn it off (windows then open in the work session).",
+    "review": "reviews",
+    "qa": "qa"
+  },
+
+  "review": {
+    "$comment": "hideFiles = gitignore-style patterns cc-review writes into a repo's .tuicrignore the first time a review opens there: files you never want to see in a review diff (tuicr). Edit per repo later with `cc-review hide/unhide <pattern>`.",
+    "hideFiles": ["*.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "**/__snapshots__/", "*.snap", "*.generated.*", "dist/", "coverage/"]
+  },
+
   "mail": {
     "$comment": "Inter-agent messages (cc-mail). An idle agent is nudged by typing into its pane only when the human cannot be typing there (pane off screen, or its window quiet for quietSeconds) and its input box is empty; otherwise a detached retrier re-tries every retrySeconds for up to retryMinutes. Mail still waiting after staleMinutes is flagged as stuck in the TUI and to the owning specialist.",
     "quietSeconds": 30,

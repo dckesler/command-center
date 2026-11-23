@@ -17,9 +17,12 @@ export const PROJECTS_DIR = config().dirs.projects
 export const BRIEF_FILE = "PROJECT.md"
 
 /** Directory names that never show up as projects (config.projects.exclude). */
-const EXCLUDED = new Set(config().projects.exclude)
+// The review / QA hubs (config hubs.*) are project-shaped (PROJECT.md, own
+// session, central agent) but belong to the review and qa tabs, not here.
+const EXCLUDED = new Set([...config().projects.exclude, config().hubs.review, config().hubs.qa].filter(Boolean))
 
-export type ProjectStatus = "active" | "paused" | "done" | "unknown"
+/** `archived` is out of sight entirely: listProjects() drops it, so no tab, queue, watchdog or specialist sees the project. */
+export type ProjectStatus = "active" | "paused" | "done" | "archived" | "unknown"
 
 /**
  * Lifecycle of the brief's `## Plan` (header line `**Plan:** …`):
@@ -133,7 +136,9 @@ export function parseBrief(markdown: string, fallbackTitle: string): ProjectBrie
       ? "paused"
       : statusRaw.startsWith("done") || statusRaw.startsWith("complete") || statusRaw.startsWith("shipped")
         ? "done"
-        : "unknown"
+        : statusRaw.startsWith("archived") || statusRaw.startsWith("archive") || statusRaw.startsWith("abandoned")
+          ? "archived"
+          : "unknown"
   const updated = markdown.match(/^\**Updated:?\**:?\s*(\d{4}-\d{2}-\d{2})/im)?.[1] ?? null
   const epic = markdown.match(EPIC_LINE)?.[1]?.toUpperCase() ?? null
   const { plan, approved: planApproved } = parsePlanLine(markdown.match(PLAN_LINE)?.[1])
@@ -306,7 +311,12 @@ function listProjectDirs(): string[] {
     .sort((a, b) => a.localeCompare(b))
 }
 
-const STATUS_RANK: Record<ProjectStatus, number> = { active: 0, unknown: 1, paused: 2, done: 3 }
+const STATUS_RANK: Record<ProjectStatus, number> = { active: 0, unknown: 1, paused: 2, done: 3, archived: 4 }
+
+/** `**Status:** archived` — kept on disk, gone from Command Center (unlike done, which `v` can still show). */
+export function isProjectArchived(p: Project): boolean {
+  return p.brief?.status === "archived"
+}
 
 /**
  * Done, or as good as: the brief says done, or every next step is checked off
@@ -331,7 +341,7 @@ export function sortProjects(projects: Project[]): Project[] {
   })
 }
 
-export async function listProjects(): Promise<Project[]> {
+export async function listProjects(opts: { includeArchived?: boolean } = {}): Promise<Project[]> {
   const names = listProjectDirs()
   const [windows, agents] = await Promise.all([listTmuxWindows(), Promise.resolve(readAgentStatuses())])
   const mail = readPendingMail()
@@ -360,7 +370,7 @@ export async function listProjects(): Promise<Project[]> {
       mail: pendingMailFor(mail, path),
     }
   })
-  return sortProjects(projects)
+  return sortProjects(opts.includeArchived ? projects : projects.filter((p) => !isProjectArchived(p)))
 }
 
 // ---------------------------------------------------------------------------

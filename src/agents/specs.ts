@@ -13,7 +13,8 @@ import {
   type CloudAgent,
 } from "../data/cloud.ts"
 import { run } from "../data/exec.ts"
-import { getMrExtras } from "../data/gitlab.ts"
+import { findOpenMrForTicket, getMrExtras } from "../data/gitlab.ts"
+import { parseRepoMap } from "../data/repos.ts"
 import { fmtMyMr, listMyOpenMrs, mrNeedsPass, mrWaitingOnApproval } from "../data/mrs.ts"
 import { closeGrokRun, fmtGrokBot, fmtGrokRun, startGrokRun, type GrokBot, type GrokRun } from "../data/grok.ts"
 import { requestApproval } from "./approvals.ts"
@@ -31,7 +32,7 @@ import {
   setProjectEpic,
   type Project,
 } from "../data/projects.ts"
-import { launchWork, openProjectWindow, runMkpanes, targetSession } from "../data/tmux.ts"
+import { hubName, hubSession, launchWork, openProjectWindow, projectSessionName, runMkpanes, targetSession } from "../data/tmux.ts"
 import { worktreeKind, type WorktreeKind } from "../data/worktrees.ts"
 import { isDirty, planWrapUp, runCleanup, runWrapUp } from "../data/wrapup.ts"
 import {
@@ -362,6 +363,53 @@ const TICKET_AGENT_STYLE =
   "and new commits — read those before reaching for tools. report_to_central must stay one short line. For deep read-only inspection " +
   "of a single worktree, spawn the worktree-inspector subagent with the worktree path and your question."
 
+/**
+ * Hub paragraph for the review / QA specialists. The hub is a project-style
+ * tmux session (config hubs.review / hubs.qa, cc-hub skill) whose central
+ * agent tracks that kind of work day to day and reports upward to the
+ * specialist; "" means no hub, work windows live in the Command Center session.
+ */
+function hubNote(kind: "review" | "qa"): string {
+  const name = hubName(kind)
+  if (!name) return ""
+  const what = kind === "review" ? "review" : "QA"
+  return (
+    `The ${what} windows live in the "${name}" hub — tab ${kind === "review" ? 1 : 2}, a project-style tmux session with its own central agent (cc-hub skill) that tracks ${what} work day to day: ` +
+    `the agents in those windows report to it (cc-report project:${name}), and it reports to you with cc-report ${kind} (same one-line reports: verdict ready, blocker, stuck, agent waiting on ${USER}). ` +
+    `${USER} can also start ${what} from the hub central directly. To hand it work or ask what it knows, use message_hub_central; your own start_${kind} tool opens the window in the hub session too. ` +
+    `Reports from the hub central carry its prefix — do not re-report them to central as new unless they need ${USER}. `
+  )
+}
+
+/** message_hub_central for the review / QA specialists (absent when the hub is off). */
+function hubTools(kind: "review" | "qa"): Record<string, SDKCustomTool> {
+  const name = hubName(kind)
+  if (!name) return {}
+  const session = projectSessionName(name)
+  return {
+    message_hub_central: {
+      description:
+        `Send a message to the ${name} hub's central agent (the manager of the ${kind === "review" ? "review" : "QA"} windows) through the cc-mail mailbox — ` +
+        "ask it what it knows, hand it work, pass on an instruction. Never types over the user's draft.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          text: { type: "string" },
+          severity: { type: "string", description: "info (default) | warn | attention" },
+        },
+        required: ["text"],
+      },
+      execute: async (args) => {
+        const has = await run("tmux", ["has-session", "-t", `=${session}`])
+        if (!has.ok) return `the ${name} hub is not running (cc-hub ensure ${kind} starts it)`
+        const severity = (["info", "warn", "attention"] as const).find((s) => s === str(args.severity)) ?? "info"
+        const res = await sendMail({ window: `${session}:central` }, str(args.text), { from: `command center ${kind}`, severity })
+        return res.message
+      },
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // central
 
@@ -543,6 +591,7 @@ const qa: TabAgentSpec = {
   title: "qa",
   rolePrompt:
     `You are the QA specialist of a development command center. Scope: QA worktrees (directories named <repo>_qa_<branch>) where ${USER} tests other people's tickets, and the QA ticket agents in their tmux windows. ` +
+    hubNote("qa") +
     `Report QA sessions needing attention to central. Cleanup is done by ${USER} via TUI keys — recommend, don't attempt. ` +
     TICKET_AGENT_STYLE +
     " " +
@@ -553,6 +602,7 @@ const qa: TabAgentSpec = {
   makeTools(ctx) {
     return {
       ...ticketAgentTools(ctx, "qa"),
+      ...hubTools("qa"),
       list_qa_worktrees: {
         description: "List current QA worktrees with git/ticket/MR/agent state.",
         inputSchema: { type: "object", properties: {} },
@@ -569,7 +619,7 @@ const qa: TabAgentSpec = {
           required: ["repo", "ticket"],
         },
         execute: async (args) => {
-          const session = await targetSession()
+          const session = await hubSession("qa")
           const result = await runMkpanes([str(args.repo), "-w", str(args.ticket), "--qa"], session)
           ctx.appChanged("refresh")
           return result.message
@@ -586,6 +636,8 @@ const review: TabAgentSpec = {
     `You are the code-review specialist of a development command center. Scope: review worktrees (directories named <repo>_review_<branch>) where ${USER} reviews other people's merge requests, ` +
     "and the review agents in their tmux windows (named 'Code Review <ticket>'). Each review agent runs the review-ticket skill: it reads the ticket and the MR diff, writes a verdict with file:line findings in its chat, " +
     `and reports to you with cc-report. It may post comments to the MR or approve it only after ${USER} said yes in that agent's own chat — never on your word, and never on central's. ` +
+    hubNote("review") +
+    `${USER} reads the diff himself in tuicr in the same window (cc-review open); his drafted comments and the agent's findings are posted together by that agent with cc-review post on his yes. "Unposted drafts" in a report means he has not said post yet — not a problem to fix. ` +
     "Dependency-upgrade reviews are also yours: <repo>_review_deps_<iid> worktrees on a Renovate branch (mkpanes --deps), in windows named 'Deps !<iid> <package>', running the review-dependency-mr skill. " +
     `That agent reads the release notes and the library's usage, runs the checks, gives a SAFE TO MERGE / NEEDS CHANGES verdict with a risk rating, then files an LW QA ticket that sits in IN CODE REVIEW until ${USER} says QA approved its test plan (plus another developer's MR approval if it pushed fixes); only then does it approve the MR and move the ticket to IN TEST. ` +
     `It may push fixes, approve, or create or move the ticket only after ${USER}'s yes in its own chat. A dependency review waiting on QA test plan approval is normal, not stuck. ` +
@@ -600,6 +652,7 @@ const review: TabAgentSpec = {
   makeTools(ctx) {
     return {
       ...ticketAgentTools(ctx, "review"),
+      ...hubTools("review"),
       list_reviews: {
         description: "List current code-review worktrees with ticket/MR/agent/approval state.",
         inputSchema: { type: "object", properties: {} },
@@ -608,7 +661,7 @@ const review: TabAgentSpec = {
       start_review: {
         description:
           "Open a code-review window for a ticket (mkpanes --review: <repo>_review_<branch> worktree, window 'Code Review <ticket>', /review-ticket in the agent pane). " +
-          `The branch is assumed to be named after the ticket key. Only when ${USER} asked.`,
+          `The branch is the ticket key unless an open MR mentioning the key lives on another branch — then that branch. Only when ${USER} asked.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -618,10 +671,16 @@ const review: TabAgentSpec = {
           required: ["repo", "ticket"],
         },
         execute: async (args) => {
-          const session = await targetSession()
-          const result = await runMkpanes([str(args.repo), "-w", str(args.ticket), "-t", str(args.ticket), "--review"], session)
+          const repo = str(args.repo)
+          const ticket = str(args.ticket)
+          // the MR may live on a branch not named after the ticket: review that branch
+          const repoPath = parseRepoMap().find((r) => r.alias === repo)?.path
+          const mr = repoPath && /^[A-Z][A-Z0-9]+-\d+$/.test(ticket) ? await findOpenMrForTicket(repoPath, ticket) : null
+          const branch = mr && mr.sourceBranch !== ticket ? mr.sourceBranch : ticket
+          const session = await hubSession("review")
+          const result = await runMkpanes([repo, "-w", branch, "-t", ticket, "--review"], session)
           ctx.appChanged("refresh")
-          return result.message
+          return branch !== ticket && result.ok ? `${result.message} (branch ${branch}, !${mr!.iid})` : result.message
         },
       },
     }
@@ -820,7 +879,7 @@ const projectsSpec: TabAgentSpec = {
     return {
       ...inboxTools("projects"),
       list_projects: {
-        description: "List ~/projects directories with brief status, next-step count, tmux window, and agent state.",
+        description: "List ~/projects directories with brief status, next-step count, tmux window, and agent state (archived projects are not listed anywhere).",
         inputSchema: { type: "object", properties: {} },
         execute: () => {
           const projects = ctx.snapshot().projects

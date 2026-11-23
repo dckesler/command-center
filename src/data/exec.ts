@@ -10,10 +10,10 @@ export interface ExecResult {
 export function run(
   cmd: string,
   args: string[],
-  opts: { cwd?: string; timeoutMs?: number } = {},
+  opts: { cwd?: string; timeoutMs?: number; stdin?: string } = {},
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       cmd,
       args,
       {
@@ -26,5 +26,9 @@ export function run(
         resolve({ stdout: stdout ?? "", stderr: stderr ?? "", ok: !error })
       },
     )
+    if (opts.stdin !== undefined && child.stdin) {
+      child.stdin.on("error", () => {})
+      child.stdin.end(opts.stdin)
+    }
   })
 }

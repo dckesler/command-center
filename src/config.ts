@@ -84,6 +84,20 @@ export interface Config {
     /** cc-mrs / list_my_mrs hide the user's open MRs with no GitLab activity for this many days (0 = show all) */
     sinceDays: number
   }
+  review: {
+    /** gitignore-style patterns cc-review seeds into a repo's .tuicrignore: files the user never wants in a review diff */
+    hideFiles: string[]
+  }
+  /**
+   * Standing hub projects: directories under dirs.projects whose tmux session holds every
+   * code-review (hubs.review) or QA (hubs.qa) window, run by their own central agent that
+   * reports to the matching Command Center specialist. cc-hub ensure creates them; their
+   * tabs sit right after COMMAND CENTER. "" disables a hub (windows open in the work session).
+   */
+  hubs: {
+    review: string
+    qa: string
+  }
   mail: {
     /** seconds the recipient's tmux *window* must have been quiet before cc-mail types into an on-screen idle agent's pane */
     quietSeconds: number
@@ -144,6 +158,8 @@ export const DEFAULTS: Config = {
   central: { mode: "tmux", dir: join(DEFAULT_CONFIG_DIR, "central"), model: "" },
   projects: { exclude: ["command-center", "node_modules"], maxParallelTasks: 2, idleMinutes: 20 },
   mrs: { sinceDays: 60 },
+  hubs: { review: "reviews", qa: "qa" },
+  review: { hideFiles: ["*.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "**/__snapshots__/", "*.snap", "*.generated.*", "dist/", "coverage/"] },
   mail: { quietSeconds: 30, retrySeconds: 20, retryMinutes: 180, staleMinutes: 10 },
   email: { days: 7, filters: DEFAULT_EMAIL_FILTERS },
   todos: { focusCadenceMinutes: 30, focusMax: 3, focusHours: "09:00-17:30" },
@@ -219,6 +235,13 @@ export function config(): Config {
     },
     mrs: {
       sinceDays: file.mrs?.sinceDays === 0 ? 0 : Number(file.mrs?.sinceDays) || DEFAULTS.mrs.sinceDays,
+    },
+    review: {
+      hideFiles: Array.isArray(file.review?.hideFiles) ? file.review.hideFiles.map(String) : DEFAULTS.review.hideFiles,
+    },
+    hubs: {
+      review: file.hubs?.review === "" ? "" : String(file.hubs?.review ?? DEFAULTS.hubs.review),
+      qa: file.hubs?.qa === "" ? "" : String(file.hubs?.qa ?? DEFAULTS.hubs.qa),
     },
     mail: {
       quietSeconds: Number(file.mail?.quietSeconds) || DEFAULTS.mail.quietSeconds,

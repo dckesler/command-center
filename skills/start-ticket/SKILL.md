@@ -219,6 +219,8 @@ When the plan's checks pass and the working tree holds only the ticket's changes
 
 Do not hand off while blocked on a question, when a check fails for a reason you cannot fix within the ticket's scope, or when the diff contains anything outside the plan that you have not called out.
 
+**His eyes before the push.** When the change is one he would want to see before it becomes an MR — a design call you made, a risky refactor, a diff that touches more than the plan said, or he asked to look — run the `local-review` skill first (`cc-review local open`: the diff opens in tuicr in the pane beside you, he comments, you address the comments), and hand off to `/push-branch` only when that round is closed. Routine ticket work goes straight to `/push-branch`; he reviews the MR there.
+
 ## Critical Rules
 
 - Atlassian MCP only for Jira; never silently switch workspaces. If SmartSense/MCP is unavailable, stop and tell the user (do not skip ahead to a plan that depends on ticket fields you could not read).

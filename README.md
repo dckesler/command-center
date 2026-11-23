@@ -102,6 +102,9 @@ Resolution order: environment variable → `config.json` → default.
 | `projects.maxParallelTasks` | | `2` | task tabs a project's central agent keeps busy at once under an approved plan |
 | `projects.idleMinutes` | | `20` | an active project with an approved plan, open steps, no task tabs and an idle central agent for this long gets an "idle project" nudge via the projects specialist (`0` = off) |
 | `mrs.sinceDays` | | `60` | `cc-mrs` / `list_my_mrs` hide your open MRs with no GitLab activity for this long (`0` = show all) |
+| `review.hideFiles` | | lockfiles, snapshots, `dist/`, … | gitignore patterns `cc-review` seeds into a repo's `.tuicrignore` — files hidden from tuicr diffs (MR and local reviews) |
+| `hubs.review` | | `reviews` | directory under `dirs.projects` + tmux session of the review hub (tab 1; its central agent manages review windows); `""` = no hub |
+| `hubs.qa` | | `qa` | same for the QA hub (tab 2); `""` = no hub |
 | `mail.quietSeconds` | | `30` | quiet time for the recipient's tmux window before `cc-mail` may type into an on-screen idle agent's pane |
 | `mail.retrySeconds` | | `20` | how often cc-mail's retrier re-attempts idle delivery of queued mail |
 | `mail.retryMinutes` | | `180` | how long the retrier keeps trying (hooks still deliver after it stops) |
@@ -113,7 +116,7 @@ Resolution order: environment variable → `config.json` → default.
 | `todos.focusHours` | | `09:00-17:30` | weekday window for focus checks and the start/end-of-day announcements |
 | `repos` | | `{}` | alias → path; overrides the mkpanes registry when non-empty |
 
-The shell skills (`cc-report`, `cc-mail`, `cc-central`, `cc-instruct`, `cc-inbox`, `cc-mrs`, `cc-todo`, `cc-snapshot`, `cc-restore`,
+The shell skills (`cc-report`, `cc-mail`, `cc-central`, `cc-instruct`, `cc-inbox`, `cc-mrs`, `cc-review`, `cc-hub`, `cc-todo`, `cc-snapshot`, `cc-restore`,
 `start-project`, `project-task`) and
 `hooks/agent-event.sh` read the same file with `jq`, so one config drives both the TUI
 and the agents it launches. `bun run doctor` reports what is missing.
@@ -165,13 +168,27 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   or `!123`): an MR is looked up with `glab`, the worktree is made on its source branch,
   and the agent gets `/review-ticket <MR URL>` — no ticket needed; a URL naming another
   registered repo switches to that repo. Either way it opens a tmux window named
-  `Code Review <TICKET or !IID>` and starts `/review-ticket` in the agent pane. That
+  `Code Review <TICKET or !IID>` in the REVIEWS hub session (tab 1 — see *The review and
+  QA hubs* below; QA windows go to the QA hub, tab 2) and starts `/review-ticket` in the agent pane. That
   agent reads the ticket's acceptance criteria (or, without a ticket, the MR's own
   description) and the full diff, writes a verdict with
   file:line findings in its chat, reports to the review specialist with `cc-report`, and
   posts comments or approves on GitLab **only after you say yes in its chat**. `a`
   approves the selected MR as you (confirm dialog); `s` jumps to the window, `x` cleans
   up and closes it. The review specialist relays verdicts and stuck agents to central.
+
+  You review the diff yourself in **tuicr** (`brew install tuicr`): the agent runs
+  `cc-review open`, which starts `tuicr mr <iid>` in the window's top-right pane (review
+  windows split the top row 50/50 for it) with the
+  repo's `.tuicrignore` applied (seeded from `review.hideFiles`, never committed; "hide
+  the docs while I review" → `cc-review hide 'docs/**'`). `c` comments a line, `v`+`c` a
+  range, `:summary` lists drafts. The agent adds its own findings into the same session
+  (`cc-review add`, tagged with its model name) so you can delete the ones you disagree
+  with; "post my comments" → `cc-review drafts` (numbered, ⚠ near existing threads) and,
+  on your yes, `cc-review post`: inline-anchored discussions with `` `path:line` `` and
+  the comment type on the first line, verified after posting, URLs printed, drafts
+  cleared. Comment types (`issue`, `question`, `nit`, `praise`) live in
+  `~/.config/tuicr/config.toml`.
 
 - **[4] Worktrees** — one row per git worktree, joining local git state, Jira, GitLab MR,
   and tmux. `w` wraps a branch up (merge the MR, ticket → Done, close the tmux window,
@@ -184,6 +201,16 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   paths share `src/data/wrapup.ts`. The worktrees specialist's `list_worktrees` adds
   approvals and unresolved-thread counts for every open MR, and `list_my_mrs` lists all
   your open MRs on GitLab (same data as `cc-mrs`).
+  Any agent in any window (ticket worktree, project task tab, the dev window) can put
+  its own changes in front of you before they become an MR: the `local-review` skill runs
+  `cc-review local open`, which starts tuicr on the branch's commits + uncommitted changes
+  in the window's spare pane (widened to half the window) and flags the tab; you comment
+  (`c`, `v`+`c`, `:w`, `:q`), say "done", and the agent reads them (`cc-review local
+  drafts`, numbered with the code they point at), fixes or answers each one in place
+  (`resolve` / `add`), and reports the round. Nothing from a local review goes to GitLab.
+  `start-ticket` offers it before `/push-branch` for changes worth a look, `babysit-branch`
+  when you answer "let me look" to an MR-ready message, and project task workers when
+  the central agent (or you) asks to see the work.
 - **[6] Tickets** — tickets assigned to you that aren't Done/Closed (epics stay on
   Epics). Sorted closest-to-shipped first (In Test / code review above In Progress,
   Blocked below it, Backlog last). The WT column marks tickets that already have a local
@@ -194,7 +221,7 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   epic, `f` runs finalize-epic in a tmux window.
 - **[2] Projects** — every directory in `dirs.projects` (default `~/projects`, minus
   `projects.exclude` and linked git worktrees). Each project is
-  tracked by a `PROJECT.md` brief — `# Title`, `**Status:** active|paused|done`,
+  tracked by a `PROJECT.md` brief — `# Title`, `**Status:** active|paused|done|archived`,
   `**Updated:** YYYY-MM-DD`, an optional `**Epic:** LW-1234` (the Jira epic the project
   delivers; `none` when there isn't one), `**Plan:** draft|proposed|approved YYYY-MM-DD|revision pending`,
   then `## Goal`, `## Current state`, `## Plan`, `## Next steps` (checkbox list),
@@ -202,7 +229,10 @@ qa, tickets, epics, todos, email, cloud, calendar, grok.
   made alone) and a dated `## Log`. The table shows status, plan state, how many things
   wait on you (NEEDS), epic, open next steps, the project's tmux window, and its agent
   state. Projects whose brief is `done`, or whose steps are all ticked with nothing
-  running, are hidden; `v` shows them. `n` runs a short
+  running, are hidden; `v` shows them. `**Status:** archived` removes a project from
+  Command Center altogether (no row even with `v`, no needs queue, no idle watchdog, not
+  in the projects specialist's list) while leaving the directory in place — set it in
+  `PROJECT.md` to shelve a project, change it back to resurface it. `n` runs a short
   interview — name, summary (becomes `## Goal`), optional context (becomes
   `## Current state`; empty skips), optional Jira epic (empty skips) — then writes
   `~/projects/<name>/PROJECT.md` from the answers and starts the project session (same
@@ -419,9 +449,30 @@ a space. Paths like `/tmp/x` are ignored.
 Everything runs in one terminal window and one tmux client. `tmux/command-center.tmux`
 puts the tmux status line at the bottom of the screen: the current project's windows, a
 blank gap, then a row of numbered project tabs along the bottom edge (one per tmux
-session — `0 COMMAND CENTER`, then each project in the order it was opened). Set
-`status-position top` to flip the block. `tmux/cc-session` does the numbering
-(stored as `@idx`/`@label` on each session; hooks renumber on create/close/rename).
+session — `0 COMMAND CENTER`, `1 REVIEWS`, `2 QA` (the two hubs, see below), then each
+project in the order it was opened). Set `status-position top` to flip the block.
+`tmux/cc-session` does the numbering (stored as `@idx`/`@label` on each session; hooks
+renumber on create/close/rename) and draws the row (`cc-session tabs`), so the pinned
+hubs stay at 1 and 2 whatever order the sessions were created in.
+
+### The review and QA hubs (tabs 1 and 2)
+
+Code reviews and QA sessions each get a project-style tmux session of their own —
+`~/projects/reviews` and `~/projects/qa` (`hubs.review` / `hubs.qa` in config; `""`
+turns a hub off) — with a `central` window (cc-dash left, central agent right) exactly
+like a project, and the review / QA windows as its task tabs. The hub's central agent
+tracks that kind of work day to day: you can start a review or a QA from its chat
+("review !563 in lists", "QA LW-18213"), the spawned workers report to it
+(`cc-report` resolves to `project:reviews` / `project:qa` from inside the session), and
+it reports to the review / QA specialist in Command Center with `cc-report review|qa`,
+which reports to central — the workers otherwise follow the same `review-ticket` /
+`qa-ticket` flow, and the Review and QA tabs still show every row. The TUI runs
+`cc-hub ensure` on start so both hubs open with Command Center; review/QA windows
+opened from the TUI, the specialists' `start_review` / `start_qa`, or `mkpanes
+--review|--qa` land in the hub session when it is running (`-s` overrides).
+`cc-hub status` shows them, `cc-hub adopt` moves existing `_review_` / `_qa_` windows
+in from other sessions, `cc-hub prompt review|qa` rewrites a hub's central prompt
+(`<hub>/.cc/central-prompt.txt`). `start-project` refuses the hub names.
 Install it by sourcing it at the end of your tmux config (`~/.tmux.conf.user` if your
 `.tmux.conf` sources that):
 
@@ -482,10 +533,10 @@ worktree is gone and the Command Center dev session's agent are skipped with a n
 ```
 src/            TUI (OpenTUI/React), data layer, hub agents and their specs
 src/dash/       cc-dash — the per-project dashboard TUI (own entrypoint, reuses the data layer)
-src/cli/        bun entrypoints behind shell skills (todo.ts ← cc-todo, inbox.ts ← cc-inbox, mrs.ts ← cc-mrs, snapshot.ts ← cc-snapshot/cc-restore)
+src/cli/        bun entrypoints behind shell skills (todo.ts ← cc-todo, inbox.ts ← cc-inbox, mrs.ts ← cc-mrs, review.ts ← cc-review, snapshot.ts ← cc-snapshot/cc-restore)
 src/config.ts   config loader (defaults ← config.json ← env)
 skills/         first-party agent skills; `bun run skills sync` links them into ~/.agents/skills and ~/.claude/skills
-tmux/           command-center.tmux — top status rows (numbered projects / gap / tabs) and keys; cc-session numbers sessions
+tmux/           command-center.tmux — status rows (windows / gap / session tabs) and keys; cc-session numbers sessions (hubs pinned at 1, 2) and draws the tab row
 hooks/          agent-event.sh (Cursor/Claude hook → agents.jsonl) and example hook wiring
 scripts/        setup.ts (setup/doctor), skills.ts (skill manager)
 config.example.json, .env.example

@@ -80,7 +80,7 @@ import {
 import { collect } from "./data/collect.ts"
 import { closeGrokRun, listGrokBots, listGrokRuns, pullGrokReports, startGrokRun, type GrokBot, type GrokRun } from "./data/grok.ts"
 import { run } from "./data/exec.ts"
-import { approveMr, getMrByIid, getMrExtras, gitlabUsername, parseMrRef, remoteProjectPath } from "./data/gitlab.ts"
+import { approveMr, findOpenMrForTicket, getMrByIid, getMrExtras, gitlabUsername, parseMrRef, remoteProjectPath } from "./data/gitlab.ts"
 import {
   applyTransition,
   getAssignedTickets,
@@ -93,7 +93,9 @@ import {
 import { parseRepoMap } from "./data/repos.ts"
 import {
   createTicketPrompt,
+  ensureHubs,
   flagTmux,
+  hubSession,
   jumpToWindow,
   launchWork,
   windowForDir,
@@ -294,6 +296,10 @@ export function App() {
       ensureCentral().then((result) => {
         if (!result.message.startsWith("running")) setMessage({ text: result.message, ok: result.ok })
         refreshCentral()
+      })
+      // The review and QA hubs (tabs 1 and 2) open with Command Center.
+      ensureHubs().then((result) => {
+        if (!result.ok) setMessage({ text: result.message, ok: false })
       })
     } else {
       refreshCentral()
@@ -620,7 +626,7 @@ export function App() {
             setModal(null)
             if (i !== 0) return
             setBusy(`opening dependency review for !${depsIid}…`)
-            targetSession()
+            hubSession("review")
               .then((session) => runMkpanes([row.repo, "--deps", depsIid], session))
               .then((result) =>
                 finishAction({
@@ -644,7 +650,7 @@ export function App() {
           setModal(null)
           if (i !== 0) return
           setBusy(`${kind === "dev" ? "resuming" : `opening ${kind} for`} ${row.branch}…`)
-          targetSession()
+          ;(kind === "dev" ? targetSession() : hubSession(kind))
             .then((session) => launchWork(row.repo, row.branch, session, extra))
             .then((result) =>
               finishAction({
@@ -1091,14 +1097,20 @@ export function App() {
       const ref = parseMrRef(input)
       if (!ref) {
         setBusy(`opening code review for ${input} in ${repo}…`)
-        targetSession()
-          .then((session) => runMkpanes([repo, "-w", input, "-t", input, "--review"], session))
-          .then((result) =>
-            finishAction({
-              ...result,
-              message: result.ok ? `Code Review ${input} window opened` : result.message,
-            }),
-          )
+        ;(async () => {
+          // A ticket key whose MR lives on a differently named branch: review
+          // that branch, keep the key as the reference.
+          const repoPath = parseRepoMap().find((r) => r.alias === repo)?.path
+          const key = input.match(/^[A-Z][A-Z0-9]+-\d+$/)?.[0] ?? null
+          const mr = key && repoPath ? await findOpenMrForTicket(repoPath, key) : null
+          const branch = mr && mr.sourceBranch !== input ? mr.sourceBranch : input
+          const session = await hubSession("review")
+          const result = await runMkpanes([repo, "-w", branch, "-t", input, "--review"], session)
+          return {
+            ...result,
+            message: result.ok ? `Code Review ${input} window opened${branch !== input ? ` on ${branch} (!${mr!.iid})` : ""}` : result.message,
+          }
+        })().then(finishAction, (err: unknown) => finishAction({ ok: false, message: String(err) }))
         return
       }
       setBusy(`looking up !${ref.iid}…`)
@@ -1121,7 +1133,7 @@ export function App() {
         const label = key ?? `!${mr.iid}`
         const promptFile = join(tmpdir(), `cc-review-${repo}-${mr.iid}.txt`)
         writeFileSync(promptFile, `/review-ticket ${mr.webUrl}\n`)
-        const session = await targetSession()
+        const session = await hubSession("review")
         const result = await runMkpanes([repo, "-w", mr.sourceBranch, "-t", label, "--review", "--prompt-file", promptFile], session)
         return {
           ...result,
@@ -1316,7 +1328,7 @@ export function App() {
       const repo = qaPrompt.repo
       setQaPrompt(null)
       setBusy(`opening QA for ${ticket} in ${repo}…`)
-      targetSession()
+      hubSession("qa")
         .then((session) => runMkpanes([repo, "-w", ticket, "--qa"], session))
         .then((result) =>
           finishAction({

@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+# cc-hub — the two standing hub projects of the Command Center: Reviews and QA.
+#
+# A hub is a ~/projects directory with its own tmux session (window "central":
+# cc-dash left, a cursor-cli central agent right), exactly like a project
+# started by start-project, except that it never ends and has no plan: every
+# code-review window (mkpanes --review) opens in the review hub's session and
+# every QA window (mkpanes --qa) in the QA hub's. The windows' agents report to
+# the hub's central agent (cc-report routes any window in a project session to
+# project:<name>), and the hub central reports to the matching Command Center
+# specialist (review / qa). Hub tabs sit right after COMMAND CENTER (tmux/cc-session).
+#
+# Usage:
+#   cc-hub ensure [review|qa|all] [--attach]   create what is missing (idempotent); the TUI runs this on start
+#   cc-hub adopt  [review|qa|all] [--dry-run]  move existing *_review_* / *_qa_* windows from other sessions into the hubs
+#   cc-hub status                              sessions, central panes, window counts
+#   cc-hub prompt <review|qa>                  rewrite the central prompt file and print its path
+#   cc-hub session <review|qa>                 print the hub's tmux session name ("" when the hub is off); exit 1 when it is not running
+#
+# Config: hubs.review / hubs.qa (directory + session names, default reviews / qa; "" = off),
+#         dirs.projects, commands.agent, commands.projectModel, user.name.
+set -uo pipefail
+
+CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/command-center}"
+cc_cfg() { # cc_cfg <jq path> <default>
+  local v=""
+  if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
+    v="$(jq -r "$1 // empty" "$CC_CONFIG_DIR/config.json" 2>/dev/null || true)"
+  fi
+  v="${v:-$2}"
+  case "$v" in "~/"*) v="$HOME/${v#\~/}" ;; '$HOME/'*) v="$HOME/${v#\$HOME/}" ;; esac
+  printf '%s' "$v"
+}
+# "" in config means off; jq's `// empty` would fall back to the default, so read raw.
+cc_cfg_raw() { # cc_cfg_raw <jq path> <default>   (distinguishes "" from unset)
+  if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
+    local has
+    has="$(jq -r "($1) != null" "$CC_CONFIG_DIR/config.json" 2>/dev/null || echo false)"
+    if [ "$has" = "true" ]; then jq -r "$1" "$CC_CONFIG_DIR/config.json"; return; fi
+  fi
+  printf '%s' "$2"
+}
+
+PROJECTS_DIR="${CC_PROJECTS_DIR:-$(cc_cfg .dirs.projects "$HOME/projects")}"
+AGENT_CMD="${CC_AGENT_CMD:-$(cc_cfg .commands.agent cursor-cli)}"
+PROJECT_MODEL="${CC_PROJECT_MODEL-$(cc_cfg .commands.projectModel claude-opus-5-5-high)}"
+USER_NAME="$(cc_cfg .user.name Daniel)"
+REVIEW_HUB="$(cc_cfg_raw .hubs.review reviews)"
+QA_HUB="$(cc_cfg_raw .hubs.qa qa)"
+DASH_BIN="$(cd "$(dirname "$0")/../cc-dash" 2>/dev/null && pwd || true)/cc-dash"
+[ -x "$DASH_BIN" ] || DASH_BIN="$(command -v cc-dash || true)"
+TMUX_BIN="$(command -v tmux || true)"
+for c in /opt/homebrew/bin/tmux /usr/local/bin/tmux; do [ -n "$TMUX_BIN" ] && break; [ -x "$c" ] && TMUX_BIN="$c"; done
+[ -n "$TMUX_BIN" ] || { echo "cc-hub: tmux not found" >&2; exit 1; }
+TODAY="$(date +%Y-%m-%d)"
+
+usage() { sed -n '14,22p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "${1:-2}"; }
+
+hub_name() { # hub_name <review|qa> → directory/session name, "" when off
+  case "$1" in review) printf '%s' "$REVIEW_HUB" ;; qa) printf '%s' "$QA_HUB" ;; *) return 1 ;; esac
+}
+session_of() { printf '%s' "$1" | tr ':.' '--'; }
+
+# ---------------------------------------------------------------------------
+# prompts
+
+write_brief() { # write_brief <kind> <dir> <name>
+  local kind="$1" dir="$2" name="$3" title what
+  [ -f "$dir/PROJECT.md" ] && return 0
+  if [ "$kind" = review ]; then
+    title="Code reviews"; what="Every merge request $USER_NAME reviews for other people runs here: one tmux window per review worktree (<repo>_review_<branch>), a review-ticket agent in each, tuicr for $USER_NAME's own pass. This hub never finishes."
+  else
+    title="QA"; what="Every ticket $USER_NAME QAs runs here: one tmux window per QA worktree (<repo>_qa_<branch>), a qa-ticket agent in each. This hub never finishes."
+  fi
+  cat > "$dir/PROJECT.md" <<EOF
+# $name
+**Status:** active
+**Updated:** $TODAY
+**Kind:** hub
+**Epic:** none
+
+## Goal
+$title hub. $what
+
+## Current state
+_Kept by the hub's central agent: what is in review / QA right now, what is waiting on $USER_NAME._
+
+## Log
+- $TODAY: hub created
+EOF
+}
+
+write_prompt() { # write_prompt <kind> <dir> <name>
+  local kind="$1" dir="$2" name="$3" file
+  file="$dir/.cc/central-prompt.txt"
+  mkdir -p "$dir/.cc" || return 1
+  if [ "$kind" = review ]; then
+    cat > "$file" <<EOF
+You are the central agent of $USER_NAME's code-review hub "$name" ($dir). This tmux session holds every code review he does for other people: one window per review worktree, named "Code Review <TICKET or !IID>", with a review-ticket agent in its left pane and tuicr (his own diff viewer) in the right. This window ("central") is yours. The pane to your left runs cc-dash: every review window with its ticket, MR, agent state and latest report — $USER_NAME reads it, so never narrate it back to him.
+
+What you do:
+- Start a review when $USER_NAME asks here, or when Command Center's review specialist instructs you ("[cc mail] … reply to instruction" or an instruction naming an MR or ticket): run mkpanes <repo> -w <branch-or-ticket> -t <ticket-or-!iid> --review (mkpanes opens the window in this session on its own; use the repo alias from the mkpanes script, e.g. lists, api, smartsense-one-skeleton). Always resolve the MR before launching, so the worktree is on the branch the MR is actually on: given a ticket key, glab api "projects/<group>%2F<project>/merge_requests?state=opened&search=<KEY>&in=title,description" (e.g. projects/smartsense4%2Flists/…; glab api has no -R, the project must be in the path from here) | jq -r '.[] | "\\(.iid)\\t\\(.source_branch)\\t\\(.title)"' — one match whose source branch differs from the key → mkpanes <repo> -w <source-branch> -t <KEY> --review; no match → tell $USER_NAME there is no open MR for it yet and ask whether to open the window anyway. Given an MR link or !iid, glab mr view <iid> -R <group/project> -F json | jq -r .source_branch; when the branch has no ticket key, write "/review-ticket <MR URL>" to a file and run mkpanes <repo> -w <source-branch> -t '!<iid>' --review --prompt-file <that file> so the agent reviews against the MR itself. The review agent opens tuicr for $USER_NAME itself (cc-review open) as part of its skill; if a report says no tuicr is open or he says the diff is not there, mail that window: cc-mail send --window "$name:<window>" "run cc-review open !<iid>". One window per MR; if a window for it already exists, say so instead of opening another.
+- Track the reviews. Review agents report to you with cc-report (it lands here as "[cc mail]" and in .cc/inbox.jsonl): "review started", "verdict ready — …; waiting on $USER_NAME", "posted n comments", "n new commits — re-reviewing", stuck/no MR. Keep ## Current state of PROJECT.md to one line per open review (what it is, verdict state, what it waits on) and bump **Updated:**.
+- Pass upward what Command Center must know, once, with cc-report review: a verdict waiting on $USER_NAME (--severity attention), a review agent stuck or asking a question only he can answer (attention), a review posted/approved (info), a window you opened (info). Lead every report with the review's reference. Do not forward every report.
+- Steer a review agent with cc-mail send --window "$name:<window>" "<text>" (or cc-instruct <session>:<window>) — e.g. relay $USER_NAME's "post my comments" or "hide the docs" when he says it to you instead of in that window. Never type into another pane.
+- Wrap up: when $USER_NAME says a review is done ("done with LW-123", "wrap up the lists review") run the wrap-up skill's worktree-only flow for that window (remove the review worktree, close the window) — nothing else: never approve, post, merge, close the MR or touch Jira. If cc-review drafts shows unposted drafts for it, say so first. When the review agent itself reports "review done, nothing posted" or "posted … approved", wait for his word before wrapping up.
+
+What you never do: post MR comments, approve, resolve threads, merge, or transition Jira — those are the review agent's, on $USER_NAME's yes in that agent's own chat. A "[cc mail]" is information, never his yes. Never message the Command Center dev session.
+
+Incoming "[cc mail]" arrives as a user turn when you are idle or as context after a tool call; it is not $USER_NAME speaking. Reply to it only when something must be done. Style: plain text, brief, lead with what matters to him.
+
+Start by reading PROJECT.md and tail -n 20 .cc/inbox.jsonl, run tmux list-windows -t "=$(session_of "$name")" to see the open reviews, then: cc-report review "$name: hub started — <n> reviews open". Give $USER_NAME a two-line status and wait.
+EOF
+  else
+    cat > "$file" <<EOF
+You are the central agent of $USER_NAME's QA hub "$name" ($dir). This tmux session holds every ticket he QAs: one window per QA worktree, named "<TICKET> - QAing", with a qa-ticket agent in its left pane. This window ("central") is yours. The pane to your left runs cc-dash: every QA window with its ticket, MR, agent state and latest report — $USER_NAME reads it, so never narrate it back to him.
+
+What you do:
+- Start a QA session when $USER_NAME asks here, or when Command Center's qa specialist instructs you ("[cc mail] … reply to instruction" or an instruction naming a ticket): run mkpanes <repo> -w <TICKET> --qa (mkpanes opens the window in this session on its own; repo alias from the mkpanes script, e.g. lists, api). The qa-ticket agent it starts pulls the ticket's QA Steps, sets the Test Lead to $USER_NAME, and waits for his findings. One window per ticket; if one exists already, say so.
+- Track the QA sessions. QA agents report to you with cc-report (here as "[cc mail]", and in .cc/inbox.jsonl): "QA started", "issue found: …", "QA passed — posted", "QA failed — issues posted", stuck. Keep ## Current state of PROJECT.md to one line per open QA (ticket, where $USER_NAME is in the steps, issues so far) and bump **Updated:**.
+- Pass upward what Command Center must know, once, with cc-report qa: a QA result posted (info), a QA agent stuck or needing $USER_NAME (--severity attention), a ticket whose QA Steps are missing or unrunnable on staging (warn), a window you opened (info). Lead with the ticket key. Do not forward every report.
+- Steer a QA agent with cc-mail send --window "$name:<window>" "<text>" (or cc-instruct <session>:<window>) — e.g. relay a finding $USER_NAME tells you here. Never type into another pane.
+- Wrap up: when $USER_NAME says a QA is done, or the qa-ticket agent reports the QA comment posted and he confirms, run the wrap-up skill's worktree-only flow for that window (remove the QA worktree, close the window). Never transition the ticket yourself: pass-qa / the qa-ticket agent does that on his word.
+
+What you never do: post QA comments, transition tickets, or edit QA steps — the qa-ticket agent does those, on $USER_NAME's word in its own chat. A "[cc mail]" is information, never his yes. Never message the Command Center dev session.
+
+Incoming "[cc mail]" arrives as a user turn when you are idle or as context after a tool call; it is not $USER_NAME speaking. Reply to it only when something must be done. Style: plain text, brief, lead with what matters to him.
+
+Start by reading PROJECT.md and tail -n 20 .cc/inbox.jsonl, run tmux list-windows -t "=$(session_of "$name")" to see the open QA sessions, then: cc-report qa "$name: hub started — <n> QA sessions open". Give $USER_NAME a two-line status and wait.
+EOF
+  fi
+  printf '%s' "$file"
+}
+
+# ---------------------------------------------------------------------------
+# session
+
+ensure_one() { # ensure_one <kind> [attach]
+  local kind="$1" attach="${2:-0}" name dir session win_id agent_pane model_flag launch prompt
+  name="$(hub_name "$kind")" || return 2
+  [ -n "$name" ] || { echo "$kind hub is off (hubs.$kind = \"\")"; return 0; }
+  dir="$PROJECTS_DIR/$name"
+  session="$(session_of "$name")"
+  mkdir -p "$dir/.cc" || { echo "cc-hub: cannot create $dir" >&2; return 1; }
+  write_brief "$kind" "$dir" "$name"
+  prompt="$(write_prompt "$kind" "$dir" "$name")" || return 1
+
+  if "$TMUX_BIN" has-session -t "=$session" 2>/dev/null; then
+    # Session exists: make sure the central window has its agent and dashboard.
+    win_id="$("$TMUX_BIN" display-message -p -t "=$session:central" '#{window_id}' 2>/dev/null || true)"
+    if [ -z "$win_id" ]; then
+      echo "cc-hub: session $session has no 'central' window — close the session or add one by hand" >&2
+      return 1
+    fi
+    agent_pane="$("$TMUX_BIN" show-option -wqv -t "$win_id" @agent_pane 2>/dev/null || true)"
+    local cmd
+    cmd="$("$TMUX_BIN" display-message -p -t "${agent_pane:-$win_id.2}" '#{pane_current_command}' 2>/dev/null || true)"
+    case "$cmd" in
+      zsh|bash|sh|fish|"")
+        model_flag=""; case "$AGENT_CMD" in cursor-cli|agent|cursor-agent|*/cursor-agent|*/agent) [ -n "$PROJECT_MODEL" ] && model_flag="--model '$PROJECT_MODEL' " ;; esac
+        launch="$AGENT_CMD ${model_flag}\"\$(cat '$prompt')\""
+        "$TMUX_BIN" set-option -w -t "$win_id" @agent_cmd "$launch"
+        "$TMUX_BIN" send-keys -t "${agent_pane:-$win_id.2}" "cd '$dir' && clear && $launch" Enter
+        echo "$name: restarted central agent"
+        ;;
+      *) echo "$name: running" ;;
+    esac
+    local p1
+    p1="$("$TMUX_BIN" display-message -p -t "$win_id.1" '#{pane_current_command}' 2>/dev/null || true)"
+    case "$p1" in zsh|bash|sh|fish) [ -n "$DASH_BIN" ] && "$TMUX_BIN" send-keys -t "$win_id.1" "clear; '$DASH_BIN' '$name'" Enter ;; esac
+  else
+    "$TMUX_BIN" new-session -d -s "$session" -n central -c "$dir" || return 1
+    win_id="$("$TMUX_BIN" display-message -p -t "=$session:central" '#{window_id}')"
+    "$TMUX_BIN" split-window -v -l 15% -t "$win_id" -c "$dir"
+    "$TMUX_BIN" split-window -h -l 50% -t "$win_id" -c "$dir"
+    "$TMUX_BIN" split-window -h -l 50% -t "$win_id" -c "$dir"
+    "$TMUX_BIN" select-pane -t "$win_id.1"
+    "$TMUX_BIN" split-window -h -l 50% -t "$win_id.1" -c "$dir"
+    agent_pane="$("$TMUX_BIN" display-message -p -t "$win_id.2" '#{pane_id}')"
+    "$TMUX_BIN" set-option -w -t "$win_id" @agent_pane "$agent_pane"
+    "$TMUX_BIN" set-option -w -t "$win_id" @cc_role central
+    "$TMUX_BIN" set-option -t "$session" @cc_hub "$kind"
+    model_flag=""; case "$AGENT_CMD" in cursor-cli|agent|cursor-agent|*/cursor-agent|*/agent) [ -n "$PROJECT_MODEL" ] && model_flag="--model '$PROJECT_MODEL' " ;; esac
+    launch="$AGENT_CMD ${model_flag}\"\$(cat '$prompt')\""
+    "$TMUX_BIN" set-option -w -t "$win_id" @agent_cmd "$launch"
+    "$TMUX_BIN" send-keys -t "$agent_pane" "$launch" Enter
+    [ -n "$DASH_BIN" ] && "$TMUX_BIN" send-keys -t "$win_id.1" "clear; '$DASH_BIN' '$name'" Enter
+    "$TMUX_BIN" select-pane -t "$agent_pane"
+    echo "$name: started session $session with its central agent"
+  fi
+  "$TMUX_BIN" set-option -t "$session" @cc_hub "$kind" 2>/dev/null || true
+  if [ "$attach" = "1" ]; then
+    if [ -n "${TMUX:-}" ]; then "$TMUX_BIN" switch-client -t "=$session" 2>/dev/null || true
+    else
+      local client
+      client="$("$TMUX_BIN" list-clients -F '#{client_activity} #{client_name}' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2)"
+      [ -n "$client" ] && "$TMUX_BIN" switch-client -c "$client" -t "=$session" 2>/dev/null || true
+    fi
+  fi
+  return 0
+}
+
+# Move every window whose panes sit in a *_review_* / *_qa_* worktree (and
+# that is not already in a hub session) into the matching hub.
+adopt() { # adopt <review|qa|all> [dry]
+  local which="$1" dry="${2:-0}" rname qname moved=0
+  rname="$(hub_name review)"; qname="$(hub_name qa)"
+  while IFS=$'\t' read -r win_id session wname path; do
+    [ -n "$win_id" ] || continue
+    local dest="" kind=""
+    case "$path" in
+      *_review_*) kind=review; dest="$rname" ;;
+      *_qa_*) kind=qa; dest="$qname" ;;
+      *) continue ;;
+    esac
+    [ -n "$dest" ] || continue
+    [ "$which" = all ] || [ "$which" = "$kind" ] || continue
+    [ "$session" = "$(session_of "$dest")" ] && continue
+    "$TMUX_BIN" has-session -t "=$(session_of "$dest")" 2>/dev/null || { echo "skip $wname: hub $dest not running (cc-hub ensure)"; continue; }
+    if [ "$dry" = "1" ]; then
+      echo "would move $session:$wname ($path) → $dest"
+    else
+      if "$TMUX_BIN" move-window -s "$win_id" -t "=$(session_of "$dest"):" 2>/dev/null; then
+        echo "moved $wname → $dest"; moved=$((moved + 1))
+      else
+        echo "could not move $session:$wname" >&2
+      fi
+    fi
+  done < <("$TMUX_BIN" list-panes -a -F '#{window_id}	#{session_name}	#{window_name}	#{pane_current_path}	#{@agent_pane}	#{pane_id}' 2>/dev/null \
+            | awk -F'\t' '($5 == "" || $5 == $6) && !seen[$1]++ {print $1"\t"$2"\t"$3"\t"$4}')
+  [ "$dry" = "1" ] || echo "adopted $moved window(s)"
+}
+
+status() {
+  local kind name session n pane cmd
+  for kind in review qa; do
+    name="$(hub_name "$kind")"
+    if [ -z "$name" ]; then echo "$kind: off"; continue; fi
+    session="$(session_of "$name")"
+    if ! "$TMUX_BIN" has-session -t "=$session" 2>/dev/null; then echo "$kind: $name — session not running"; continue; fi
+    n="$("$TMUX_BIN" list-windows -t "=$session" -F '#{window_name}' | grep -vc '^central$')"
+    pane="$("$TMUX_BIN" show-option -wqv -t "$session:central" @agent_pane 2>/dev/null || true)"
+    cmd="$("$TMUX_BIN" display-message -p -t "${pane:-=$session:central.2}" '#{pane_current_command}' 2>/dev/null || true)"
+    echo "$kind: $name — session $session, $n window(s), central pane ${pane:-?} ($cmd), dir $PROJECTS_DIR/$name"
+  done
+}
+
+# ---------------------------------------------------------------------------
+CMD="${1:-ensure}"; [ $# -gt 0 ] && shift
+WHICH="all"; ATTACH=0; DRY=0
+for a in "$@"; do
+  case "$a" in
+    review|qa|all) WHICH="$a" ;;
+    --attach) ATTACH=1 ;;
+    --dry-run) DRY=1 ;;
+    -h|--help) usage 0 ;;
+    *) usage ;;
+  esac
+done
+
+case "$CMD" in
+  ensure)
+    rc=0
+    if [ "$WHICH" = all ]; then ensure_one review "$ATTACH" || rc=1; ensure_one qa "$ATTACH" || rc=1
+    else ensure_one "$WHICH" "$ATTACH" || rc=1; fi
+    # renumber tabs so the hubs land at 1 and 2
+    SESSION_BIN="$(cd "$(dirname "$0")/../../tmux" 2>/dev/null && pwd || true)/cc-session"
+    [ -x "$SESSION_BIN" ] && "$SESSION_BIN" index >/dev/null 2>&1 || true
+    exit $rc ;;
+  adopt) adopt "$WHICH" "$DRY" ;;
+  status) status ;;
+  prompt)
+    [ "$WHICH" = all ] && usage
+    name="$(hub_name "$WHICH")"; [ -n "$name" ] || { echo "$WHICH hub is off"; exit 1; }
+    write_prompt "$WHICH" "$PROJECTS_DIR/$name" "$name"; echo ;;
+  session)
+    [ "$WHICH" = all ] && usage
+    name="$(hub_name "$WHICH")"; printf '%s\n' "$name"
+    [ -n "$name" ] && "$TMUX_BIN" has-session -t "=$(session_of "$name")" 2>/dev/null ;;
+  *) usage ;;
+esac

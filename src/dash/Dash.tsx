@@ -22,7 +22,7 @@ const C = {
   selectedBg: "#1f2937",
 }
 
-const STATUS_COLORS: Record<string, string> = { active: C.green, paused: C.yellow, done: C.dim, unknown: C.gray }
+const STATUS_COLORS: Record<string, string> = { active: C.green, paused: C.yellow, done: C.dim, archived: C.dim, unknown: C.gray }
 const AGENT_COLORS: Record<string, string> = { working: C.yellow, attention: C.red, idle: C.green, start: C.gray, ended: C.dim }
 const SEVERITY_COLORS: Record<string, string> = { info: C.gray, warn: C.yellow, attention: C.red }
 

@@ -34,6 +34,7 @@ interface GlabMr {
   blocking_discussions_resolved?: boolean
   web_url: string
   source_branch: string
+  description?: string | null
   head_pipeline?: { status: string } | null
   pipeline?: { status: string } | null
 }
@@ -74,6 +75,41 @@ export async function getMrByIid(repoPath: string, iid: number): Promise<MrSumma
   } catch {
     return null
   }
+}
+
+/**
+ * The open MR for a ticket when its branch is not named after the key: the
+ * one whose source branch, title or description mentions the key (newest
+ * first). Null when there is none or several ambiguous ones are equally new.
+ */
+export async function findOpenMrForTicket(repoPath: string, key: string): Promise<MrSummary | null> {
+  const res = await run(
+    "glab",
+    ["api", `projects/:id/merge_requests?state=opened&search=${encodeURIComponent(key)}&in=title,description&order_by=updated_at&per_page=20`],
+    { cwd: repoPath },
+  )
+  const byBranch = await run(
+    "glab",
+    ["api", `projects/:id/merge_requests?state=opened&source_branch=${encodeURIComponent(key)}`],
+    { cwd: repoPath },
+  )
+  const seen = new Set<number>()
+  const out: MrSummary[] = []
+  for (const r of [byBranch, res]) {
+    if (!r.ok) continue
+    try {
+      for (const mr of JSON.parse(r.stdout) as GlabMr[]) {
+        if (seen.has(mr.iid)) continue
+        const re = new RegExp(`\\b${key.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`, "i")
+        if (!re.test(`${mr.source_branch} ${mr.title} ${mr.description ?? ""}`)) continue
+        seen.add(mr.iid)
+        out.push({ iid: mr.iid, projectId: mr.project_id, title: mr.title, state: mr.state, webUrl: mr.web_url, sourceBranch: mr.source_branch })
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return out[0] ?? null
 }
 
 /**

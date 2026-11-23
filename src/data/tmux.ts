@@ -205,6 +205,51 @@ export function projectSessionName(name: string): string {
   return name.replace(/[:.]/g, "-")
 }
 
+/** Hub directory name for `kind` (config hubs.review / hubs.qa); "" when that hub is off. */
+export function hubName(kind: "review" | "qa"): string {
+  return config().hubs[kind]
+}
+
+/**
+ * Session that review / QA windows belong in: the hub session (config hubs.*,
+ * default reviews / qa — a project-style session with its own central agent
+ * that tracks reviews or QA and reports to the matching specialist) when it is
+ * running, else wherever `targetSession()` points. mkpanes defaults the same
+ * way when no `-s` is given; passing it explicitly keeps the TUI honest when
+ * `commands.tmuxSession` is pinned.
+ */
+export async function hubSession(kind: "review" | "qa"): Promise<string | null> {
+  const name = hubName(kind)
+  if (name) {
+    const session = projectSessionName(name)
+    const res = await run("tmux", ["has-session", "-t", `=${session}`])
+    if (res.ok) return session
+  }
+  return targetSession()
+}
+
+/** The cc-hub skill script: repo copy first, then the synced user copy. */
+function ccHubScript(): string {
+  const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "skills", "cc-hub", "cc-hub")
+  if (existsSync(repo)) return repo
+  return join(homedir(), ".agents", "skills", "cc-hub", "cc-hub")
+}
+
+/**
+ * Make sure the review and QA hubs exist (sessions, central agents, cc-dash)
+ * — `cc-hub ensure all`. Idempotent; the TUI runs it on start so the two hub
+ * tabs open alongside Command Center. Hubs set to "" in config are skipped by
+ * the script itself.
+ */
+export async function ensureHubs(): Promise<{ ok: boolean; message: string }> {
+  if (!config().hubs.review && !config().hubs.qa) return { ok: true, message: "hubs off" }
+  const res = await run(ccHubScript(), ["ensure", "all"], { timeoutMs: 60_000 })
+  const lines = res.stdout.trim().split("\n").filter((l) => l.trim())
+  const last = lines[lines.length - 1] ?? ""
+  if (!res.ok) return { ok: false, message: res.stderr.trim() || last || "cc-hub ensure failed" }
+  return { ok: true, message: last || "hubs ready" }
+}
+
 /** The start-project skill script: repo copy first, then the synced user copy. */
 function startProjectScript(): string {
   const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "skills", "start-project", "start-project")

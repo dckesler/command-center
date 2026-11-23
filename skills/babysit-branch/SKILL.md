@@ -322,6 +322,8 @@ glab mr view <MR_IID> -R <repo-slug> --output json \
 
 This is the moment Daniel is meant to hear from this skill. Print the block below **and** send `cc-report --severity attention "<KEY>: MR ready for review — <MR URL>"` per *Notifying Daniel*.
 
+If he answers with "let me look" / "open it in tuicr" rather than posting it, run the `local-review` skill (`cc-review local open --commits`): the branch's commits open in tuicr beside you, his comments come back as a list, you fix them, `/push-branch`, and the loop returns to Step 1 as for any review feedback. The ticket stays In Progress.
+
 - **MR URL** — the GitLab merge request URL captured in Step 0 or handed from `/push-branch`
 - **Jira ticket URL** — derive the ticket key from the branch name using the pattern `[A-Z]+-[0-9]+` (e.g., `LW-17033`) and format the URL as:
   `https://smartsensebydigi.atlassian.net/browse/<TICKET-KEY>`

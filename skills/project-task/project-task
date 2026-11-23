@@ -219,6 +219,8 @@ Task: $TASK
 
 $TICKET_STEPS
 
+$USER_NAME's eyes on the code: when the work is ready for him to look at before it goes further — the central agent or $USER_NAME asks to see it, or the change is one you would want reviewed before it becomes an MR — use the local-review skill: cc-review local open puts your branch's diff in tuicr in the pane beside you, his comments come back with cc-review local drafts, you address them in code (cc-review local resolve), nothing is posted anywhere. Report "$TITLE: ready for your review in tuicr" with --severity attention when you open it.
+
 Context: read $DIR/PROJECT.md first (Goal, Current state, Next steps). Do not edit PROJECT.md — the project's central agent owns it; report to it instead and it will fold your results in.
 
 $REPORT_RULE

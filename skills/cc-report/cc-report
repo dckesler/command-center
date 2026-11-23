@@ -20,6 +20,8 @@
 #
 # Default target when omitted:
 #   - inside a project's tmux session, in a window other than "central" → project:<name>
+#     (review / QA windows in the reviews / qa hub sessions → project:reviews / project:qa)
+#   - the "central" window of a hub session                               → review / qa
 #     (by session, so worktree task tabs under ~/code still reach the central agent)
 #   - in a project's "central" window, or cwd under ~/projects          → projects
 #   - cwd contains _qa_                                                → qa
@@ -56,7 +58,7 @@ SUMMARY=""
 usage() {
   echo "usage: cc-report [target] [--severity info|warn|attention] <summary>" >&2
   echo "  target: $TABS | project:<name>" >&2
-  echo "  default: project:<name> from a project task tab; projects from a project's central window;" >&2
+  echo "  default: project:<name> from a project task tab; projects from a project's central window (review / qa from a hub's);" >&2
   echo "           qa if cwd has _qa_; review if cwd has _review_; otherwise worktrees" >&2
 }
 
@@ -136,9 +138,22 @@ elif [ -n "$TMUX_SESSION" ] && [ -n "$PROJECT_OF_CWD" ] && [ "$TMUX_SESSION" = "
   PROJECT_OF_SESSION="$PROJECT_OF_CWD"
 fi
 
+# The review / QA hubs (cc-hub skill; config hubs.review / hubs.qa) are
+# project-shaped sessions whose central agent reports to the review / qa
+# specialist rather than to projects.
+HUB_REVIEW="$(cc_cfg .hubs.review reviews)"
+HUB_QA="$(cc_cfg .hubs.qa qa)"
+hub_kind() { # hub_kind <project name> → review | qa | ""
+  if [ -n "$1" ] && [ "$1" = "$HUB_REVIEW" ]; then printf review
+  elif [ -n "$1" ] && [ "$1" = "$HUB_QA" ]; then printf qa
+  fi
+}
+
 if [ -z "$TARGET" ]; then
   if [ -n "$PROJECT_OF_SESSION" ] && [ "$TMUX_WINDOW" != "central" ]; then
     TARGET="project:$PROJECT_OF_SESSION"
+  elif [ -n "$(hub_kind "${PROJECT_OF_SESSION:-$PROJECT_OF_CWD}")" ]; then
+    TARGET="$(hub_kind "${PROJECT_OF_SESSION:-$PROJECT_OF_CWD}")"
   elif [ -n "$PROJECT_OF_SESSION" ] || [ -n "$PROJECT_OF_CWD" ]; then
     TARGET="projects"
   else

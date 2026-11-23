@@ -49,6 +49,7 @@ const STATUS_COLORS: Record<string, string> = {
   active: "#4ade80",
   paused: "#facc15",
   done: "#6b7280",
+  archived: "#4b5563",
   unknown: "#9ca3af",
 }
 

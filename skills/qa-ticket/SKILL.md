@@ -7,6 +7,8 @@ description: Run a QA session for a Jira ticket — pull the QA steps from the t
 
 Run an interactive QA session for a Jira ticket. Pull the steps, wait for the tester to work through them, then post the outcome as a comment on the ticket.
 
+When this runs in a Command Center window (`<repo>_qa_<branch>` worktree, window `<KEY> - QAing`), your manager is whoever `cc-report` routes to from this directory — normally the **qa hub's central agent** (the window lives in the `qa` tmux session, tab 2 of Command Center), otherwise the **Command Center QA specialist**. Report milestones with `cc-report` and no target (`"<KEY>: QA started"`, `--severity attention "<KEY>: issue found — <one line>"`, `"<KEY>: QA passed, comment posted"` / `"<KEY>: N issues posted"`); one line each. A `[cc mail]` from the manager asking for status gets a one-line `cc-report`, not a chat reply.
+
 ## Known Constants
 
 - **Cloud ID** (do not look up): `3be885af-99d6-4514-939e-3c99560b10eb`

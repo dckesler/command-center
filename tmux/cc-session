@@ -22,10 +22,28 @@ set -euo pipefail
 
 cmd="${1:-index}"
 
-# "$id name" per line in creation order; ids ($23) are unambiguous targets,
-# names like "0" are not.
+# Hub sessions (config hubs.review / hubs.qa, default reviews / qa) are pinned
+# right after Command Center: 1 = reviews, 2 = qa, projects from 3.
+CC_CONFIG_DIR="${CC_CONFIG_DIR:-$HOME/.config/command-center}"
+hub_cfg() { # hub_cfg <key> <default>
+  if command -v jq >/dev/null 2>&1 && [ -f "$CC_CONFIG_DIR/config.json" ]; then
+    local has
+    has="$(jq -r ".hubs.$1 != null" "$CC_CONFIG_DIR/config.json" 2>/dev/null || echo false)"
+    if [ "$has" = "true" ]; then jq -r ".hubs.$1" "$CC_CONFIG_DIR/config.json"; return; fi
+  fi
+  printf '%s' "$2"
+}
+REVIEW_HUB="$(hub_cfg review reviews | tr ':.' '--')"
+QA_HUB="$(hub_cfg qa qa | tr ':.' '--')"
+
+# "$id name" per line: the work session "0" first, then the hubs (review, qa),
+# then the rest in creation order; ids ($23) are unambiguous targets, names like
+# "0" are not. This is the order the status line draws and Tab/BTab walk.
 sessions() {
-  tmux list-sessions -F '#{session_id} #S' 2>/dev/null | sort -t'$' -k2 -n
+  tmux list-sessions -F '#{session_id} #S' 2>/dev/null | awk -v r="$REVIEW_HUB" -v q="$QA_HUB" '
+    { id = $1; sub(/^\$/, "", id); name = $2
+      rank = 3; if (name == "0") rank = 0; else if (r != "" && name == r) rank = 1; else if (q != "" && name == q) rank = 2
+      printf "%d %010d %s\n", rank, id, $0 }' | sort -k1,1n -k2,2n | cut -d' ' -f3-
 }
 
 label_for() {
@@ -58,10 +76,17 @@ current_session() {
 
 case "$cmd" in
   index)
+    # 0 = Command Center; hubs take 1 (review) and 2 (qa) when they exist;
+    # everything else counts up from the next free number.
     i=0
+    [ -n "$REVIEW_HUB" ] && tmux has-session -t "=$REVIEW_HUB" 2>/dev/null && i=1
+    [ -n "$QA_HUB" ] && tmux has-session -t "=$QA_HUB" 2>/dev/null && i=2
     while read -r id name; do
       [ -n "$id" ] || continue
-      if [ "$name" = "0" ]; then idx=0; else i=$((i + 1)); idx=$i; fi
+      if [ "$name" = "0" ]; then idx=0
+      elif [ -n "$REVIEW_HUB" ] && [ "$name" = "$REVIEW_HUB" ]; then idx=1
+      elif [ -n "$QA_HUB" ] && [ "$name" = "$QA_HUB" ]; then idx=2
+      else i=$((i + 1)); idx=$i; fi
       tmux set-option -t "$id" @idx "$idx" \; \
            set-option -t "$id" @label "$(label_for "$name")"
     done < <(sessions)
@@ -71,6 +96,30 @@ case "$cmd" in
       [ -n "$id" ] || continue
       printf '%s  %s\n' "$(tmux show-option -qv -t "$id" @idx)" "$name"
     done < <(sessions)
+    ;;
+  tabs)
+    # The session row of the status line, in @idx order (tmux's own #{S:…}
+    # loop draws sessions in creation order, which would put the pinned hubs
+    # wherever they happened to be created). command-center.tmux runs this
+    # through #() and refreshes it on session/client changes.
+    #   cc-session tabs <client_session>
+    current="${2:-}"
+    out=""
+    while read -r id name; do
+      [ -n "$id" ] || continue
+      idx="$(tmux show-option -qv -t "$id" @idx)"
+      label="$(tmux show-option -qv -t "$id" @label)"
+      flag="$(tmux show-option -qv -t "$id" @cc_flag)"
+      if [ "$name" = "$current" ]; then
+        out="$out#[fg=colour24,bg=colour39,bold] $idx #[fg=black] $label "
+      elif [ -n "$flag" ]; then
+        out="$out#[fg=colour52,bg=$flag,bold] $idx #[fg=colour16] $label "
+      else
+        out="$out#[fg=colour245,bg=colour237,bold] $idx #[fg=colour252] $label "
+      fi
+      out="$out#[default,bg=colour234]  "
+    done < <(sessions)
+    printf '%s' "$out"
     ;;
   go)
     want="${2:?usage: cc-session go <n> [client]}"
@@ -95,7 +144,7 @@ case "$cmd" in
     switch_to "${ids[$pos]}"
     ;;
   *)
-    echo "usage: cc-session index | list | go <n> [client] | next|prev [session] [client]" >&2
+    echo "usage: cc-session index | list | tabs <client_session> | go <n> [client] | next|prev [session] [client]" >&2
     exit 2
     ;;
 esac

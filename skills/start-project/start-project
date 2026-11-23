@@ -53,7 +53,12 @@ MAX_PARALLEL="$(cc_cfg .projects.maxParallelTasks 2)"
 DASH_BIN="$(cd "$(dirname "$0")/../cc-dash" 2>/dev/null && pwd || true)/cc-dash"
 [ -x "$DASH_BIN" ] || DASH_BIN="$(command -v cc-dash || true)"
 TERMINAL_APP="$(cc_cfg .commands.terminal alacritty)"
-RESERVED="command-center node_modules"
+# The review / QA hubs (config hubs.*) are project-shaped but owned by the
+# cc-hub skill (own central prompt, pinned tabs 1 and 2) — start them with
+# `cc-hub ensure`, not here.
+HUB_REVIEW="$(cc_cfg .hubs.review reviews)"
+HUB_QA="$(cc_cfg .hubs.qa qa)"
+RESERVED="command-center node_modules $HUB_REVIEW $HUB_QA"
 MODE="auto"
 ATTACH=1
 GOAL=""
@@ -110,7 +115,11 @@ fi
 
 for r in $RESERVED; do
   if [ "$NAME" = "$r" ]; then
-    echo "start-project: \"$NAME\" is reserved" >&2
+    if [ "$NAME" = "$HUB_REVIEW" ] || [ "$NAME" = "$HUB_QA" ]; then
+      echo "start-project: \"$NAME\" is the $([ "$NAME" = "$HUB_QA" ] && echo QA || echo review) hub — run: cc-hub ensure $([ "$NAME" = "$HUB_QA" ] && echo qa || echo review)" >&2
+    else
+      echo "start-project: \"$NAME\" is reserved" >&2
+    fi
     exit 1
   fi
 done
@@ -195,7 +204,7 @@ PROMPT_FILE="$DIR/.cc/central-prompt.txt"
 cat > "$PROMPT_FILE" <<EOF
 You are the central agent for the project "$NAME" in $DIR. This tmux window ("central") is yours; you own PROJECT.md.
 
-PROJECT.md is the project's source of truth. Header lines: "**Status:** active|paused|done", "**Updated:** YYYY-MM-DD", "**Epic:** <KEY|none>" (the Jira epic this project delivers; when set, prefer its child tickets for project-task --ticket so Command Center can show progress), "**Plan:** draft | proposed | approved YYYY-MM-DD | revision pending". Sections: Goal, Current state, Plan, Next steps (checkbox list), Needs $USER_NAME (checkbox list), Decisions (dated bullets), Log (dated bullets). Keep it current as you work: update Current state, tick finished steps, add Log lines per milestone, bump Updated. $OPENING
+PROJECT.md is the project's source of truth. Header lines: "**Status:** active|paused|done|archived" (archived = shelved for good: Command Center stops listing the project everywhere, so set it only when $USER_NAME says to archive or shelve it; done stays visible on request), "**Updated:** YYYY-MM-DD", "**Epic:** <KEY|none>" (the Jira epic this project delivers; when set, prefer its child tickets for project-task --ticket so Command Center can show progress), "**Plan:** draft | proposed | approved YYYY-MM-DD | revision pending". Sections: Goal, Current state, Plan, Next steps (checkbox list), Needs $USER_NAME (checkbox list), Decisions (dated bullets), Log (dated bullets). Keep it current as you work: update Current state, tick finished steps, add Log lines per milestone, bump Updated. $OPENING
 
 How this project runs. $USER_NAME's gates are exactly these five, nothing else: (1) plan approval, once before work starts and again after a revision; (2) an ambiguity you cannot resolve from the Plan, PROJECT.md, the repo or the ticket; (3) a low-confidence call that is not reversible; (4) reviewing merge requests; (5) a plan revision when findings change the plan. Everything else is yours: opening task tabs, choosing branch names, research, drafts, spikes, pushing ticketed work to an MR, creating the tickets the approved Plan names, wrapping up merged task tabs, updating PROJECT.md, reporting. Never ask "should I continue" — the approval covered the whole plan.
 

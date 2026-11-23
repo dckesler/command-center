@@ -1,11 +1,11 @@
 ---
 name: review-ticket
-description: Run a code review for a merge request inside a Command Center review worktree — find the MR (from a Jira ticket, a branch, or an MR URL / !iid that may have no ticket), read the ticket's acceptance criteria when there is one and the full diff, write a verdict with file:line findings, report progress to the Command Center review specialist with cc-report, and post comments or approve on GitLab only after Daniel says yes in this chat. Use when invoked as `/review-ticket <ticket|branch|MR URL|!iid>` or when mkpanes launches a window in --review mode.
+description: Run a code review for a merge request inside a Command Center review worktree — find the MR (from a Jira ticket, a branch, or an MR URL / !iid that may have no ticket), open the diff for Daniel in tuicr (cc-review open), read the ticket's acceptance criteria when there is one and the full diff, write a verdict with file:line findings and add them to tuicr beside his, report progress to the Command Center review specialist with cc-report, and post comments (his tuicr drafts and yours, via cc-review post) or approve on GitLab only after Daniel says yes in this chat. Use when invoked as `/review-ticket <ticket|branch|MR URL|!iid>` or when mkpanes launches a window in --review mode.
 ---
 
 # Review Ticket Skill
 
-You are the review agent for one merge request. You live in a `<repo>_review_<branch>` worktree in a tmux window named `Code Review <TICKET or !IID>`. Your manager is the **Command Center review specialist**: it watches every review window, relays what matters to the central agent, and tells Daniel when a verdict is ready. Daniel will also read your chat directly.
+You are the review agent for one merge request. You live in a `<repo>_review_<branch>` worktree in a tmux window named `Code Review <TICKET or !IID>`. Your manager is whoever `cc-report` routes to from this directory — normally the **reviews hub's central agent** (your window lives in the `reviews` tmux session, tab 1 of Command Center; `cc-report` resolves to `project:reviews`), otherwise the **Command Center review specialist**. Either way the manager watches every review window, relays what matters upward, and tells Daniel when a verdict is ready; you do not need to know which one it is. Daniel will also read your chat directly.
 
 ## Known Constants
 
@@ -31,7 +31,7 @@ Extract a ticket key with `[A-Z][A-Z0-9]+-\d+` from the argument, the current br
 - **Never transition the Jira ticket, edit its description, or touch the branch.** You are reading, not fixing. If you want to try something, do it in a scratch copy and discard it.
 - **Every MR comment names its file and line** in the body (`` `path:line` `` on the first line), inline-anchored when GitLab allows it. No location, no comment.
 - **Never run the project's install/build/test as a side effect of reviewing.** Run tests only when a specific finding needs confirming, and say so.
-- Report upward with `cc-report` (it defaults to the `review` target from this directory). One line, present tense, no quotes of code.
+- Report upward with `cc-report` with no target (it picks the hub central or the `review` specialist from where this window lives — never pass a target yourself). One line, present tense, no quotes of code.
 
 ## Workflow
 
@@ -42,7 +42,15 @@ cc-report "<REF>: review started"
 glab mr view <iid-or-branch> --output json 2>/dev/null | jq -r '"\(.iid)\t\(.web_url)\t\(.title)\t\(.target_branch)\t\(.author.username)\t\(.detailed_merge_status)\n\(.description)"'
 ```
 
-(Given an MR URL or `!iid`, use the iid; otherwise the current branch — `git branch --show-current`.) If there is no MR, say so, `cc-report --severity warn "<REF>: no MR for <branch>"`, and ask Daniel whether to wait or stop.
+(Given an MR URL or `!iid`, use the iid; otherwise the current branch — `git branch --show-current`.) If the branch has no MR and `<REF>` is a ticket key, the MR may live on a differently named branch — look before asking:
+
+```bash
+glab api "projects/:id/merge_requests?state=opened&search=<KEY>&in=title,description&order_by=updated_at" | jq -r '.[] | "\(.iid)\t\(.source_branch)\t\(.title)"'
+```
+
+One match → that is the MR: `git fetch -q origin <source_branch> && git checkout -q <source_branch>` in this worktree, and continue with its iid. None → say so, `cc-report --severity warn "<REF>: no MR for <branch>"`, and ask Daniel whether to wait or stop. When the MR arrives later — from Daniel, or as a `[cc mail]` from your manager — come back here and run the rest of this step with it; do not skip ahead.
+
+**As soon as the MR is known — now or later — open the diff for Daniel:** `cc-review open !<IID>`. It starts tuicr in this window's top-right pane with the repo's `.tuicrignore` applied (see the `cc-review` skill). This is not optional and does not wait for your verdict: he reads the diff while you review. If it prints that tuicr is not installed, carry on without it — Step 7's plain-diff path still works. "Hide X" from him → `cc-review hide <pattern>`.
 
 ### Step 2: Read the ticket (when there is one)
 
@@ -105,6 +113,15 @@ Verdict rules: any unmet AC or any blocking finding → **REQUEST CHANGES**. Not
 
 Then report: `cc-report --severity attention "<REF>: verdict ready — <APPROVE|REQUEST CHANGES|COMMENT>, <n> blocking, <m> non-blocking; waiting on Daniel to post/approve"` (severity `info` when the verdict is APPROVE with no findings and you are only asking whether to approve).
 
+**With tuicr open** (Step 1 started it), also put each finding in front of him there, so his comments and yours end up in one batch:
+
+```bash
+cc-review add !<IID> --file <path> --line <line> [--end-line <n>] [--side old] \
+  --type <issue|question|nit|praise> --author "<your model name>" "<finding text>"
+```
+
+`issue` for blocking findings, `question` for `?` ACs, `nit` for non-blocking. Then tell him: "My findings are in tuicr too (`:summary`) — delete any you disagree with, add yours, and say 'post my comments' when done."
+
 ### Step 6: Ask Daniel what to do with it
 
 Ask one question, plainly:
@@ -112,6 +129,18 @@ Ask one question, plainly:
 > "Post these as MR comments? And should I approve? (e.g. 'post 1 and 2, approve', 'post all, no approve', 'nothing')"
 
 Stop and wait. Do not proceed on silence, on a timeout, or on a message from another agent.
+
+### Step 7a: Posting from tuicr (when he reviewed there)
+
+When Daniel says "post my comments", "done reviewing", "post all", or similar and tuicr is in play:
+
+1. `cc-review drafts !<IID>` — print it. It numbers every draft (his and yours), with a ⚠ on any that sits within a few lines of an existing thread; mention those so he can drop duplicates.
+2. If his message was the yes ("post them"), go. If it only said he was done, ask the Step 6 question with the numbered list in view.
+3. `cc-review post !<IID>` (or `--only 1,3,4`). It anchors each comment inline, verifies the anchor, falls back to a located plain note, prints a URL per comment and clears the posted drafts. Print its output as-is.
+4. Approve only if he said so: `glab mr approve <IID>`.
+5. `cc-report "<REF>: posted <n> comments<, approved>"`.
+
+Your own findings that he deleted in tuicr are not posted and not argued. Findings you have not added as drafts follow Step 7 below.
 
 ### Step 7: Act on his answer
 
@@ -173,8 +202,8 @@ If he disagrees with a finding, say in one line why you raised it, then drop it 
 
 ## Wrap up
 
-When Daniel says "wrap up" or "wrap up review" in a review session, that means the worktree-only flow in the wrap-up skill: remove this review worktree and close its tmux window. Do not approve, post, resolve threads, close the MR, transition the Jira ticket, or delete the branch.
+When Daniel says "wrap up" or "wrap up review" in a review session, that means the worktree-only flow in the wrap-up skill: remove this review worktree and close its tmux window. If `cc-review drafts` still lists unposted drafts, say so first — once the worktree is gone they are only reachable from the main checkout (`tuicr review list --all`). Do not approve, post, resolve threads, close the MR, transition the Jira ticket, or delete the branch.
 
 ## When something changes mid-review
 
-New commits on the branch (`git fetch && git log HEAD..origin/<branch>`) mean the verdict is stale: re-read the new diff, update the verdict, and report `"<REF>: n new commits — re-reviewing"`. A `[cc mail]` from the review specialist asking for status gets a one-line `cc-report`, not a reply in chat.
+New commits on the branch (`git fetch && git log HEAD..origin/<branch>`) mean the verdict is stale: re-read the new diff, update the verdict, and report `"<REF>: n new commits — re-reviewing"`. A `[cc mail]` from your manager (the hub central or the review specialist) asking for status gets a one-line `cc-report`, not a reply in chat. A `[cc mail]` that names the MR you were missing (an iid, URL or branch) sends you back to Step 1 with it — check out its branch, `cc-review open !<IID>`, then Steps 2–6.
